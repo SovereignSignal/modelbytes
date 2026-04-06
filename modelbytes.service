@@ -1,0 +1,16 @@
+[Unit]
+Description=ModelBytes - AI Model Release Monitor
+After=network.target
+
+[Service]
+Type=oneshot
+User=ubuntu-openclaw
+WorkingDirectory=/opt/modelbytes
+Environment="TELEGRAM_BOT_TOKEN=xxx"
+Environment="TELEGRAM_CHANNEL_ID=xxx"
+ExecStart=/usr/bin/python3 /opt/modelbytes/monitor.py --post
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

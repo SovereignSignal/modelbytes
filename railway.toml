@@ -1,0 +1,17 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "python monitor.py --post"
+restartPolicyType = "ON_FAILURE"
+
+[[cron]]
+name = "daily-check"
+schedule = "0 16 * * *"  # 9 AM PT = 16:00 UTC
+command = "python monitor.py --post"
+
+[env]
+TELEGRAM_BOT_TOKEN = { required = true }
+TELEGRAM_CHANNEL_ID = { required = true }
+DATABASE_URL = { required = true }

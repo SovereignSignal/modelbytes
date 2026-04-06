@@ -15,19 +15,155 @@ from typing import List, Optional, Set
 
 import requests
 
-# Config - use relative path for state
+# PostgreSQL support (optional - falls back to JSON if not available)
+try:
+    import psycopg2
+    from psycopg2.extras import execute_values
+    POSTGRES_AVAILABLE = True
+except ImportError:
+    POSTGRES_AVAILABLE = False
+
+# Config
 SCRIPT_DIR = Path(__file__).parent.resolve()
 STATE_FILE = SCRIPT_DIR / "state" / "model_releases_state.json"
-STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
 
+# Database
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+USE_POSTGRES = POSTGRES_AVAILABLE and DATABASE_URL
+
+# Telegram
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID", "")
 
-# Fallback to ModelBytes bot/channel if not set
+# Fallback to ModelBytes bot/channel if not set (local dev)
 if not TELEGRAM_BOT_TOKEN:
     TELEGRAM_BOT_TOKEN = "***REMOVED-DEAD-TOKEN***"
 if not TELEGRAM_CHANNEL_ID:
     TELEGRAM_CHANNEL_ID = "-100XXXXXXXXXX"
+
+def init_database():
+    """Initialize PostgreSQL tables if using Postgres."""
+    if not USE_POSTGRES:
+        return
+    
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS models (
+            id SERIAL PRIMARY KEY,
+            model_id VARCHAR(255) UNIQUE NOT NULL,
+            name VARCHAR(500),
+            provider VARCHAR(255),
+            source VARCHAR(50),
+            url TEXT,
+            description TEXT,
+            context_window INTEGER,
+            pricing_input NUMERIC(10,6),
+            pricing_output NUMERIC(10,6),
+            architecture VARCHAR(100),
+            release_date DATE,
+            is_open_source BOOLEAN,
+            unique_traits TEXT[],
+            discovered_at TIMESTAMP DEFAULT NOW(),
+            last_updated TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS posts (
+            id SERIAL PRIMARY KEY,
+            model_id VARCHAR(255) REFERENCES models(model_id),
+            posted_at TIMESTAMP DEFAULT NOW(),
+            message_id BIGINT,
+            channel_id VARCHAR(50)
+        )
+    """)
+    
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def load_seen_models() -> Set[str]:
+    """Load seen model IDs from Postgres or JSON."""
+    if USE_POSTGRES:
+        try:
+            conn = psycopg2.connect(DATABASE_URL)
+            cur = conn.cursor()
+            cur.execute("SELECT model_id FROM models")
+            seen = {row[0] for row in cur.fetchall()}
+            cur.close()
+            conn.close()
+            return seen
+        except Exception as e:
+            print(f"Postgres error, falling back to JSON: {e}", file=sys.stderr)
+    
+    # Fallback to JSON
+    if STATE_FILE.exists():
+        try:
+            data = json.loads(STATE_FILE.read_text())
+            return set(data.get("seen_models", []))
+        except Exception:
+            pass
+    return set()
+
+def save_model(model_id: str, model_data: dict = None):
+    """Save a model to Postgres or JSON."""
+    if USE_POSTGRES:
+        try:
+            conn = psycopg2.connect(DATABASE_URL)
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO models (model_id, name, provider, source, url, description,
+                                   context_window, pricing_input, pricing_output,
+                                   architecture, release_date, is_open_source, unique_traits)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (model_id) DO UPDATE SET
+                    last_updated = NOW(),
+                    name = EXCLUDED.name,
+                    provider = EXCLUDED.provider
+            """, (
+                model_id,
+                model_data.get("name", "") if model_data else "",
+                model_data.get("provider", "") if model_data else "",
+                model_data.get("source", "") if model_data else "",
+                model_data.get("url", "") if model_data else "",
+                model_data.get("description", "") if model_data else "",
+                model_data.get("context_window") if model_data else None,
+                model_data.get("pricing_input") if model_data else None,
+                model_data.get("pricing_output") if model_data else None,
+                model_data.get("architecture") if model_data else None,
+                model_data.get("release_date") if model_data else None,
+                model_data.get("is_open_source") if model_data else None,
+                model_data.get("unique_traits", []) if model_data else []
+            ))
+            conn.commit()
+            cur.close()
+            conn.close()
+            return
+        except Exception as e:
+            print(f"Postgres save error: {e}", file=sys.stderr)
+    
+    # Fallback to JSON
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    data = {"seen_models": list(load_seen_models()) + [model_id]}
+    STATE_FILE.write_text(json.dumps(data, indent=2))
+
+def log_post(model_id: str, message_id: int):
+    """Log a successful post to database."""
+    if USE_POSTGRES:
+        try:
+            conn = psycopg2.connect(DATABASE_URL)
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO posts (model_id, message_id, channel_id) VALUES (%s, %s, %s)",
+                (model_id, message_id, TELEGRAM_CHANNEL_ID)
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"Failed to log post: {e}", file=sys.stderr)
 
 @dataclass
 class ModelRelease:

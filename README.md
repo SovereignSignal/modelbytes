@@ -5,44 +5,58 @@ AI model release monitor for Telegram. Tracks new models from OpenRouter, Ollama
 ## Features
 
 - 🔓/🔒 Open source vs proprietary classification
-- ⭐ High-performance model detection (GPT-4, Claude-3, Gemini, Llama-3.3, etc.)
+- ⭐ High-performance model detection
 - ✨ Unique trait tagging (long_context, reasoning, multimodal, MoE)
 - 📊 Benchmark scores when available
 - 💸 Pricing info for API models
+- 🗄️ PostgreSQL for state persistence
 
-## Sources
+## Deploy to Railway
 
-- **OpenRouter** - 400+ models with pricing and context windows
-- **Ollama** - Local LLM models
-- **Hugging Face** - Open weights and research models
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/YOUR_TEMPLATE_ID)
 
-## Setup
+### Manual Setup
+
+1. **Create Railway project**
+2. **Add PostgreSQL** (Railway provides `DATABASE_URL`)
+3. **Set environment variables:**
+   - `TELEGRAM_BOT_TOKEN` — From @BotFather
+   - `TELEGRAM_CHANNEL_ID` — Your channel ID (e.g., `-1003509386035`)
+4. **Deploy**
+
+## Local Development
 
 ```bash
 # Clone
 git clone https://github.com/ClawBack1/modelbytes.git
 cd modelbytes
 
-# Install deps
-pip install -r requirements.txt
+# Setup
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
 
-# Run (requires TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID env vars)
+# Create .env
+cp .env.example .env
+# Edit .env with your tokens
+
+# Run
 python3 monitor.py --post
 ```
 
-## Environment
+## Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
-| `TELEGRAM_CHANNEL_ID` | Channel ID (e.g., `-1003509386035`) |
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather | ✅ |
+| `TELEGRAM_CHANNEL_ID` | Telegram channel ID | ✅ |
+| `DATABASE_URL` | PostgreSQL connection string | ✅ (Railway auto-sets) |
+| `POST_IMMEDIATELY` | If "true", posts on first run | ❌ |
 
-## Cron
+## Sources
 
-Daily run at 9 AM PT:
-```bash
-0 16 * * * cd /opt/modelbytes && TELEGRAM_BOT_TOKEN=xxx TELEGRAM_CHANNEL_ID=xxx python3 monitor.py --post
-```
+- **OpenRouter** — 400+ models with pricing
+- **Ollama** — Local LLM models
+- **Hugging Face** — Open weights and research models
 
 ## License
 

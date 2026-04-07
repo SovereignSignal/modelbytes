@@ -31,6 +31,15 @@ STATE_FILE = SCRIPT_DIR / "state" / "model_releases_state.json"
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 USE_POSTGRES = POSTGRES_AVAILABLE and DATABASE_URL
 
+# Debug: Print database connection status
+print(f"DEBUG: DATABASE_URL set: {bool(DATABASE_URL)}")
+print(f"DEBUG: POSTGRES_AVAILABLE: {POSTGRES_AVAILABLE}")
+print(f"DEBUG: USE_POSTGRES: {USE_POSTGRES}")
+if DATABASE_URL:
+    # Mask password in URL for logging
+    masked = DATABASE_URL.split('@')[0].rsplit(':', 1)[0] + '@***' if '@' in DATABASE_URL else 'set'
+    print(f"DEBUG: DATABASE_URL preview: {masked}")
+
 # Telegram
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID", "")

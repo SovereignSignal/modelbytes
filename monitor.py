@@ -55,43 +55,38 @@ def init_database():
     if not USE_POSTGRES:
         return
     
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
-    
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS models (
-            id SERIAL PRIMARY KEY,
-            model_id VARCHAR(255) UNIQUE NOT NULL,
-            name VARCHAR(500),
-            provider VARCHAR(255),
-            source VARCHAR(50),
-            url TEXT,
-            description TEXT,
-            context_window INTEGER,
-            pricing_input NUMERIC(10,6),
-            pricing_output NUMERIC(10,6),
-            architecture VARCHAR(100),
-            release_date DATE,
-            is_open_source BOOLEAN,
-            unique_traits TEXT[],
-            discovered_at TIMESTAMP DEFAULT NOW(),
-            last_updated TIMESTAMP DEFAULT NOW()
-        )
-    """)
-    
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS posts (
-            id SERIAL PRIMARY KEY,
-            model_id VARCHAR(255) REFERENCES models(model_id),
-            posted_at TIMESTAMP DEFAULT NOW(),
-            message_id BIGINT,
-            channel_id VARCHAR(50)
-        )
-    """)
-    
-    conn.commit()
-    cur.close()
-    conn.close()
+    print("DEBUG: Initializing PostgreSQL database...")
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS models (
+                id SERIAL PRIMARY KEY,
+                model_id VARCHAR(255) UNIQUE NOT NULL,
+                name VARCHAR(500),
+                provider VARCHAR(255),
+                source VARCHAR(50),
+                url TEXT,
+                description TEXT,
+                context_window INTEGER,
+                pricing_input NUMERIC(10,6),
+                pricing_output NUMERIC(10,6),
+                architecture VARCHAR(100),
+                release_date DATE,
+                is_open_source BOOLEAN,
+                unique_traits TEXT[],
+                discovered_at TIMESTAMP DEFAULT NOW(),
+                last_updated TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("DEBUG: Database tables created successfully")
+    except Exception as e:
+        print(f"DEBUG: Database initialization error: {e}", file=sys.stderr)
 
 def load_seen_models() -> Set[str]:
     """Load seen model IDs from Postgres or JSON."""
@@ -101,6 +96,7 @@ def load_seen_models() -> Set[str]:
             cur = conn.cursor()
             cur.execute("SELECT model_id FROM models")
             seen = {row[0] for row in cur.fetchall()}
+            print(f"DEBUG: Loaded {len(seen)} models from Postgres")
             cur.close()
             conn.close()
             return seen
@@ -118,6 +114,7 @@ def load_seen_models() -> Set[str]:
 
 def save_seen_models(models: Set[str]):
     """Save all seen models to Postgres or JSON."""
+    print(f"DEBUG: Saving {len(models)} models to database...")
     if USE_POSTGRES:
         try:
             conn = psycopg2.connect(DATABASE_URL)
@@ -130,6 +127,7 @@ def save_seen_models(models: Set[str]):
                     (model_id, model_id)
                 )
             conn.commit()
+            print(f"DEBUG: Saved {len(models)} models to Postgres")
             cur.close()
             conn.close()
             return

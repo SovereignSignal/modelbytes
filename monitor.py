@@ -107,6 +107,31 @@ def load_seen_models() -> Set[str]:
             pass
     return set()
 
+def save_seen_models(models: Set[str]):
+    """Save all seen models to Postgres or JSON."""
+    if USE_POSTGRES:
+        try:
+            conn = psycopg2.connect(DATABASE_URL)
+            cur = conn.cursor()
+            # Delete all existing and insert fresh
+            cur.execute("DELETE FROM models")
+            for model_id in models:
+                cur.execute(
+                    "INSERT INTO models (model_id, name) VALUES (%s, %s) ON CONFLICT (model_id) DO NOTHING",
+                    (model_id, model_id)
+                )
+            conn.commit()
+            cur.close()
+            conn.close()
+            return
+        except Exception as e:
+            print(f"Postgres save error: {e}", file=sys.stderr)
+    
+    # Fallback to JSON
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    data = {"seen_models": sorted(list(models))[-5000:], "last_run": datetime.now().strftime("%Y-%m-%d")}
+    STATE_FILE.write_text(json.dumps(data, indent=2))
+
 def save_model(model_id: str, model_data: dict = None):
     """Save a model to Postgres or JSON."""
     if USE_POSTGRES:
@@ -564,8 +589,11 @@ def send_digest(models: List[ModelRelease]) -> bool:
 
 
 def main():
-    state = load_state()
-    seen_models: Set[str] = set(state.get("seen_models", []))
+    # Initialize PostgreSQL database if available
+    init_database()
+    
+    # Load seen models from Postgres (if available) or JSON
+    seen_models: Set[str] = load_seen_models()
     today = datetime.now().strftime("%Y-%m-%d")
     is_first_run = len(seen_models) == 0
     
@@ -598,9 +626,8 @@ def main():
     # First run: just seed the database, don't send
     if is_first_run:
         print("First run - seeding database without sending digest")
-        state["seen_models"] = sorted(list(seen_models))[-5000:]
-        state["last_run"] = today
-        save_state(state)
+        # Save to PostgreSQL (via save_seen_models) if available, else JSON
+        save_seen_models(seen_models)
         return 0
     
     # Send digest if there are new models
@@ -614,9 +641,7 @@ def main():
         print("No new models to report")
     
     # Save state
-    state["seen_models"] = sorted(list(seen_models))[-5000:]  # Keep last 5000
-    state["last_run"] = today
-    save_state(state)
+    save_seen_models(seen_models)
     
     return 0
 

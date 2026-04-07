@@ -551,6 +551,8 @@ def send_telegram_post(message: str) -> bool:
     
     try:
         resp = requests.post(url, json=payload, timeout=30)
+        if not resp.ok:
+            print(f"Telegram error: {resp.status_code} - {resp.text[:500]}", file=sys.stderr)
         resp.raise_for_status()
         return True
     except Exception as e:

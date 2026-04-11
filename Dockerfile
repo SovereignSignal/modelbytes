@@ -21,4 +21,4 @@ COPY . .
 RUN mkdir -p /app/state
 
 # Run the monitor
-CMD ["python", "monitor.py", "--post"]
+CMD ["python", "monitor.py"]

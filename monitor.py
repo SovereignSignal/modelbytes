@@ -750,49 +750,79 @@ def build_digest_message(models: List[ModelRelease]) -> str:
     if tiers["premier_open"]:
         lines.append("")
         lines.append("━━━ <b>PREMIER OPEN WEIGHTS</b> 🔓")
-        lines.append("(Flagship releases you should know about)")
         lines.append("")
         for model in tiers["premier_open"][:3]:
             name = model.name.split('/')[-1]
-            lines.append(f"• {name}")
-            lines.append(f"  Why care: {get_why_care(model)}")
-            if model.unique_traits:
-                traits = ', '.join(model.unique_traits[:3])
-                lines.append(f"  Traits: {traits}")
+            lines.append(f"<b>{name}</b>")
+            
+            # Description (first 150 chars)
+            if model.description:
+                desc = model.description[:150].replace('\n', ' ')
+                lines.append(f"  {desc}...")
+            
+            # Key specs
+            specs = []
+            if model.release_date:
+                specs.append(f"Released: {model.release_date}")
+            if model.context_window:
+                specs.append(f"Context: {model.context_window:,}")
+            if model.pricing_input is not None and model.pricing_input > 0:
+                specs.append(f"${model.pricing_input:.2f}/${model.pricing_output:.2f} per 1M")
+            elif model.pricing_input == 0:
+                specs.append("FREE")
+            if specs:
+                lines.append(f"  {' | '.join(specs)}")
+            
+            # Link
+            if model.url:
+                lines.append(f"  🔗 {model.url}")
             lines.append("")
     
     # Tier 2: Closed Giants
     if tiers["closed_giants"]:
         lines.append("")
         lines.append("━━━ <b>CLOSED GIANTS</b> 🔒")
-        lines.append("(Proprietary models worth tracking)")
         lines.append("")
         for model in tiers["closed_giants"][:2]:
             name = model.name.split('/')[-1]
-            lines.append(f"• {name}")
-            lines.append(f"  Why care: {get_why_care(model)}")
+            lines.append(f"<b>{name}</b>")
+            if model.description:
+                desc = model.description[:120].replace('\n', ' ')
+                lines.append(f"  {desc}...")
+            specs = []
+            if model.release_date:
+                specs.append(f"Released: {model.release_date}")
+            if model.context_window:
+                specs.append(f"Context: {model.context_window:,}")
+            if specs:
+                lines.append(f"  {' | '.join(specs)}")
+            if model.url:
+                lines.append(f"  🔗 {model.url}")
             lines.append("")
     
     # Tier 3: Reasoning/Coding
     if tiers["reasoning"] or tiers["coding"]:
         lines.append("")
         lines.append("━━━ <b>SPECIALIZED</b> 🎯")
-        lines.append("(Niche but mighty)")
         lines.append("")
         for model in (tiers["reasoning"] + tiers["coding"])[:3]:
             name = model.name.split('/')[-1]
-            lines.append(f"• {name}")
-            lines.append(f"  Why care: {get_why_care(model)}")
+            lines.append(f"<b>{name}</b>")
+            if model.description:
+                desc = model.description[:100].replace('\n', ' ')
+                lines.append(f"  {desc}...")
+            if model.url:
+                lines.append(f"  🔗 {model.url}")
             lines.append("")
     
     # Tier 4: Local Ready (Ollama)
     if tiers["local_ready"]:
         lines.append("")
         lines.append("━━━ <b>LOCAL READY</b> 🏠")
-        lines.append("(Run it yourself)")
+        lines.append("(ollama run MODEL_NAME)")
         lines.append("")
-        names = [m.name for m in tiers["local_ready"][:5]]
-        lines.append(', '.join(names))
+        for model in tiers["local_ready"][:5]:
+            lines.append(f"  • {model.name}")
         lines.append("")
     
     # Summary line

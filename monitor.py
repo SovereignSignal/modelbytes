@@ -454,6 +454,8 @@ def is_noise_model(model_id: str, author: str, tags: list) -> bool:
             return True
         if re.search(r"_v\d+_", model_lower):  # version experiment
             return True
+        if re.search(r"_s\d+$", model_lower):  # experiment suffix like _s0, _s1
+            return True
     
     return False
 
@@ -538,7 +540,7 @@ def escape_markdown(text: str) -> str:
     if not text:
         return text
     # Escape characters that have special meaning in Markdown
-    return text.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]")
+    return text.replace("*", "\\*").replace("[", "\\[").replace("]", "\\]")
 
 
 def format_model_post(model: ModelRelease) -> str:
@@ -719,10 +721,10 @@ def get_why_care(model: ModelRelease) -> str:
     return "Worth tracking"
 
 
-def send_digest(models: List[ModelRelease]) -> bool:
-    """Send a tiered digest of new models."""
+def build_digest_message(models: List[ModelRelease]) -> str:
+    """Build the tiered digest message."""
     if not models:
-        return True
+        return "No new models today."
     
     # Categorize models
     tiers = {
@@ -748,10 +750,11 @@ def send_digest(models: List[ModelRelease]) -> bool:
     if tiers["premier_open"]:
         lines.append("")
         lines.append("━━━ *PREMIER OPEN WEIGHTS* 🔓")
-        lines.append("_(Flagship releases you should know about)_")
+        lines.append("(Flagship releases you should know about)")
         lines.append("")
         for model in tiers["premier_open"][:3]:
-            lines.append(f"• {escape_markdown(model.name.split('/')[-1])}")
+            name = escape_markdown(model.name.split('/')[-1])
+            lines.append(f"• {name}")
             lines.append(f"  Why care: {get_why_care(model)}")
             if model.unique_traits:
                 traits = ', '.join(model.unique_traits[:3])
@@ -762,10 +765,11 @@ def send_digest(models: List[ModelRelease]) -> bool:
     if tiers["closed_giants"]:
         lines.append("")
         lines.append("━━━ *CLOSED GIANTS* 🔒")
-        lines.append("_(Proprietary models worth tracking)_")
+        lines.append("(Proprietary models worth tracking)")
         lines.append("")
         for model in tiers["closed_giants"][:2]:
-            lines.append(f"• {escape_markdown(model.name.split('/')[-1])}")
+            name = escape_markdown(model.name.split('/')[-1])
+            lines.append(f"• {name}")
             lines.append(f"  Why care: {get_why_care(model)}")
             lines.append("")
     
@@ -773,10 +777,11 @@ def send_digest(models: List[ModelRelease]) -> bool:
     if tiers["reasoning"] or tiers["coding"]:
         lines.append("")
         lines.append("━━━ *SPECIALIZED* 🎯")
-        lines.append("_(Niche but mighty)_")
+        lines.append("(Niche but mighty)")
         lines.append("")
         for model in (tiers["reasoning"] + tiers["coding"])[:3]:
-            lines.append(f"• {escape_markdown(model.name.split('/')[-1])}")
+            name = escape_markdown(model.name.split('/')[-1])
+            lines.append(f"• {name}")
             lines.append(f"  Why care: {get_why_care(model)}")
             lines.append("")
     
@@ -784,35 +789,33 @@ def send_digest(models: List[ModelRelease]) -> bool:
     if tiers["local_ready"]:
         lines.append("")
         lines.append("━━━ *LOCAL READY* 🏠")
-        lines.append("_(Run it yourself)_")
+        lines.append("(Run it yourself)")
         lines.append("")
-        names = [m.name for m in tiers["local_ready"][:5]]
+        names = [escape_markdown(m.name) for m in tiers["local_ready"][:5]]
         lines.append(', '.join(names))
         lines.append("")
     
     # Summary line
     total = sum(len(v) for v in tiers.values())
     lines.append("")
-    lines.append(f"_Total: {total} models tracked today_")
+    lines.append(f"Total: {total} models tracked today")
     
-    message = '\n'.join(lines)
-    
-    # Send (split if needed)
-    if len(message) > 4000:
-        parts = message.split('\n━━━')
-        for i, part in enumerate(parts):
-            if i > 0:
-                part = '━━━' + part
-            if not send_telegram_post(part):
-                return False
-    else:
-        if not send_telegram_post(message):
-            return False
-    
-    return True
+    return '\n'.join(lines)
+
+
+def send_digest(models: List[ModelRelease]) -> bool:
+    """Send a tiered digest of new models."""
+    message = build_digest_message(models)
+    return send_telegram_post(message)
 
 
 def main():
+    # Check for preview mode
+    import sys
+    preview_mode = "--preview" in sys.argv
+    if preview_mode:
+        sys.argv.remove("--preview")
+    
     # Initialize PostgreSQL database if available
     init_database()
     
@@ -856,11 +859,20 @@ def main():
     
     # Send digest if there are new models
     if all_new_models:
-        if send_digest(all_new_models):
-            print("Digest sent successfully")
+        # Build message for preview
+        message = build_digest_message(all_new_models)
+        print("=== PREVIEW MODE ===")
+        print(message)
+        print(f"=== END (Length: {len(message)}) ===")
+        
+        if preview_mode:
+            print("Preview mode - not sending")
         else:
-            print("Failed to send digest", file=sys.stderr)
-            return 1
+            if send_telegram_post(message):
+                print("Digest sent successfully")
+            else:
+                print("Failed to send digest", file=sys.stderr)
+                return 1
     else:
         print("No new models to report")
     

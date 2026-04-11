@@ -406,14 +406,93 @@ def is_high_performance_model(model: ModelRelease) -> bool:
     return is_known_high_perf or is_reasoning or has_high_scores or long_context_models
 
 
+def is_noise_model(model_id: str, author: str, tags: list) -> bool:
+    """Filter out noise models we don't want to report."""
+    model_lower = model_id.lower()
+    author_lower = (author or "").lower()
+    tags_lower = [t.lower() for t in tags]
+    
+    # Skip test/random models
+    noise_patterns = [
+        "tiny-random", "test", "dummy", "example", "demo", "sample",
+        "random", "placeholder", "minimal", "toy-",
+    ]
+    if any(p in model_lower for p in noise_patterns):
+        return True
+    
+    # Skip models moved/deprecated
+    if any(p in model_lower for p in ["moved", "deprecated", "archived", "old", "backup"]):
+        return True
+    
+    # Skip random user fine-tunes (personal username patterns)
+    # Keep models from known orgs
+    known_orgs = [
+        "meta-llama", "mistralai", "qwen", "google", "anthropic",
+        "openai", "deepseek", "alibaba", "microsoft", "facebook",
+        "stabilityai", "huggingface", "sentence-transformers", "bartowski",
+        "nousresearch", "tiiuae", "01-ai", "philschmid", "cognitivecomputations",
+        "thebloke", "ollama", "unsloth", "maziyarpanahi", "mradermacher",
+        "nvidia", "ibm", "allenai", "bigscience", "eleutherai",
+    ]
+    is_known_org = any(org in author_lower for org in known_orgs)
+    
+    # If unknown author and model name looks like a fine-tune hash or experiment
+    if not is_known_org:
+        # Skip models with hash-like suffixes (experiment naming)
+        import re
+        if re.search(r"[-_]\d{6,}$", model_lower):  # ends in _123456 or -123456
+            return True
+        if re.search(r"_seed\d+_", model_lower):  # experiment naming like _seed1_
+            return True
+        if re.search(r"_bs\d+_", model_lower):  # batch size experiment
+            return True
+        if re.search(r"_aug\d+", model_lower):  # augmentation experiment
+            return True
+        if re.search(r"_b\d+-ep_", model_lower):  # batch/epoch experiment
+            return True
+        if re.search(r"_\d+shot_", model_lower):  # few-shot experiment
+            return True
+        if re.search(r"_v\d+_", model_lower):  # version experiment
+            return True
+    
+    return False
+
+
+def is_significant_release(model_id: str, author: str, tags: list, downloads: int = 0) -> bool:
+    """Check if this is a significant release worth reporting."""
+    model_lower = model_id.lower()
+    author_lower = (author or "").lower()
+    
+    # Known significant model families
+    significant_families = [
+        "llama-", "llama2-", "llama3", "mistral", "mixtral", "qwen2", "qwen3",
+        "gemma-", "phi-", "falcon-", "yi-", "deepseek", "command-r",
+        "codestral", "nvidia/llama", "nemotron", "olmo", "pythia",
+    ]
+    
+    if any(f in model_lower for f in significant_families):
+        return True
+    
+    # Known significant orgs releasing flagship models
+    if author_lower in ["meta-llama", "mistralai", "alibaba", "qwen", "google",
+                        "deepseek-ai", "anthropic", "openai"]:
+        return True
+    
+    # High download count indicates significance
+    if downloads and downloads >= 10000:
+        return True
+    
+    return False
+
+
 def fetch_huggingface_trending() -> List[ModelRelease]:
-    """Fetch trending models from Hugging Face."""
+    """Fetch trending models from Hugging Face - filtered for quality."""
     models = []
     try:
         # HF API - fetch recently created models
         resp = requests.get(
             "https://huggingface.co/api/models",
-            params={"sort": "lastModified", "direction": -1, "limit": 30},
+            params={"sort": "lastModified", "direction": -1, "limit": 100},
             timeout=30
         )
         resp.raise_for_status()
@@ -424,20 +503,29 @@ def fetch_huggingface_trending() -> List[ModelRelease]:
             if not model_id:
                 continue
             
-            # Get model card info if available
+            author = m.get("author", "")
             tags = m.get("tags", [])
             pipeline = m.get("pipeline_tag", "")
+            downloads = m.get("downloads", 0)
+            
+            # Skip noise models
+            if is_noise_model(model_id, author, tags):
+                continue
+            
+            # Only include if significant OR high downloads
+            if not (is_significant_release(model_id, author, tags, downloads) or downloads >= 5000):
+                continue
             
             models.append(ModelRelease(
                 name=model_id,
-                provider=m.get("author", "unknown"),
+                provider=author or "unknown",
                 source="huggingface",
                 url=f"https://huggingface.co/{model_id}",
                 description=f"{pipeline} model" if pipeline else "ML model",
                 release_date=m.get("created_at", datetime.now().strftime("%Y-%m-%d"))[:10],
                 architecture=tags[0] if tags else None,
-                is_open_source=True,  # HF models are open weights by definition
-                unique_traits=["hf_hub"] + tags[:2]
+                is_open_source=True,
+                unique_traits=["hf_hub"] + tags[:3]
             ))
     except Exception as e:
         print(f"HuggingFace fetch error: {e}", file=sys.stderr)
@@ -560,40 +648,167 @@ def send_telegram_post(message: str) -> bool:
         return False
 
 
+def categorize_model(model: ModelRelease) -> str:
+    """Categorize model into tier based on significance."""
+    name = model.name.lower()
+    provider = (model.provider or "").lower()
+    
+    # Tier 1: Premier Open Weights - flagship releases
+    premier_open = [
+        "llama-3.3", "llama-3.2", "llama3.1-405b", "llama3.1-70b",
+        "mistral-large", "mixtral-8x22b", "qwen2.5-72b", "qwen3",
+        "deepseek-v3", "deepseek-r1", "gemma-2-27b", "gemma-2-9b",
+        "phi-3", "phi-4", "command-r-plus", "yi-large",
+    ]
+    if any(p in name for p in premier_open):
+        return "premier_open"
+    
+    # Tier 2: Closed Giants - proprietary SOTA
+    closed_giants = ["gpt-4", "claude-3", "claude-3.5", "gemini-2", "gemini-1.5", "o1", "o3"]
+    if any(p in name for p in closed_giants):
+        return "closed_giants"
+    
+    # Tier 3: Reasoning/Specialized
+    reasoning = ["reasoning", "r1", "o1", "o3", "qwq", "marco-o1"]
+    if any(p in name for p in reasoning):
+        return "reasoning"
+    
+    coding_models = ["coder", "codestral", "codeqwen", "deepseek-coder"]
+    if any(p in name for p in coding_models):
+        return "coding"
+    
+    # Tier 4: Niche/Specialized
+    if model.source == "ollama":
+        return "local_ready"
+    
+    # Default: mention only if significant
+    return "other"
+
+
+def get_why_care(model: ModelRelease) -> str:
+    """Generate 'why you should care' for a model."""
+    name = model.name.lower()
+    provider = model.provider or ""
+    
+    reasons = {
+        "llama-3.3": "Meta's latest flagship open model",
+        "llama-3.2": "Multimodal-capable Llama variant",
+        "mistral-large": "Mistral's strongest model",
+        "deepseek-v3": "Top-tier Chinese open model",
+        "deepseek-r1": "Reasoning-focused, beats o1 on benchmarks",
+        "qwen2.5-72b": "Alibaba's flagship open model",
+        "gemma-2-27b": "Google's best open model",
+        "phi-3": "Microsoft's efficient small model",
+        "claude-3.5": "Anthropic's latest, best for coding",
+        "gpt-4": "OpenAI's flagship",
+        "gemini-2": "Google DeepMind's latest",
+    }
+    
+    for key, reason in reasons.items():
+        if key in name:
+            return reason
+    
+    # Generic by category
+    if "coder" in name or "codestral" in name:
+        return "Strong code generation"
+    if "reasoning" in name or "r1" in name:
+        return "Chain-of-thought reasoning"
+    if model.context_window and model.context_window >= 128_000:
+        return "Long context capability"
+    
+    return "Worth tracking"
+
+
 def send_digest(models: List[ModelRelease]) -> bool:
-    """Send a daily digest of new models."""
+    """Send a tiered digest of new models."""
     if not models:
         return True
     
-    # Cap at 10 models per digest to avoid message limits
-    models = models[:10]
+    # Categorize models
+    tiers = {
+        "premier_open": [],
+        "closed_giants": [],
+        "reasoning": [],
+        "coding": [],
+        "local_ready": [],
+        "other": []
+    }
     
-    header = f"🤖 *ModelClaw Daily Digest*\n_{datetime.now().strftime('%A, %B %d, %Y')}_\n\n"
-    header += f"Found {len(models)} new model(s) today:\n\n"
-    header += "—" * 20 + "\n\n"
+    for model in models[:20]:  # Cap at 20 total
+        tier = categorize_model(model)
+        tiers[tier].append(model)
     
-    # Split into multiple messages if too long
-    current_message = header
-    sent_count = 0
+    # Build digest
+    lines = []
+    lines.append(f"🤖 *ModelBytes Digest*")
+    lines.append(f"_{datetime.now().strftime('%A, %B %d, %Y')}_")
+    lines.append("")
     
-    for model in models:
-        model_text = format_model_post(model) + "\n\n" + "—" * 20 + "\n\n"
-        
-        if len(current_message) + len(model_text) > 4000:  # Telegram limit
-            if not send_telegram_post(current_message):
+    # Tier 1: Premier Open Weights
+    if tiers["premier_open"]:
+        lines.append("")
+        lines.append("━━━ *PREMIER OPEN WEIGHTS* 🔓")
+        lines.append("_(Flagship releases you should know about)_")
+        lines.append("")
+        for model in tiers["premier_open"][:3]:
+            lines.append(f"• {escape_markdown(model.name.split('/')[-1])}")
+            lines.append(f"  Why care: {get_why_care(model)}")
+            if model.unique_traits:
+                traits = ', '.join(model.unique_traits[:3])
+                lines.append(f"  Traits: {traits}")
+            lines.append("")
+    
+    # Tier 2: Closed Giants
+    if tiers["closed_giants"]:
+        lines.append("")
+        lines.append("━━━ *CLOSED GIANTS* 🔒")
+        lines.append("_(Proprietary models worth tracking)_")
+        lines.append("")
+        for model in tiers["closed_giants"][:2]:
+            lines.append(f"• {escape_markdown(model.name.split('/')[-1])}")
+            lines.append(f"  Why care: {get_why_care(model)}")
+            lines.append("")
+    
+    # Tier 3: Reasoning/Coding
+    if tiers["reasoning"] or tiers["coding"]:
+        lines.append("")
+        lines.append("━━━ *SPECIALIZED* 🎯")
+        lines.append("_(Niche but mighty)_")
+        lines.append("")
+        for model in (tiers["reasoning"] + tiers["coding"])[:3]:
+            lines.append(f"• {escape_markdown(model.name.split('/')[-1])}")
+            lines.append(f"  Why care: {get_why_care(model)}")
+            lines.append("")
+    
+    # Tier 4: Local Ready (Ollama)
+    if tiers["local_ready"]:
+        lines.append("")
+        lines.append("━━━ *LOCAL READY* 🏠")
+        lines.append("_(Run it yourself)_")
+        lines.append("")
+        names = [m.name for m in tiers["local_ready"][:5]]
+        lines.append(', '.join(names))
+        lines.append("")
+    
+    # Summary line
+    total = sum(len(v) for v in tiers.values())
+    lines.append("")
+    lines.append(f"_Total: {total} models tracked today_")
+    
+    message = '\n'.join(lines)
+    
+    # Send (split if needed)
+    if len(message) > 4000:
+        parts = message.split('\n━━━')
+        for i, part in enumerate(parts):
+            if i > 0:
+                part = '━━━' + part
+            if not send_telegram_post(part):
                 return False
-            sent_count += 1
-            current_message = model_text
-        else:
-            current_message += model_text
-    
-    # Send remaining
-    if current_message.strip():
-        if not send_telegram_post(current_message):
+    else:
+        if not send_telegram_post(message):
             return False
-        sent_count += 1
     
-    print(f"Sent digest in {sent_count} message(s)")
     return True
 
 

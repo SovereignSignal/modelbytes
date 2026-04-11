@@ -416,12 +416,26 @@ def is_noise_model(model_id: str, author: str, tags: list) -> bool:
     noise_patterns = [
         "tiny-random", "test", "dummy", "example", "demo", "sample",
         "random", "placeholder", "minimal", "toy-",
+        "lora-", "-lora", "-loras", "_lora",  # LoRA adapters
+        "-onnx", "_onnx",  # ONNX conversions
+        "-gguf", "_gguf", "-awq", "-gptq",  # Quantized variants
+        "-fp16", "-bf16", "-int8", "-int4",  # Precision variants
     ]
     if any(p in model_lower for p in noise_patterns):
         return True
     
     # Skip models moved/deprecated
     if any(p in model_lower for p in ["moved", "deprecated", "archived", "old", "backup"]):
+        return True
+    
+    # Skip experiment/fine-tune suffixes (e.g. _length4096, _calculator, _stella-text2sql)
+    experiment_patterns = [
+        "_length", "stella", "text2sql", "_calculator",
+        "_seed", "_bs", "_epoch", "_step", "_checkpoint",
+        "-finetuned", "-finetune", "_finetuned",
+        "-lora", "_lora", "-loras",
+    ]
+    if any(p in model_lower for p in experiment_patterns):
         return True
     
     # Skip random user fine-tunes (personal username patterns)

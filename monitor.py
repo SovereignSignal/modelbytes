@@ -635,7 +635,7 @@ def send_telegram_post(message: str) -> bool:
     payload = {
         "chat_id": TELEGRAM_CHANNEL_ID,
         "text": message,
-        "parse_mode": "Markdown",
+        "parse_mode": "HTML",
         "disable_web_page_preview": False
     }
     
@@ -722,7 +722,7 @@ def get_why_care(model: ModelRelease) -> str:
 
 
 def build_digest_message(models: List[ModelRelease]) -> str:
-    """Build the tiered digest message."""
+    """Build the tiered digest message (HTML format)."""
     if not models:
         return "No new models today."
     
@@ -740,20 +740,20 @@ def build_digest_message(models: List[ModelRelease]) -> str:
         tier = categorize_model(model)
         tiers[tier].append(model)
     
-    # Build digest
+    # Build digest using HTML formatting
     lines = []
-    lines.append(f"🤖 *ModelBytes Digest*")
-    lines.append(f"_{datetime.now().strftime('%A, %B %d, %Y')}_")
+    lines.append(f"🤖 <b>ModelBytes Digest</b>")
+    lines.append(f"<i>{datetime.now().strftime('%A, %B %d, %Y')}</i>")
     lines.append("")
     
     # Tier 1: Premier Open Weights
     if tiers["premier_open"]:
         lines.append("")
-        lines.append("━━━ *PREMIER OPEN WEIGHTS* 🔓")
+        lines.append("━━━ <b>PREMIER OPEN WEIGHTS</b> 🔓")
         lines.append("(Flagship releases you should know about)")
         lines.append("")
         for model in tiers["premier_open"][:3]:
-            name = escape_markdown(model.name.split('/')[-1])
+            name = model.name.split('/')[-1]
             lines.append(f"• {name}")
             lines.append(f"  Why care: {get_why_care(model)}")
             if model.unique_traits:
@@ -764,11 +764,11 @@ def build_digest_message(models: List[ModelRelease]) -> str:
     # Tier 2: Closed Giants
     if tiers["closed_giants"]:
         lines.append("")
-        lines.append("━━━ *CLOSED GIANTS* 🔒")
+        lines.append("━━━ <b>CLOSED GIANTS</b> 🔒")
         lines.append("(Proprietary models worth tracking)")
         lines.append("")
         for model in tiers["closed_giants"][:2]:
-            name = escape_markdown(model.name.split('/')[-1])
+            name = model.name.split('/')[-1]
             lines.append(f"• {name}")
             lines.append(f"  Why care: {get_why_care(model)}")
             lines.append("")
@@ -776,11 +776,11 @@ def build_digest_message(models: List[ModelRelease]) -> str:
     # Tier 3: Reasoning/Coding
     if tiers["reasoning"] or tiers["coding"]:
         lines.append("")
-        lines.append("━━━ *SPECIALIZED* 🎯")
+        lines.append("━━━ <b>SPECIALIZED</b> 🎯")
         lines.append("(Niche but mighty)")
         lines.append("")
         for model in (tiers["reasoning"] + tiers["coding"])[:3]:
-            name = escape_markdown(model.name.split('/')[-1])
+            name = model.name.split('/')[-1]
             lines.append(f"• {name}")
             lines.append(f"  Why care: {get_why_care(model)}")
             lines.append("")
@@ -788,10 +788,10 @@ def build_digest_message(models: List[ModelRelease]) -> str:
     # Tier 4: Local Ready (Ollama)
     if tiers["local_ready"]:
         lines.append("")
-        lines.append("━━━ *LOCAL READY* 🏠")
+        lines.append("━━━ <b>LOCAL READY</b> 🏠")
         lines.append("(Run it yourself)")
         lines.append("")
-        names = [escape_markdown(m.name) for m in tiers["local_ready"][:5]]
+        names = [m.name for m in tiers["local_ready"][:5]]
         lines.append(', '.join(names))
         lines.append("")
     

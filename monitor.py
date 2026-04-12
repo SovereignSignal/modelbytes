@@ -918,13 +918,18 @@ def summarize_models(models: List[ModelRelease]) -> str:
         base = m.name.split('/')[-1].lower().replace(':free', '')
         if base not in seen_bases:
             seen_bases.add(base)
+            # Also strip :free from display name
+            if ':free' in m.name:
+                m.name = m.name.replace(':free', '')
             deduped.append(m)
     models = deduped
     
     # Build model info for the prompt (cap at 10 to keep output short)
     model_info = []
     for m in models[:10]:
-        info = f"Name: {m.name}"
+        # Include tier hint for LLM
+        tier = categorize_model(m)
+        info = f"Name: {m.name} [{tier}]"
         if m.source:
             info += f" ({m.source})"
         if m.release_date:

@@ -525,19 +525,24 @@ def is_significant_release(model_id: str, author: str, tags: list, downloads: in
 
 
 def fetch_huggingface_trending() -> List[ModelRelease]:
-    """Fetch trending models from Hugging Face - filtered for quality."""
+    """Fetch trending models from Hugging Face - using the trending API."""
     models = []
     try:
-        # HF API - fetch recently created models
+        # Use the trending API for actually popular models
         resp = requests.get(
-            "https://huggingface.co/api/models",
-            params={"sort": "lastModified", "direction": -1, "limit": 100},
+            "https://huggingface.co/api/trending",
             timeout=30
         )
         resp.raise_for_status()
         data = resp.json()
         
-        for m in data:
+        trending = data.get("recentlyTrending", [])
+        
+        for item in trending:
+            if item.get("repoType") != "model":
+                continue
+            
+            m = item.get("repoData", {})
             model_id = m.get("id", "")
             if not model_id:
                 continue
@@ -546,14 +551,22 @@ def fetch_huggingface_trending() -> List[ModelRelease]:
             tags = m.get("tags", [])
             pipeline = m.get("pipeline_tag", "")
             downloads = m.get("downloads", 0)
+            likes = m.get("likes", 0)
             
             # Skip noise models
             if is_noise_model(model_id, author, tags):
                 continue
             
-            # Only include if significant OR high downloads
-            if not (is_significant_release(model_id, author, tags, downloads) or downloads >= 5000):
+            # Only include if significant OR high engagement
+            if not (is_significant_release(model_id, author, tags, downloads) or downloads >= 5000 or likes >= 100):
                 continue
+            
+            # Get actual created date
+            created_at = m.get("createdAt", "")
+            if created_at:
+                release_date = created_at[:10]  # ISO format
+            else:
+                release_date = datetime.now().strftime("%Y-%m-%d")
             
             models.append(ModelRelease(
                 name=model_id,
@@ -561,7 +574,7 @@ def fetch_huggingface_trending() -> List[ModelRelease]:
                 source="huggingface",
                 url=f"https://huggingface.co/{model_id}",
                 description=f"{pipeline} model" if pipeline else "ML model",
-                release_date=m.get("created_at", datetime.now().strftime("%Y-%m-%d"))[:10],
+                release_date=release_date,
                 architecture=tags[0] if tags else None,
                 is_open_source=True,
                 unique_traits=["hf_hub"] + tags[:3]

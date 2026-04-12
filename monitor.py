@@ -296,6 +296,15 @@ def fetch_openrouter_models() -> List[ModelRelease]:
             if "moe" in model_lower or "mixtral" in model_lower:
                 traits.append("MoE")
             
+            # Use OpenRouter's created timestamp for actual release date
+            created_ts = m.get('created', 0)
+            if created_ts:
+                from datetime import timezone
+                release_dt = datetime.fromtimestamp(created_ts, tz=timezone.utc)
+                release_date_str = release_dt.strftime("%Y-%m-%d")
+            else:
+                release_date_str = datetime.now().strftime("%Y-%m-%d")
+            
             models.append(ModelRelease(
                 name=model_id,
                 provider=m.get("owned_by", "unknown"),
@@ -305,7 +314,7 @@ def fetch_openrouter_models() -> List[ModelRelease]:
                 context_window=context,
                 pricing_input=input_price,
                 pricing_output=output_price,
-                release_date=datetime.now().strftime("%Y-%m-%d"),
+                release_date=release_date_str,
                 is_open_source=is_open,
                 unique_traits=traits,
                 performance_scores={}  # OpenRouter doesn't expose benchmarks directly
@@ -337,13 +346,14 @@ def fetch_ollama_models() -> List[ModelRelease]:
             seen.add(model_name)
             
             # Ollama models are by definition open source (can run locally)
+            # Ollama doesn't provide release dates, use None
             models.append(ModelRelease(
                 name=model_name,
                 provider="ollama",
                 source="ollama",
                 url=f"https://ollama.com/library/{model_name}",
                 description="Local LLM model available via Ollama",
-                release_date=datetime.now().strftime("%Y-%m-%d"),
+                release_date=None,  # Ollama doesn't provide release dates
                 is_open_source=True,
                 unique_traits=["local", "open_source"]
             ))

@@ -738,6 +738,11 @@ def categorize_model(model: ModelRelease) -> str:
     provider = (model.provider or "").lower()
     source = model.source or ""
     
+    # Ollama models go to Local Ready regardless of significance
+    # (they're already runnable locally)
+    if source == "ollama":
+        return "local_ready"
+    
     # Tier 1: Premier Open Weights - flagship releases
     premier_open = [
         "llama-3.3", "llama-3.2", "llama3.1-405b", "llama3.1-70b",
@@ -768,10 +773,6 @@ def categorize_model(model: ModelRelease) -> str:
     vision_models = ["-vision", "-vl", "-vlm", "multimodal"]
     if any(p in name for p in vision_models):
         return "multimodal"
-    
-    # Tier 4: Local Ready (Ollama)
-    if source == "ollama":
-        return "local_ready"
     
     # Default: only if significant
     return "other"
@@ -986,15 +987,16 @@ FORMAT (follow exactly):
 (same format)
 
 <b>🏠 Local Ready</b>
-• model-name, model-name (ollama run model-name)
+• model-name, model-name — ollama run model-name
 
 RULES:
 - Use ONLY these HTML tags: <b>, <i>, <a href>
 - One line per model, no bullet points (•) except Local Ready
-- ALWAYS include release date
+- ALWAYS include release date (just month+day, no year: "Released Apr 7")
 - ALWAYS include link as <a href="URL">→ Source</a>
 - 2 sentences max per model
-- SKIP: fine-tunes, ONNX, LoRA, GGUF, embedders, experiments
+- SKIP entirely: fine-tunes, ONNX, LoRA, GGUF, embedders, experiments
+- HIDE empty sections — if no models in a tier, don't show that header
 - Deduplicate across platforms
 - MAX 2800 chars
 - End: "X models tracked today"

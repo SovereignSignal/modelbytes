@@ -506,6 +506,8 @@ def is_significant_release(model_id: str, author: str, tags: list, downloads: in
         "codestral", "nvidia/llama", "nemotron", "olmo", "pythia",
         "glm-", "grok", "claude", "gpt-4", "gpt-4o", "o1-", "o3-",
         "gemini-", "gemini2", "qwen3.5", "qwen3.6", "arcee",
+        "minimax", "voxcpm", "void-model", "omnivoice",
+        "trinity-large", "mimo-v2", "lyria-", "reka-edge",
     ]
     
     if any(f in model_lower for f in significant_families):
@@ -514,7 +516,9 @@ def is_significant_release(model_id: str, author: str, tags: list, downloads: in
     # Known significant orgs
     if author_lower in ["meta-llama", "mistralai", "alibaba", "qwen", "google",
                         "deepseek-ai", "anthropic", "openai", "x-ai",
-                        "z-ai", "arcee-ai", "nvidia", "microsoft"]:
+                        "z-ai", "zai-org", "arcee-ai", "nvidia", "microsoft",
+                        "minimaxai", "openbmb", "netflix", "k2-fsa",
+                        "xiaomi", "rekaai"]:
         return True
     
     # High download count indicates significance
@@ -750,7 +754,8 @@ def categorize_model(model: ModelRelease) -> str:
         "qwen3.5", "qwen3.6", "deepseek-v3", "deepseek-r1", 
         "gemma-4", "gemma-2-27b", "gemma-2-9b", "gemma4",
         "phi-3", "phi-4", "command-r-plus", "yi-large",
-        "glm-5", "arcee-trinity",
+        "glm-5", "arcee-trinity", "minimax-m2", "voxcpm",
+        "trinity-large", "mimo-v2", "lyria-", "reka-edge",
     ]
     if any(p in name for p in premier_open):
         return "premier_open"

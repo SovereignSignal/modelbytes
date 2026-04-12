@@ -50,6 +50,11 @@ if not TELEGRAM_BOT_TOKEN:
 if not TELEGRAM_CHANNEL_ID:
     TELEGRAM_CHANNEL_ID = "-1003509386035"
 
+# LLM Summarization
+LLM_API_KEY = os.environ.get("MODELBYTES_LLM_KEY", os.environ.get("OPENAI_API_KEY", os.environ.get("OPENROUTER_API_KEY", "")))
+LLM_MODEL = os.environ.get("MODELBYTES_LLM_MODEL", "gpt-4o-mini")
+LLM_BASE_URL = os.environ.get("MODELBYTES_LLM_URL", "https://api.openai.com/v1")
+
 def init_database():
     """Initialize PostgreSQL tables if using Postgres."""
     if not USE_POSTGRES:
@@ -853,6 +858,84 @@ def send_digest(models: List[ModelRelease]) -> bool:
     return send_telegram_post(message)
 
 
+def summarize_models(models: List[ModelRelease]) -> str:
+    """Use LLM to generate a concise, informative digest of significant models."""
+    if not models:
+        return "No new models today."
+    
+    # Build model info for the prompt
+    model_info = []
+    for m in models[:15]:  # Cap at 15 to keep prompt reasonable
+        info = f"Name: {m.name}"
+        if m.provider:
+            info += f"\nProvider: {m.provider}"
+        if m.source:
+            info += f"\nSource: {m.source}"
+        if m.description:
+            info += f"\nDescription: {m.description[:300]}"
+        if m.context_window:
+            info += f"\nContext: {m.context_window:,} tokens"
+        if m.pricing_input is not None:
+            if m.pricing_input == 0:
+                info += "\nPricing: FREE"
+            else:
+                info += f"\nPricing: ${m.pricing_input:.2f}/${m.pricing_output:.2f} per 1M tokens"
+        if m.release_date:
+            info += f"\nReleased: {m.release_date}"
+        if m.is_open_source:
+            info += "\nOpen source: Yes"
+        if m.url:
+            info += f"\nURL: {m.url}"
+        model_info.append(info)
+    
+    prompt = f"""You are ModelBytes, an AI model release tracker. Write a concise, engaging Telegram digest for these new model releases.
+
+Rules:
+- Use HTML formatting (<b>bold</b>, <i>italic</i>)
+- For each model, write 1-2 sentences explaining WHY IT MATTERS to developers/AI practitioners
+- Include key specs (context window, pricing, open/closed) naturally in the text
+- Group into sections: 🔓 Premier Open Weights, 🔒 Closed Giants, 🎯 Specialized, 🏠 Local Ready (Ollama)
+- Skip models that are noise (random fine-tunes, ONNX conversions, LoRA adapters)
+- Keep total message under 3500 chars
+- End with a line: "Total: X models tracked today"
+- Be direct and technical, not hype. If a model is minor, say so briefly.
+
+Models:
+{chr(10).join(model_info)}"""
+
+    if not LLM_API_KEY:
+        print("No LLM API key - falling back to template digest")
+        return build_digest_message(models)
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {LLM_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": LLM_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 1500,
+            "temperature": 0.3,
+        }
+        
+        print(f"Calling LLM ({LLM_MODEL}) for digest summary...")
+        resp = requests.post(f"{LLM_BASE_URL}/chat/completions", json=payload, headers=headers, timeout=60)
+        resp.raise_for_status()
+        
+        data = resp.json()
+        summary = data["choices"][0]["message"]["content"].strip()
+        
+        # Add header
+        header = f"🤖 <b>ModelBytes Digest</b>\n<i>{datetime.now().strftime('%A, %B %d, %Y')}</i>"
+        return f"{header}\n\n{summary}"
+    
+    except Exception as e:
+        print(f"LLM summarization failed: {e}", file=sys.stderr)
+        print("Falling back to template digest")
+        return build_digest_message(models)
+
+
 def main():
     # Check for preview mode
     import sys
@@ -903,13 +986,22 @@ def main():
     
     # Send digest if there are new models
     if all_new_models:
-        # Build message for preview
-        message = build_digest_message(all_new_models)
-        print("=== PREVIEW MODE ===")
-        print(message)
-        print(f"=== END (Length: {len(message)}) ===")
+        # Filter to significant models first
+        significant = [m for m in all_new_models if not is_noise_model(
+            m.name.split('/')[-1],
+            m.name.split('/')[0] if '/' in m.name else '',
+            m.unique_traits or []
+        )]
+        
+        # Use significant models if any, otherwise all (capped at 15)
+        digest_models = significant[:15] if significant else all_new_models[:10]
+        
+        message = summarize_models(digest_models)
         
         if preview_mode:
+            print("=== PREVIEW MODE ===")
+            print(message)
+            print(f"=== END (Length: {len(message)}) ===")
             print("Preview mode - not sending")
         else:
             if send_telegram_post(message):

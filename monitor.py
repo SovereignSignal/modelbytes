@@ -944,20 +944,33 @@ def summarize_models(models: List[ModelRelease]) -> str:
             info += f"\nURL: {m.url}"
         model_info.append(info)
     
-    prompt = f"""You are ModelBytes, an AI model tracker. Write a SHORT Telegram digest for these releases.
+    prompt = f"""You are ModelBytes, an AI model tracker. Write a SHORT Telegram digest.
 
-Rules:
-- HTML formatting (<b>bold</b>, <i>italic</i>)
-- MAJOR releases: 2-3 sentences on WHY IT MATTERS
-- MINOR releases: 1 short sentence only
-- SKIP: fine-tunes, ONNX, LoRA, GGUF, embedders, random experiments
-- ALWAYS include the release date for each model (e.g. "Released Apr 12")
-- ALWAYS include a link when available — use the URL field
-- Group: 🔓 Premier Open, 🔒 Closed Giants, 🎯 Specialized, 🏠 Local Ready
-- MAX 3000 chars total
+FORMAT (follow exactly):
+<b>🔓 Premier Open</b>
+
+<b>Model Name</b> — Released Apr 12. 2 sentences on why it matters. Specs: 262K context, $0.12/0.40 per 1M. <a href="URL">→ OpenRouter</a>
+
+<b>🔒 Closed Giants</b>
+(same format)
+
+<b>🎯 Specialized</b>
+(same format)
+
+<b>🏠 Local Ready</b>
+• model-name, model-name (ollama run model-name)
+
+RULES:
+- Use ONLY these HTML tags: <b>, <i>, <a href>
+- One line per model, no bullet points (•) except Local Ready
+- ALWAYS include release date
+- ALWAYS include link as <a href="URL">→ Source</a>
+- 2 sentences max per model
+- SKIP: fine-tunes, ONNX, LoRA, GGUF, embedders, experiments
+- Deduplicate across platforms
+- MAX 2800 chars
 - End: "X models tracked today"
-- Deduplicate: same model on multiple platforms = mention once
-- Direct, technical, no hype
+- Technical and direct, no hype
 
 Models:
 {chr(10).join(model_info)}"""

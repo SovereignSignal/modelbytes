@@ -927,6 +927,8 @@ def summarize_models(models: List[ModelRelease]) -> str:
         info = f"Name: {m.name}"
         if m.source:
             info += f" ({m.source})"
+        if m.release_date:
+            info += f"\nReleased: {m.release_date}"
         if m.description:
             info += f"\nDesc: {m.description[:200]}"
         if m.context_window:
@@ -938,17 +940,21 @@ def summarize_models(models: List[ModelRelease]) -> str:
                 info += f"\nPricing: ${m.pricing_input:.2f}/${m.pricing_output:.2f} per 1M"
         if m.is_open_source:
             info += "\nOpen: yes"
+        if m.url:
+            info += f"\nURL: {m.url}"
         model_info.append(info)
     
     prompt = f"""You are ModelBytes, an AI model tracker. Write a SHORT Telegram digest for these releases.
 
 Rules:
 - HTML formatting (<b>bold</b>, <i>italic</i>)
-- MAJOR releases: 2 sentences on WHY IT MATTERS
+- MAJOR releases: 2-3 sentences on WHY IT MATTERS
 - MINOR releases: 1 short sentence only
 - SKIP: fine-tunes, ONNX, LoRA, GGUF, embedders, random experiments
+- ALWAYS include the release date for each model (e.g. "Released Apr 12")
+- ALWAYS include a link when available — use the URL field
 - Group: 🔓 Premier Open, 🔒 Closed Giants, 🎯 Specialized, 🏠 Local Ready
-- MAX 2500 chars total
+- MAX 3000 chars total
 - End: "X models tracked today"
 - Deduplicate: same model on multiple platforms = mention once
 - Direct, technical, no hype

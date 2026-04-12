@@ -425,6 +425,9 @@ def is_noise_model(model_id: str, author: str, tags: list) -> bool:
         "-onnx", "_onnx",  # ONNX conversions
         "-gguf", "_gguf", "-awq", "-gptq",  # Quantized variants
         "-fp16", "-bf16", "-int8", "-int4",  # Precision variants
+        "_ftjob_", "-merged",  # Fine-tune jobs and merges
+        "-base",  # Base/unaligned versions (usually not useful)
+        ".onnx",  # ONNX format
     ]
     if any(p in model_lower for p in noise_patterns):
         return True
@@ -433,12 +436,14 @@ def is_noise_model(model_id: str, author: str, tags: list) -> bool:
     if any(p in model_lower for p in ["moved", "deprecated", "archived", "old", "backup"]):
         return True
     
-    # Skip experiment/fine-tune suffixes (e.g. _length4096, _calculator, _stella-text2sql)
+    # Skip experiment/fine-tune suffixes
     experiment_patterns = [
         "_length", "stella", "text2sql", "_calculator",
         "_seed", "_bs", "_epoch", "_step", "_checkpoint",
         "-finetuned", "-finetune", "_finetuned",
         "-lora", "_lora", "-loras",
+        "_ftjob_", "-merged",  # Merge residuals from fine-tune jobs
+        "-base",  # Unaligned base (usually not interesting alone)
     ]
     if any(p in model_lower for p in experiment_patterns):
         return True
@@ -487,16 +492,19 @@ def is_significant_release(model_id: str, author: str, tags: list, downloads: in
     # Known significant model families
     significant_families = [
         "llama-", "llama2-", "llama3", "mistral", "mixtral", "qwen2", "qwen3",
-        "gemma-", "phi-", "falcon-", "yi-", "deepseek", "command-r",
+        "gemma-", "gemma4", "phi-", "phi4", "falcon-", "yi-", "deepseek", "command-r",
         "codestral", "nvidia/llama", "nemotron", "olmo", "pythia",
+        "glm-", "grok", "claude", "gpt-4", "gpt-4o", "o1-", "o3-",
+        "gemini-", "gemini2", "qwen3.5", "qwen3.6", "arcee",
     ]
     
     if any(f in model_lower for f in significant_families):
         return True
     
-    # Known significant orgs releasing flagship models
+    # Known significant orgs
     if author_lower in ["meta-llama", "mistralai", "alibaba", "qwen", "google",
-                        "deepseek-ai", "anthropic", "openai"]:
+                        "deepseek-ai", "anthropic", "openai", "x-ai",
+                        "z-ai", "arcee-ai", "nvidia", "microsoft"]:
         return True
     
     # High download count indicates significance
@@ -645,11 +653,43 @@ def format_model_post(model: ModelRelease) -> str:
 
 
 def send_telegram_post(message: str) -> bool:
-    """Send a message to Telegram channel."""
+    """Send a message to Telegram channel, splitting if too long."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHANNEL_ID:
         print("Telegram credentials not configured", file=sys.stderr)
         return False
     
+    # Telegram limit is 4096 chars
+    MAX_LEN = 4000
+    
+    if len(message) <= MAX_LEN:
+        return _send_single_post(message)
+    
+    # Split on section boundaries (━━━ or ===)
+    parts = []
+    current = ""
+    for line in message.split('\n'):
+        if len(current) + len(line) + 1 > MAX_LEN and current:
+            parts.append(current.strip())
+            current = line
+        else:
+            current += '\n' + line if current else line
+    
+    if current.strip():
+        parts.append(current.strip())
+    
+    # Send each part
+    for i, part in enumerate(parts):
+        if not _send_single_post(part):
+            return False
+        import time
+        if i < len(parts) - 1:
+            time.sleep(1)  # Rate limit between parts
+    
+    return True
+
+
+def _send_single_post(message: str) -> bool:
+    """Send a single message to Telegram channel."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHANNEL_ID,
@@ -673,36 +713,44 @@ def categorize_model(model: ModelRelease) -> str:
     """Categorize model into tier based on significance."""
     name = model.name.lower()
     provider = (model.provider or "").lower()
+    source = model.source or ""
     
     # Tier 1: Premier Open Weights - flagship releases
     premier_open = [
         "llama-3.3", "llama-3.2", "llama3.1-405b", "llama3.1-70b",
         "mistral-large", "mixtral-8x22b", "qwen2.5-72b", "qwen3",
-        "deepseek-v3", "deepseek-r1", "gemma-2-27b", "gemma-2-9b",
+        "qwen3.5", "qwen3.6", "deepseek-v3", "deepseek-r1", 
+        "gemma-4", "gemma-2-27b", "gemma-2-9b", "gemma4",
         "phi-3", "phi-4", "command-r-plus", "yi-large",
+        "glm-5", "arcee-trinity",
     ]
     if any(p in name for p in premier_open):
         return "premier_open"
     
     # Tier 2: Closed Giants - proprietary SOTA
-    closed_giants = ["gpt-4", "claude-3", "claude-3.5", "gemini-2", "gemini-1.5", "o1", "o3"]
+    closed_giants = ["gpt-4", "claude-3", "claude-3.5", "claude-opus", "gemini-2", "gemini-1.5", "o1-", "o3-", "grok-4", "grok-3"]
     if any(p in name for p in closed_giants):
         return "closed_giants"
     
     # Tier 3: Reasoning/Specialized
-    reasoning = ["reasoning", "r1", "o1", "o3", "qwq", "marco-o1"]
+    reasoning = ["reasoning", "qwq", "marco-o1"]
     if any(p in name for p in reasoning):
         return "reasoning"
     
-    coding_models = ["coder", "codestral", "codeqwen", "deepseek-coder"]
+    coding_models = ["coder", "codestral", "codeqwen", "deepseek-coder", "kat-coder"]
     if any(p in name for p in coding_models):
         return "coding"
     
-    # Tier 4: Niche/Specialized
-    if model.source == "ollama":
+    # Vision/multimodal
+    vision_models = ["-vision", "-vl", "-vlm", "multimodal"]
+    if any(p in name for p in vision_models):
+        return "multimodal"
+    
+    # Tier 4: Local Ready (Ollama)
+    if source == "ollama":
         return "local_ready"
     
-    # Default: mention only if significant
+    # Default: only if significant
     return "other"
 
 
@@ -863,42 +911,47 @@ def summarize_models(models: List[ModelRelease]) -> str:
     if not models:
         return "No new models today."
     
-    # Build model info for the prompt
+    # Deduplicate by base model name (e.g. deepseek-r1 on both OpenRouter and Ollama)
+    seen_bases = set()
+    deduped = []
+    for m in models:
+        base = m.name.split('/')[-1].lower().replace(':free', '')
+        if base not in seen_bases:
+            seen_bases.add(base)
+            deduped.append(m)
+    models = deduped
+    
+    # Build model info for the prompt (cap at 10 to keep output short)
     model_info = []
-    for m in models[:15]:  # Cap at 15 to keep prompt reasonable
+    for m in models[:10]:
         info = f"Name: {m.name}"
-        if m.provider:
-            info += f"\nProvider: {m.provider}"
         if m.source:
-            info += f"\nSource: {m.source}"
+            info += f" ({m.source})"
         if m.description:
-            info += f"\nDescription: {m.description[:300]}"
+            info += f"\nDesc: {m.description[:200]}"
         if m.context_window:
-            info += f"\nContext: {m.context_window:,} tokens"
+            info += f"\nContext: {m.context_window:,}"
         if m.pricing_input is not None:
             if m.pricing_input == 0:
                 info += "\nPricing: FREE"
             else:
-                info += f"\nPricing: ${m.pricing_input:.2f}/${m.pricing_output:.2f} per 1M tokens"
-        if m.release_date:
-            info += f"\nReleased: {m.release_date}"
+                info += f"\nPricing: ${m.pricing_input:.2f}/${m.pricing_output:.2f} per 1M"
         if m.is_open_source:
-            info += "\nOpen source: Yes"
-        if m.url:
-            info += f"\nURL: {m.url}"
+            info += "\nOpen: yes"
         model_info.append(info)
     
-    prompt = f"""You are ModelBytes, an AI model release tracker. Write a concise, engaging Telegram digest for these new model releases.
+    prompt = f"""You are ModelBytes, an AI model tracker. Write a SHORT Telegram digest for these releases.
 
 Rules:
-- Use HTML formatting (<b>bold</b>, <i>italic</i>)
-- For each model, write 1-2 sentences explaining WHY IT MATTERS to developers/AI practitioners
-- Include key specs (context window, pricing, open/closed) naturally in the text
-- Group into sections: 🔓 Premier Open Weights, 🔒 Closed Giants, 🎯 Specialized, 🏠 Local Ready (Ollama)
-- Skip models that are noise (random fine-tunes, ONNX conversions, LoRA adapters)
-- Keep total message under 3500 chars
-- End with a line: "Total: X models tracked today"
-- Be direct and technical, not hype. If a model is minor, say so briefly.
+- HTML formatting (<b>bold</b>, <i>italic</i>)
+- MAJOR releases: 2 sentences on WHY IT MATTERS
+- MINOR releases: 1 short sentence only
+- SKIP: fine-tunes, ONNX, LoRA, GGUF, embedders, random experiments
+- Group: 🔓 Premier Open, 🔒 Closed Giants, 🎯 Specialized, 🏠 Local Ready
+- MAX 2500 chars total
+- End: "X models tracked today"
+- Deduplicate: same model on multiple platforms = mention once
+- Direct, technical, no hype
 
 Models:
 {chr(10).join(model_info)}"""
@@ -915,7 +968,7 @@ Models:
         payload = {
             "model": LLM_MODEL,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 1500,
+            "max_tokens": 1200,
             "temperature": 0.3,
         }
         

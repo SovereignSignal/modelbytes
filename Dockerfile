@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
 # Cache bust - force rebuild
-ARG CACHE_BUST=20260407_v2
+ARG CACHE_BUST=20260413_v1
 
 WORKDIR /app
 

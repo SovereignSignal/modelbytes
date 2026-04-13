@@ -458,6 +458,41 @@ def is_noise_model(model_id: str, author: str, tags: list) -> bool:
     if any(p in model_lower for p in experiment_patterns):
         return True
     
+    # Skip non-LLM task types from tags
+    non_llm_task_types = [
+        "image-classification", "object-detection", "image-segmentation",
+        "audio-classification", "automatic-speech-recognition", "table-to-text",
+        "fill-mask",  # BERT-style masked language models (not generative)
+        "feature-extraction", "sentence-similarity",  # embedding models
+        "zero-shot-classification", "token-classification",  # NER etc
+        "translation", "summarization",  # too narrow, usually fine-tunes
+    ]
+    if any(task in tags_lower for task in non_llm_task_types):
+        return True
+
+    # Skip models with task-architecture tags that aren't LLMs
+    non_llm_arch_tags = [
+        "resnet", "vit", "efficientnet",  # vision models
+        "bert", "roberta", "distilbert", "albert",  # BERT-family (masked, not generative)
+        "wav2vec", "whisper",  # audio models
+    ]
+    if any(tag in model_lower for tag in non_llm_arch_tags):
+        return True
+    if any(tag in " ".join(tags_lower) for tag in non_llm_arch_tags):
+        return True
+
+    # Skip fine-tune / experiment naming patterns
+    # e.g. robocasa-rldx1-ft-bsz64-60k, b-b4_micn_lr5, axon-email-classifier
+    fine_tune_patterns = [
+        "-ft", "_ft", "-finetuned", "_finetuned",  # fine-tune markers
+        "-classifier", "_classifier",  # narrow classifiers
+        "-email-", "-spam-", "-sentiment-",  # narrow domain fine-tunes
+        "_micn_", "_lr",  # training experiment naming
+        "-bsz", "_bsz",  # batch size experiments
+    ]
+    if any(p in model_lower for p in fine_tune_patterns):
+        return True
+
     # Skip random user fine-tunes (personal username patterns)
     # Keep models from known orgs
     known_orgs = [

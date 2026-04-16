@@ -792,6 +792,7 @@ def categorize_model(model: ModelRelease) -> str:
         "phi-3", "phi-4", "command-r-plus", "yi-large",
         "glm-5", "arcee-trinity", "minimax-m2", "voxcpm",
         "trinity-large", "mimo-v2", "lyria-", "reka-edge",
+        "llama-guard",  # Meta safety classifier
     ]
     if any(p in name for p in premier_open):
         return "premier_open"
@@ -960,6 +961,17 @@ def build_digest_message(models: List[ModelRelease]) -> str:
     # Summary line
     total = sum(len(v) for v in tiers.values())
     lines.append("")
+    
+    # Also tracked — models that didn't fit a tier
+    if tiers["other"]:
+        lines.append("━━━ <b>ALSO TRACKED</b>")
+        lines.append("")
+        for model in tiers["other"][:5]:
+            name = model.name.split('/')[-1]
+            src = model.source
+            lines.append(f"  • {name} ({src})")
+        lines.append("")
+    
     lines.append(f"Total: {total} models tracked today")
     
     return '\n'.join(lines)

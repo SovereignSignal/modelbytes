@@ -438,6 +438,7 @@ def is_noise_model(model_id: str, author: str, tags: list) -> bool:
         "_ftjob_", "-merged",  # Fine-tune jobs and merges
         "-base",  # Base/unaligned versions (usually not useful)
         ".onnx",  # ONNX format
+        "-distilled", "-distill", "_distilled", "_distill",  # Distilled models (random fine-tunes)
     ]
     if any(p in model_lower for p in noise_patterns):
         return True
@@ -1036,6 +1037,8 @@ RULES:
 - ALWAYS include link as <a href="URL">→ Source</a>
 - 2 sentences max per model
 - SKIP entirely: fine-tunes, ONNX, LoRA, GGUF, embedders, experiments
+- SKIP entirely: fine-tunes, ONNX, LoRA, GGUF, embedders, experiments, distilled models, personal merges
+- No corporate filler: no 'explores', 'reveals', 'highlights', 'offering', 'showcases', 'demonstrates', 'delves into', 'worth watching', 'notable', 'gaining traction'
 - HIDE empty sections — if no models in a tier, don't show that header
 - Deduplicate across platforms
 - MAX 2800 chars

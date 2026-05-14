@@ -21,7 +21,7 @@ AI model release monitor for Telegram. Tracks new models from OpenRouter, Ollama
 2. **Add PostgreSQL** (Railway provides `DATABASE_URL`)
 3. **Set environment variables:**
    - `TELEGRAM_BOT_TOKEN` — From @BotFather
-   - `TELEGRAM_CHANNEL_ID` — Your channel ID (e.g., `-100XXXXXXXXXX`)
+   - `TELEGRAM_CHANNEL_ID` — Your channel ID (use @getidsbot to find it)
 4. **Deploy**
 
 ## Local Development

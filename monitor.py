@@ -568,10 +568,13 @@ def build_digest_message(models: List[ModelRelease]) -> str:
             return
         lines.extend(["", f"━━━ <b>{title}</b> {emoji}", ""])
         for m in items:
-            name = m.name.split("/")[-1]
-            lines.append(f"<b>{name}</b>")
+            # Strip :free and :latest suffixes for cleaner display
+            display_name = m.name.split("/")[-1].replace(":free", "").replace(":latest", "").replace("-latest", "")
+            lines.append(f"<b>{display_name}</b>")
             if m.description:
-                lines.append(f"  {_smart_truncate(m.description, 150)}...")
+                # Strip OpenRouter markdown links that don't render in Telegram HTML
+                clean_desc = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', m.description)
+                lines.append(f"  {_smart_truncate(clean_desc, 150)}...")
             specs = []
             if m.release_date and m.release_date != datetime.now().strftime("%Y-%m-%d"):
                 specs.append(f"Released: {m.release_date}")

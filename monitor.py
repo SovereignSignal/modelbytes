@@ -69,6 +69,22 @@ PROVIDER_NAMES = {
     "k2-fsa": "K2-FSA",
     "baidu": "Baidu",
     "qwen-coder": "Alibaba",
+    "sulphurai": "Sulphur AI",
+    "supertone": "Supertone",
+    "hidream-ai": "HiDream AI",
+    "zyphra": "Zyphra",
+    "circlestone-labs": "Circlestone Labs",
+    "moonshotai": "Moonshot AI",
+    "bytedance-seed": "ByteDance",
+    "amazon": "Amazon",
+    "ibm": "IBM",
+    "allenai": "AI2",
+    "tencentarc": "Tencent ARC",
+    "resembleai": "Resemble AI",
+    "adskailab": "Autodesk AI Lab",
+    "perplexity": "Perplexity",
+    "cohere": "Cohere",
+    "ai21": "AI21 Labs",
 }
 
 # Known significant orgs — never noise-filter these
@@ -82,6 +98,10 @@ KNOWN_ORGS = {
     "x-ai", "z-ai", "zai-org", "arcee-ai", "openbmb",
     "minimaxai", "netflix", "k2-fsa", "xiaomi", "rekaai",
     "baai", "huggingface", "baidu", "perplexity", "cohere", "ai21",
+    "sulphurai", "supertone", "hidream-ai", "zyphra",
+    "circlestone-labs", "moonshotai", "bytedance-seed",
+    "amazon", "perplexity-ai", "inclusionai",
+    "tencentarc", "resembleai", "adskailab", "open-thoughts",
 }
 
 
@@ -237,11 +257,11 @@ def is_noise_model(model_id: str, author: str, tags: list,
     if author_prefix in KNOWN_ORGS:
         pass
 
-    # Junk patterns
+    # Junk patterns — note: '-gguf' and '-base' can be false positives for known orgs
     junk = ["tiny-random", "test", "dummy", "example", "demo", "sample",
             "random", "placeholder", "minimal", "toy-",
             "lora-", "-lora", "-loras", "_lora",
-            "-onnx", "_onnx", "-gguf", "_gguf", "-awq", "-gptq",
+            "-onnx", "_onnx", "-awq", "-gptq",
             "-fp16", "-bf16", "-int8", "-int4",
             "_ftjob_", "-merged", ".onnx",
             "-distilled", "-distill", "_distilled", "_distill",
@@ -249,11 +269,28 @@ def is_noise_model(model_id: str, author: str, tags: list,
             "_length", "stella", "text2sql", "_calculator",
             "_seed", "_bs", "_epoch", "_step", "_checkpoint",
             "-finetuned", "-finetune", "_finetuned",
-            "-base", "-classifier", "_classifier",
+            "-classifier", "_classifier",
             "-email-", "-spam-", "-sentiment-",
             "_micn_", "_lr", "-bsz", "_bsz",
             "-local", "-dev", "-dev1", "-dev2", "-exp", "-exp1", "-exp2",
             "-draft", "-wip", "-wip1", "-wip2", "-wip3"]
+    
+    # GGUF: noise for unknown orgs, allow for known orgs (unsloth, bartowski, etc.)
+    if ("-gguf" in model_lower or "_gguf" in model_lower):
+        if author_prefix not in KNOWN_ORGS:
+            return True
+        # Known org GGUF = legitimate distribution, continue checking other junk
+    
+    # '-base' as standalone suffix = classifier noise, but 'X-2-base' = real model
+    if "-base" in model_lower:
+        # Only flag as noise if '-base' is the LAST segment (classifier pattern)
+        import re as _re
+        if _re.search(r'-base$', model_lower) and not _re.search(r'\d-base$', model_lower):
+            # '-base' at end not preceded by digit = classifier noise
+            # BUT known orgs releasing '-base' variants (e.g., DeepSeek-V4-Pro-Base) are fine
+            if author_prefix not in KNOWN_ORGS and "deepseek" not in model_lower:
+                return True
+    
     if any(p in model_lower for p in junk):
         return True
 
@@ -290,9 +327,22 @@ def is_noise_model(model_id: str, author: str, tags: list,
         if re.search(r'\d+$', model_name_lower):
             if not re.search(r'-(?:\d+b|small|medium|large|xl|xxl|mini|nano|micro)', model_name_lower):
                 return True
-        # Require significant engagement
-        if likes < 500 and downloads < 50000:
+        # Require significant engagement — lower threshold for trending orgs
+        # (HF trending already vouches, so just need some signal)
+        if likes < 100 and downloads < 5000:
             return True
+        # Mid-tier: allow if EITHER likes or downloads is decent
+        if likes < 300 and downloads < 20000:
+            # Still allow if the model name matches a known family
+            known_families = ["qwen", "llama", "mistral", "deepseek", "gemma", "phi",
+                              "yi-", "falcon", "glm", "grok", "claude", "gpt",
+                              "command", "nemotron", "olmo", "solar", "granite",
+                              "sulphur", "hidream", "zamba", "minicpm", "devstral",
+                              "voxtral", "leanstral", "arcee"]
+            if any(f in model_lower for f in known_families):
+                pass  # Allow through — model family matches
+            else:
+                return True
 
     return False
 
@@ -304,14 +354,24 @@ def is_significant_release(model_id: str, author: str, tags: list,
     author_lower = (author or "").lower()
 
     significant_families = [
-        "llama-", "llama2-", "llama3", "mistral", "mixtral", "qwen2", "qwen3",
-        "gemma-", "gemma4", "phi-", "phi4", "falcon-", "yi-", "deepseek",
-        "command-r", "codestral", "nvidia/llama", "nemotron", "olmo", "pythia",
-        "glm-", "grok", "claude", "gpt-4", "gpt-4o", "o1-", "o3-",
-        "gemini-", "gemini2", "qwen3.5", "qwen3.6", "arcee",
-        "minimax", "voxcpm", "void-model", "omnivoice",
-        "trinity-large", "mimo-v2", "lyria-", "reka-edge",
+        "llama-", "llama2-", "llama3", "llama4", "llama-4",
+        "mistral", "mixtral", "devstral", "leanstral", "voxtral",
+        "qwen2", "qwen3", "qwen3.5", "qwen3.6",
+        "gemma-", "gemma4", "gemma-4",
+        "phi-", "phi4", "falcon-", "yi-", "deepseek",
+        "command-r", "codestral",
+        "nvidia/llama", "nemotron", "granite",
+        "olmo", "pythia", "glm-", "glm5", "glm-5", "glm-4.7",
+        "grok", "grok-4",
+        "claude", "gpt-4", "gpt-4o", "o1-", "o3-",
+        "gemini-", "gemini2", "gemini3", "gemini-3",
+        "arcee", "minimax", "voxcpm",
+        "deepseek-v3", "deepseek-v4", "deepseek-ocr",
+        "minicpm", "supertonic", "supertone",
+        "sulphur", "hidream", "zamba", "zaya",
+        "anima", "reka-edge", "lyria-",
         "openai/o1", "openai/o3", "anthropic/claude",
+        "wan2", "dramabox", "pixal3d", "agent",
     ]
     if any(f in model_lower for f in significant_families):
         return True
@@ -320,7 +380,8 @@ def is_significant_release(model_id: str, author: str, tags: list,
                         "deepseek-ai", "deepseek", "anthropic", "openai", "x-ai",
                         "z-ai", "zai-org", "arcee-ai", "nvidia", "microsoft",
                         "minimaxai", "openbmb", "netflix", "k2-fsa",
-                        "xiaomi", "rekaai", "baai"]
+                        "xiaomi", "rekaai", "baai", "tencentarc",
+                        "resembleai", "adskailab", "open-thoughts"]
     if author_lower in significant_orgs:
         return True
 
@@ -349,7 +410,9 @@ def fetch_openrouter_models() -> List[ModelRelease]:
 
             is_open = False
             open_kws = ["llama", "mistral", "qwen", "gemma", "mixtral",
-                        "phi", "falcon", "yi", "deepseek", "nemotron", "olm", "c4ai"]
+                        "phi", "falcon", "yi", "deepseek", "nemotron", "olm", "c4ai",
+                        "sulphur", "zamba", "arcee", "minicpm",
+                        "devstral", "leanstral", "voxtral", "granite"]
             closed = ["openai", "anthropic", "google", "cohere", "ai21"]
             prov = (m.get("owned_by") or "").lower()
             if any(kw in model_id.lower() for kw in open_kws):
@@ -422,6 +485,113 @@ def fetch_ollama_models() -> List[ModelRelease]:
     return models
 
 
+# Major AI orgs to monitor directly on HuggingFace
+MAJOR_HF_ORGS = [
+    "deepseek-ai", "meta-llama", "mistralai", "Qwen", "google",
+    "anthropic", "openai", "nvidia", "microsoft", "x-ai",
+    "z-ai", "zai-org", "arcee-ai", "openbmb", "minimaxai",
+    "NousResearch", "tiiuae", "01-ai", "baai", "xiaomi",
+    "moonshotai", "bytedance-seed", "inclusionai", "ibm",
+    "allenai", "amazon", "perplexity-ai", "stabilityai",
+    "HiDream-ai", "SulphurAI", "Zyphra",
+    "circlestone-labs", "nvidia", "Supertone",
+    "TencentARC", "ResembleAI", "ADSKAILab", "open-thoughts",
+]
+
+
+def fetch_org_models(author: str) -> List[ModelRelease]:
+    """Fetch models from a specific HF org, sorted by recent."""
+    models = []
+    try:
+        resp = requests.get(
+            f"https://huggingface.co/api/models?author={author}&sort=lastModified&direction=-1&limit=10",
+            timeout=20)
+        resp.raise_for_status()
+        for m in resp.json():
+            model_id = m.get("id", "")
+            if not model_id:
+                continue
+            tags = m.get("tags", [])
+            pipeline = m.get("pipeline_tag", "")
+            downloads = m.get("downloads", 0) or 0
+            likes = m.get("likes", 0) or 0
+
+            if is_noise_model(model_id, author, tags, downloads, likes):
+                continue
+
+            rd = m.get("createdAt", "")[:10] or datetime.now().strftime("%Y-%m-%d")
+            desc = _smart_truncate(
+                f"{pipeline} model" if pipeline else "ML model", 200)
+
+            models.append(ModelRelease(
+                name=model_id,
+                provider=_resolve_provider(author),
+                source="huggingface-org",
+                url=f"https://huggingface.co/{model_id}",
+                description=desc,
+                release_date=rd,
+                architecture=tags[0] if tags else None,
+                is_open_source=True,
+                unique_traits=["hf_hub"] + tags[:3],
+                downloads=downloads,
+                likes=likes,
+            ))
+    except Exception as e:
+        print(f"HF org {author} error: {e}", file=sys.stderr)
+    return models
+
+
+def fetch_major_orgs() -> List[ModelRelease]:
+    """Poll major AI org HF repos for new releases."""
+    models = []
+    for org in MAJOR_HF_ORGS:
+        org_models = fetch_org_models(org)
+        models.extend(org_models)
+    return models
+
+
+def fetch_hf_text_generation() -> List[ModelRelease]:
+    """Fetch top HF text-generation models by downloads/likes."""
+    models = []
+    try:
+        resp = requests.get(
+            "https://huggingface.co/api/models"
+            "?pipeline_tag=text-generation&sort=downloads&direction=-1&limit=30",
+            timeout=20)
+        resp.raise_for_status()
+        for m in resp.json():
+            model_id = m.get("id", "")
+            author = m.get("author", "")
+            tags = m.get("tags", [])
+            downloads = m.get("downloads", 0) or 0
+            likes = m.get("likes", 0) or 0
+
+            if is_noise_model(model_id, author, tags, downloads, likes):
+                continue
+
+            rd = m.get("createdAt", "")[:10] or datetime.now().strftime("%Y-%m-%d")
+            pipeline = m.get("pipeline_tag", "")
+            desc = _smart_truncate(
+                f"{pipeline} model" if pipeline else "LLM", 200)
+
+            models.append(ModelRelease(
+                name=model_id,
+                provider=_resolve_provider(author),
+                source="huggingface-top",
+                url=f"https://huggingface.co/{model_id}",
+                description=desc,
+                release_date=rd,
+                architecture=tags[0] if tags else None,
+                is_open_source=True,
+                unique_traits=["hf_hub"] + tags[:3],
+                downloads=downloads,
+                likes=likes,
+            ))
+    except Exception as e:
+        print(f"HF top text-gen error: {e}", file=sys.stderr)
+    return models
+
+
 def fetch_huggingface_trending() -> List[ModelRelease]:
     """Fetch from HF trending + recently modified. Apply strict filtering."""
     models = []
@@ -444,8 +614,11 @@ def fetch_huggingface_trending() -> List[ModelRelease]:
 
             if is_noise_model(model_id, author, tags, downloads, likes):
                 continue
+            # Trending page already vouches for relevance — lower the bar
+            # If it survived noise filter, just needs modest engagement
             if not (is_significant_release(model_id, author, tags, downloads)
-                    or downloads >= 50000 or likes >= 500):
+                    or downloads >= 5000 or likes >= 100
+                    or downloads >= 1000 and likes >= 30):
                 continue
 
             rd = m.get("createdAt", "")[:10] or datetime.now().strftime("%Y-%m-%d")
@@ -470,7 +643,7 @@ def fetch_huggingface_trending() -> List[ModelRelease]:
         # Also fetch recently modified for completeness
         resp2 = requests.get(
             "https://huggingface.co/api/models",
-            params={"sort": "lastModified", "direction": -1, "limit": 30},
+            params={"sort": "lastModified", "direction": -1, "limit": 50},
             timeout=30)
         resp2.raise_for_status()
         for m in resp2.json():
@@ -484,8 +657,11 @@ def fetch_huggingface_trending() -> List[ModelRelease]:
 
             if is_noise_model(model_id, author, tags, downloads, likes):
                 continue
+            # Trending/recent models: lower bar than general discovery.
+            # If it survived noise filter, just needs modest engagement or significance.
             if not (is_significant_release(model_id, author, tags, downloads)
-                    or downloads >= 50000 or likes >= 500):
+                    or downloads >= 5000 or likes >= 100
+                    or downloads >= 1000 and likes >= 30):
                 continue
 
             rd = m.get("createdAt", "")[:10] or datetime.now().strftime("%Y-%m-%d")
@@ -517,11 +693,16 @@ def categorize_model(model: ModelRelease) -> str:
     traits = [t.lower() for t in (model.unique_traits or [])]
 
     premier = ["llama-3.3", "llama-3.2", "mistral-large", "mixtral",
-               "qwen2.5-72b", "qwen3", "deepseek-v3", "deepseek-v4",
-               "gemma-2-27b", "gemma-4", "command-r-plus", "nemotron"]
-    closed = ["gpt-4", "claude-3", "o1-", "o3-", "gemini-1.5", "gemini-2"]
+               "qwen2.5-72b", "qwen3", "qwen3.6", "deepseek-v3", "deepseek-v4",
+               "gemma-2-27b", "gemma-4", "gemma-3", "command-r-plus", "nemotron",
+               "sulphur", "minicpm", "zaya", "glm-5", "glm-4.7",
+               "minimax", "grok"]
+    closed = ["gpt-4", "claude-3", "claude-4", "claude-opus-4", "o1-", "o3-", "gemini-1.5", "gemini-2", "gemini-3", "grok-4",
+              "kimi"]
     reasoning = ["reasoning", "r1", "o1", "o3"]
-    coding = ["codestral", "coder", "code-", "claude-3.5"]
+    coding = ["codestral", "coder", "code-", "claude-3.5", "devstral"]
+    image_gen = ["dall-e", "flux", "stable-diffusion", "midjourney", "wan2", "pixal"]
+    audio = ["lyria", "supertone", "supertonic", "dramabox"]
 
     if any(p in name for p in premier) or provider in ["meta", "mistral ai", "alibaba"]:
         if "closed" not in traits and model.is_open_source is not False:
@@ -532,8 +713,24 @@ def categorize_model(model: ModelRelease) -> str:
         return "reasoning"
     if any(c in name for c in coding):
         return "coding"
+    if any(i in name for i in image_gen):
+        return "image_gen"
+    if any(a in name for a in audio):
+        return "audio"
+    # Known significant orgs always get meaningful categorization
+    sig_org_map = {"tencentarc": "image_gen", "resembleai": "audio", "adskailab": "other",
+                   "open-thoughts": "reasoning", "deepseek-ai": "premier_open"}
+    if provider in sig_org_map:
+        cat = sig_org_map[provider]
+        return cat
+    # Reasoning/training data orgs
+    if provider == "open-thoughts":
+        return "reasoning"
     if model.source == "ollama":
         return "local_ready"
+    # Give high-engagement unknown orgs a shot at being shown
+    if getattr(model, "likes", 0) >= 500 or getattr(model, "downloads", 0) >= 50000:
+        return "other"
     return "other"
 
 
@@ -553,7 +750,7 @@ def build_digest_message(models: List[ModelRelease]) -> str:
     models = deduped[:20]
 
     tiers = {"premier_open": [], "closed_giants": [], "reasoning": [],
-             "coding": [], "local_ready": [], "other": []}
+             "coding": [], "image_gen": [], "audio": [], "local_ready": [], "other": []}
     for m in models:
         tiers[categorize_model(m)].append(m)
 
@@ -593,6 +790,7 @@ def build_digest_message(models: List[ModelRelease]) -> str:
     _section("PREMIER OPEN WEIGHTS", "🔓", tiers["premier_open"])
     _section("CLOSED GIANTS", "🔒", tiers["closed_giants"])
     _section("SPECIALIZED", "🎯", tiers["reasoning"] + tiers["coding"])
+    _section("MULTIMODAL", "🎨", tiers["image_gen"] + tiers["audio"])
     _section("LOCAL READY", "🏠", tiers["local_ready"])
 
     if tiers["other"]:
@@ -738,8 +936,9 @@ def main():
     all_new = []
     for source_name, fetcher in [
         ("OpenRouter", fetch_openrouter_models),
-        # ("Ollama", fetch_ollama_models),  # Ollama is a packaging registry, not a release source
-        ("HuggingFace", fetch_huggingface_trending),
+        ("HuggingFace-Trending", fetch_huggingface_trending),
+        ("HuggingFace-Orgs", fetch_major_orgs),
+        ("HuggingFace-Top-TextGen", fetch_hf_text_generation),
     ]:
         print(f"Fetching {source_name}...")
         for model in fetcher():

@@ -1,0 +1,8 @@
+This directory was restored from GitHub (git@github.com:ClawBack1/modelbytes.git)
+on 2026-05-16 after the Obsidian vault was wiped during backup infrastructure migration.
+
+If this directory disappears again, restore with:
+  git clone git@github.com:ClawBack1/modelbytes.git /home/ubuntu-openclaw/vaults/sovereign-signal/repos/modelbytes
+
+The state file (state/model_releases_state.json) tracks ~738 seen models.
+Do NOT delete it — it prevents duplicate posts.

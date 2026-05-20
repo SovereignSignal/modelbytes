@@ -936,6 +936,7 @@ def main():
     all_new = []
     for source_name, fetcher in [
         ("OpenRouter", fetch_openrouter_models),
+        ("Ollama", fetch_ollama_models),
         ("HuggingFace-Trending", fetch_huggingface_trending),
         ("HuggingFace-Orgs", fetch_major_orgs),
         ("HuggingFace-Top-TextGen", fetch_hf_text_generation),

@@ -43,6 +43,13 @@ cp .env.example .env
 python3 monitor.py --post
 ```
 
+## Running Tests
+
+```bash
+venv/bin/pip install -r requirements-dev.txt
+venv/bin/python -m pytest tests/ -v
+```
+
 ## Environment Variables
 
 | Variable | Description | Required |

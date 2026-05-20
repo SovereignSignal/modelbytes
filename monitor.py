@@ -4,31 +4,20 @@
 Posts new model releases to Telegram @modelbytes channel with tiered, LLM-summarized digest.
 """
 
-import json
 import os
 import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import List, Optional, Set
 
+import psycopg2
 import requests
 
-# PostgreSQL support (optional - falls back to JSON if not available)
-try:
-    import psycopg2
-    POSTGRES_AVAILABLE = True
-except ImportError:
-    POSTGRES_AVAILABLE = False
-
-# Config
-SCRIPT_DIR = Path(__file__).parent.resolve()
-STATE_FILE = SCRIPT_DIR / "state" / "model_releases_state.json"
-
-# Database
+# Database — Postgres is the only state backend.
+# When DATABASE_URL is unset (local dev, --preview mode), state functions
+# degrade gracefully: load returns empty set, save is a no-op.
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
-USE_POSTGRES = POSTGRES_AVAILABLE and DATABASE_URL
 
 # Telegram
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -131,78 +120,65 @@ class ModelRelease:
 
 
 def init_database():
-    if not USE_POSTGRES:
+    """Create the models table if it doesn't exist. No-op without DATABASE_URL."""
+    if not DATABASE_URL:
         return
+    conn = psycopg2.connect(DATABASE_URL)
     try:
-        conn = psycopg2.connect(DATABASE_URL)
-        cur = conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS models (
-                id SERIAL PRIMARY KEY,
-                model_id VARCHAR(255) UNIQUE NOT NULL,
-                name VARCHAR(500),
-                provider VARCHAR(255),
-                source VARCHAR(50),
-                url TEXT,
-                description TEXT,
-                context_window INTEGER,
-                pricing_input NUMERIC(10,6),
-                pricing_output NUMERIC(10,6),
-                architecture VARCHAR(100),
-                release_date DATE,
-                is_open_source BOOLEAN,
-                unique_traits TEXT[],
-                discovered_at TIMESTAMP DEFAULT NOW(),
-                last_updated TIMESTAMP DEFAULT NOW()
-            )
-        """)
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS models (
+                    id SERIAL PRIMARY KEY,
+                    model_id VARCHAR(255) UNIQUE NOT NULL,
+                    name VARCHAR(500),
+                    provider VARCHAR(255),
+                    source VARCHAR(50),
+                    url TEXT,
+                    description TEXT,
+                    context_window INTEGER,
+                    pricing_input NUMERIC(10,6),
+                    pricing_output NUMERIC(10,6),
+                    architecture VARCHAR(100),
+                    release_date DATE,
+                    is_open_source BOOLEAN,
+                    unique_traits TEXT[],
+                    discovered_at TIMESTAMP DEFAULT NOW(),
+                    last_updated TIMESTAMP DEFAULT NOW()
+                )
+            """)
         conn.commit()
-        cur.close()
+    finally:
         conn.close()
-    except Exception as e:
-        print(f"DB init error: {e}", file=sys.stderr)
 
 
 def load_seen_models() -> Set[str]:
-    if USE_POSTGRES:
-        try:
-            conn = psycopg2.connect(DATABASE_URL)
-            cur = conn.cursor()
+    """Load the set of seen model IDs from Postgres. Empty set without DATABASE_URL."""
+    if not DATABASE_URL:
+        return set()
+    conn = psycopg2.connect(DATABASE_URL)
+    try:
+        with conn.cursor() as cur:
             cur.execute("SELECT model_id FROM models")
-            seen = {row[0] for row in cur.fetchall()}
-            cur.close()
-            conn.close()
-            return seen
-        except Exception as e:
-            print(f"Postgres error, falling back: {e}", file=sys.stderr)
-    if STATE_FILE.exists():
-        try:
-            data = json.loads(STATE_FILE.read_text())
-            return set(data.get("seen_models", []))
-        except Exception:
-            pass
-    return set()
+            return {row[0] for row in cur.fetchall()}
+    finally:
+        conn.close()
 
 
 def save_seen_models(models: Set[str]):
-    if USE_POSTGRES:
-        try:
-            conn = psycopg2.connect(DATABASE_URL)
-            cur = conn.cursor()
-            cur.execute("DELETE FROM models")
-            for m in models:
-                cur.execute(
-                    "INSERT INTO models (model_id, name) VALUES (%s, %s) ON CONFLICT (model_id) DO NOTHING",
-                    (m, m))
-            conn.commit()
-            cur.close()
-            conn.close()
-            return
-        except Exception as e:
-            print(f"Postgres save error: {e}", file=sys.stderr)
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    data = {"seen_models": sorted(list(models))[-5000:], "last_run": datetime.now().strftime("%Y-%m-%d")}
-    STATE_FILE.write_text(json.dumps(data, indent=2))
+    """Persist the set of seen model IDs to Postgres. No-op without DATABASE_URL."""
+    if not DATABASE_URL or not models:
+        return
+    conn = psycopg2.connect(DATABASE_URL)
+    try:
+        with conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO models (model_id, name) VALUES (%s, %s) "
+                "ON CONFLICT (model_id) DO NOTHING",
+                [(m, m) for m in models],
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _resolve_provider(raw: str, model_id: str = "") -> str:

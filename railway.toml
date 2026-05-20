@@ -3,13 +3,9 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "python monitor.py --post"
+startCommand = "python monitor.py"
+cronSchedule = "0 16 * * *"
 restartPolicyType = "ON_FAILURE"
-
-[[cron]]
-name = "daily-check"
-schedule = "0 16 * * *"  # 9 AM PT = 16:00 UTC
-command = "python monitor.py --post"
 
 [env]
 TELEGRAM_BOT_TOKEN = { required = true }

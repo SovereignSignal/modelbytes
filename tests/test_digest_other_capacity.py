@@ -27,3 +27,6 @@ def test_other_section_shows_at_least_eight():
         f"ALSO TRACKED section dropped {12 - rendered} of 12 models — "
         f"only {rendered} rendered."
     )
+    assert "…and 2 more" in message, (
+        "Overflow line '…and N more' missing — the new cap-overflow message did not render."
+    )

@@ -787,8 +787,10 @@ def build_digest_message(models: List[ModelRelease]) -> str:
 
     if tiers["other"]:
         lines.extend(["", "━━━ <b>ALSO TRACKED</b>", ""])
-        for m in tiers["other"][:5]:
+        for m in tiers["other"][:10]:
             lines.append(f"  • {m.name.split('/')[-1]} ({m.source})")
+        if len(tiers["other"]) > 10:
+            lines.append(f"  …and {len(tiers['other']) - 10} more")
         lines.append("")
 
     total = len(models)

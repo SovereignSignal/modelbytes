@@ -9,7 +9,7 @@ AI model release monitor for Telegram. Tracks new models from OpenRouter, Ollama
 - ✨ Unique trait tagging (long_context, reasoning, multimodal, MoE)
 - 📊 Benchmark scores when available
 - 💸 Pricing info for API models
-- 🗄️ PostgreSQL for state persistence
+- 🗄️ PostgreSQL state persistence (required — set DATABASE_URL)
 
 ## Deploy to Railway
 
@@ -56,7 +56,7 @@ venv/bin/python -m pytest tests/ -v
 |----------|-------------|----------|
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather | ✅ |
 | `TELEGRAM_CHANNEL_ID` | Telegram channel ID | ✅ |
-| `DATABASE_URL` | PostgreSQL connection string | ✅ (Railway auto-sets) |
+| `DATABASE_URL` | PostgreSQL connection string (Railway auto-sets; required for posting — `--preview` mode runs without it) | ✅ |
 
 ## Sources
 

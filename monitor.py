@@ -9,7 +9,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Set
 
@@ -280,8 +280,7 @@ def is_noise_model(model_id: str, author: str, tags: list,
     # '-base' as standalone suffix = classifier noise, but 'X-2-base' = real model
     if "-base" in model_lower:
         # Only flag as noise if '-base' is the LAST segment (classifier pattern)
-        import re as _re
-        if _re.search(r'-base$', model_lower) and not _re.search(r'\d-base$', model_lower):
+        if re.search(r'-base$', model_lower) and not re.search(r'\d-base$', model_lower):
             # '-base' at end not preceded by digit = classifier noise
             # BUT known orgs releasing '-base' variants (e.g., DeepSeek-V4-Pro-Base) are fine
             if author_prefix not in KNOWN_ORGS and "deepseek" not in model_lower:
@@ -432,7 +431,6 @@ def fetch_openrouter_models() -> List[ModelRelease]:
 
             created = m.get('created', 0)
             if created:
-                from datetime import timezone
                 rd = datetime.fromtimestamp(created, tz=timezone.utc).strftime("%Y-%m-%d")
             else:
                 rd = datetime.now().strftime("%Y-%m-%d")

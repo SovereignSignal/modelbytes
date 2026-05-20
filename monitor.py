@@ -253,10 +253,6 @@ def is_noise_model(model_id: str, author: str, tags: list,
     model_name_lower = model_name.lower()
     author_prefix = author_lower.split("/")[0] if "/" in author_lower else author_lower
 
-    # Known orgs pass through (but still filtered by other rules below if egregious)
-    if author_prefix in KNOWN_ORGS:
-        pass
-
     # Junk patterns — note: '-gguf' and '-base' can be false positives for known orgs
     junk = ["tiny-random", "test", "dummy", "example", "demo", "sample",
             "random", "placeholder", "minimal", "toy-",
@@ -339,9 +335,7 @@ def is_noise_model(model_id: str, author: str, tags: list,
                               "command", "nemotron", "olmo", "solar", "granite",
                               "sulphur", "hidream", "zamba", "minicpm", "devstral",
                               "voxtral", "leanstral", "arcee"]
-            if any(f in model_lower for f in known_families):
-                pass  # Allow through — model family matches
-            else:
+            if not any(f in model_lower for f in known_families):
                 return True
 
     return False

@@ -944,18 +944,23 @@ def main():
         for model in fetcher():
             if model.name not in seen_models:
                 all_new.append(model)
-                seen_models.add(model.name)
+                # Don't add to seen_models yet — noise models should be
+                # re-evaluated next run with updated engagement data.
+                # Only posted/significant models get added later.
 
     print(f"Found {len(all_new)} new model(s)")
 
     if is_first_run:
         print("First run — seeding, no digest sent")
+        # Seed all current models so they won't be reported as "new" next time
+        for m in all_new:
+            seen_models.add(m.name)
         save_seen_models(seen_models)
         return 0
 
+    significant = []
     if all_new:
         # Apply noise filter with engagement data
-        significant = []
         for m in all_new:
             base = m.name.split("/")[-1]
             author = m.name.split("/")[0] if "/" in m.name else ""
@@ -973,6 +978,16 @@ def main():
         digest_models = significant[:15] if significant else all_new[:10]
         print(f"Filtered to {len(digest_models)} significant model(s)")
 
+        # Mark posted models as seen so they don't re-appear
+        for m in digest_models:
+            seen_models.add(m.name)
+
+        # When a large batch is found, also mark noise models as seen
+        # to avoid re-scanning hundreds of unknown org repos every run
+        if len(all_new) > 10:
+            for m in all_new:
+                seen_models.add(m.name)
+
         message = summarize_models(digest_models)
 
         if preview_mode:
@@ -985,8 +1000,15 @@ def main():
         if not send_telegram_post(message):
             return 1
         print("Digest sent")
+
     else:
         print("No new models")
+
+    # Small batches with no significant models: mark all as seen so
+    # we don't keep re-discovering the same noise every run
+    if all_new and not significant:
+        for m in all_new:
+            seen_models.add(m.name)
 
     save_seen_models(seen_models)
     return 0

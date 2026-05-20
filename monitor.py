@@ -920,11 +920,8 @@ def send_telegram_post(message: str) -> bool:
 
 def main():
     preview_mode = "--preview" in sys.argv
-    send_mode = "--send" in sys.argv
     if preview_mode:
         sys.argv.remove("--preview")
-    if send_mode:
-        sys.argv.remove("--send")
 
     init_database()
     seen_models = load_seen_models()

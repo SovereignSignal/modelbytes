@@ -494,7 +494,7 @@ MAJOR_HF_ORGS = [
     "moonshotai", "bytedance-seed", "inclusionai", "ibm",
     "allenai", "amazon", "perplexity-ai", "stabilityai",
     "HiDream-ai", "SulphurAI", "Zyphra",
-    "circlestone-labs", "nvidia", "Supertone",
+    "circlestone-labs", "Supertone",
     "TencentARC", "ResembleAI", "ADSKAILab", "open-thoughts",
 ]
 

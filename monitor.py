@@ -9,6 +9,7 @@ import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import List, Optional, Set
 
 import psycopg2
@@ -888,10 +889,44 @@ def send_telegram_post(message: str) -> bool:
         return False
 
 
+def try_post_pending_curated() -> bool:
+    """Fast-path: post a pre-curated digest written by the curator routine.
+
+    The modelbytes-curator-routine writes pending/<TODAY>.txt to master
+    ~30 minutes before this cron fires. If we find that file, post it
+    verbatim and return True. Otherwise return False so main() falls
+    through to the existing deterministic pipeline.
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    pending_path = Path("pending") / f"{today}.txt"
+
+    if not pending_path.exists():
+        return False
+
+    body = pending_path.read_text().strip()
+    if not body:
+        print(f"Pending file {pending_path} is empty — falling back to pipeline.")
+        return False
+
+    print(f"Pending curated digest found at {pending_path} ({len(body)} chars). Posting.")
+    if not send_telegram_post(body):
+        print("Telegram send of curated digest failed — falling back to pipeline.",
+              file=sys.stderr)
+        return False
+
+    print(f"Posted curated digest for {today}.")
+    return True
+
+
 def main():
     preview_mode = "--preview" in sys.argv
     if preview_mode:
         sys.argv.remove("--preview")
+
+    # Fast-path: post a pre-curated digest from the curator routine if one exists.
+    # Falls through to the deterministic pipeline if no pending file or send fails.
+    if not preview_mode and try_post_pending_curated():
+        return 0
 
     init_database()
     seen_models = load_seen_models()

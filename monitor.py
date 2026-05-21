@@ -671,7 +671,7 @@ def categorize_model(model: ModelRelease) -> str:
                "qwen2.5-72b", "qwen3", "qwen3.6", "deepseek-v3", "deepseek-v4",
                "gemma-2-27b", "gemma-4", "gemma-3", "command-r-plus", "nemotron",
                "sulphur", "minicpm", "zaya", "glm-5", "glm-4.7",
-               "minimax", "grok"]
+               "minimax", "grok-2", "grok-3"]
     closed = ["gpt-4", "claude-3", "claude-4", "claude-opus-4", "o1-", "o3-", "gemini-1.5", "gemini-2", "gemini-3", "grok-4",
               "kimi"]
     reasoning = ["reasoning", "r1", "o1", "o3"]
@@ -698,9 +698,6 @@ def categorize_model(model: ModelRelease) -> str:
     if provider in sig_org_map:
         cat = sig_org_map[provider]
         return cat
-    # Reasoning/training data orgs
-    if provider == "open-thoughts":
-        return "reasoning"
     if model.source == "ollama":
         return "local_ready"
     # Give high-engagement unknown orgs a shot at being shown

@@ -62,6 +62,8 @@ The curator routine and the Railway publisher don't talk directly. They communic
 
 **Why this pattern**: claude.ai routines fire on cron, not on-demand. Inline Anthropic API calls from Railway would cost money. File handoff via the repo gets us "Claude-curated content in production" using only the Claude.ai subscription quota — at the cost of a 30-minute time gap (curator runs at 15:30, post is at 16:00).
 
+**What the fallback looks like**: when no `pending/<TODAY>.txt` exists, `monitor.py` runs its full pipeline. The pipeline's final step is `summarize_models()`, which calls an OpenAI-compatible API to write the digest body. The API endpoint and key are configured by `MODELBYTES_LLM_KEY` / `MODELBYTES_LLM_MODEL` / `MODELBYTES_LLM_URL` env vars (see README). If `MODELBYTES_LLM_KEY` (and its `OPENAI_API_KEY` / `OPENROUTER_API_KEY` fallbacks) are unset — which is the case on Railway today — `summarize_models()` returns early and the deterministic template-only `build_digest_message()` runs instead. Same output format as a curated digest (tier headers, model entries, link, footer), without the editorial blurbs. The channel stays alive; the post is just less interesting that day.
+
 ## The supervisor bootstrap gate
 
 Auto-commit authority is opt-in via a marker file at the repo root:

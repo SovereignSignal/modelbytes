@@ -26,7 +26,7 @@ See [`docs/architecture.md`](./docs/architecture.md) for the full design. See [`
 
 ## Deploy to Railway
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/YOUR_TEMPLATE_ID)
+(No public template — set up manually via the steps below.)
 
 ### Manual Setup
 
@@ -70,6 +70,11 @@ venv/bin/python -m pytest tests/ -v
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather | ✅ |
 | `TELEGRAM_CHANNEL_ID` | Telegram channel ID | ✅ |
 | `DATABASE_URL` | PostgreSQL connection string (Railway auto-sets; required for posting — `--preview` mode runs without it) | ✅ |
+| `MODELBYTES_LLM_KEY` | API key for the deterministic-fallback LLM summarization step (OpenAI-compatible). Falls back to `OPENAI_API_KEY` then `OPENROUTER_API_KEY` if unset. Without any of these, the fallback path produces a template-only digest (no LLM editorial). | ❌ |
+| `MODELBYTES_LLM_MODEL` | Model name for fallback summarization. Default: `gpt-4o-mini`. | ❌ |
+| `MODELBYTES_LLM_URL` | API base URL. Default: `https://api.openai.com/v1`. Set to OpenRouter or another OpenAI-compatible endpoint to switch providers. | ❌ |
+
+The fallback LLM path only runs when the daily curator routine hasn't produced today's `pending/<TODAY>.txt` (rare). The primary editorial layer is Claude via the [curator routine](./docs/architecture.md), which doesn't use these env vars.
 
 ## Sources
 

@@ -1,6 +1,18 @@
 # ModelBytes
 
-AI model release monitor for Telegram. Tracks new models from OpenRouter, Ollama, and Hugging Face, then posts daily digests to @ModelBytes channel.
+AI model release monitor for Telegram. Tracks new models from OpenRouter, Ollama, and Hugging Face, then posts daily curated digests to the [@ModelBytes](https://t.me/ModelBytes) channel at 16:00 UTC.
+
+## Architecture (v2)
+
+A small Python service on Railway plus a set of scheduled Claude routines (running on Claude.ai subscription, no API costs) that handle editorial taste, organic growth, and observability:
+
+- **`monitor.py`** — the deterministic core. Fetches, filters, categorizes, posts. Always runs as the safety net.
+- **`modelbytes-curator-routine`** (15:30 UTC daily) — generates the editorial digest with taste, writes `pending/<TODAY>.txt` to master; Railway reads + posts it at 16:00 UTC.
+- **`modelbytes-supervisor-routine`** (14:00 UTC daily) — audits the system + grows it organically. Auto-commits list additions when bootstrapped; opens PRs for logic changes; opens issues for ambiguous calls.
+- **`modelbytes-daily-health`** (17:00 UTC daily) — verifies the post landed.
+- **`modelbytes-pr-curator`** (hourly) — reviews open PRs.
+
+See [`docs/architecture.md`](./docs/architecture.md) for the full design. See [`docs/operations.md`](./docs/operations.md) for runbooks (rotating the bot token, pausing supervisor autonomy, manually triggering a post, etc.).
 
 ## Features
 
@@ -10,6 +22,7 @@ AI model release monitor for Telegram. Tracks new models from OpenRouter, Ollama
 - 📊 Benchmark scores when available
 - 💸 Pricing info for API models
 - 🗄️ PostgreSQL state persistence (required — set DATABASE_URL)
+- 🤖 Claude-curated editorial digests with daily organic growth via the supervisor routine
 
 ## Deploy to Railway
 
@@ -28,7 +41,7 @@ AI model release monitor for Telegram. Tracks new models from OpenRouter, Ollama
 
 ```bash
 # Clone
-git clone https://github.com/ClawBack1/modelbytes.git
+git clone https://github.com/SovereignSignal/modelbytes.git
 cd modelbytes
 
 # Setup

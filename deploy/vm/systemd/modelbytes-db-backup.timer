@@ -1,0 +1,12 @@
+[Unit]
+Description=Run ModelBytes Postgres backup daily
+
+[Timer]
+OnCalendar=*-*-* 17:30:00
+Timezone=UTC
+Persistent=true
+RandomizedDelaySec=5m
+Unit=modelbytes-db-backup.service
+
+[Install]
+WantedBy=timers.target

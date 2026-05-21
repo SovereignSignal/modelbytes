@@ -1,0 +1,32 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Thursday, May 21, 2026</i>
+
+<i>Cohere dropped a fully Apache 2.0–licensed 218B enterprise model yesterday; the rest of the week filled in with efficient multimodal architectures and a non-transformer reasoning experiment that runs for under $1K to train.</i>
+
+━━━ <b>PREMIER OPEN</b> 🔓
+
+<b>Cohere Command A+</b> — Released May 20. Cohere's first fully Apache 2.0–licensed model: 218B MoE, 128K context, native multimodal (text + images), 48 languages, lossless W4A4 quantization that fits two H100s. First Cohere model where "open" means commercially usable without negotiation. <a href="https://cohere.com/blog/command-a-plus">→ Source</a>
+
+<b>Ring-2.6-1T</b> — Released May 14. Ant Group's trillion-parameter MoE reasoning model (63B active, 128K native / 256K via YaRN) under MIT. Vendor benchmarks put it level with DeepSeek-V4-Pro Max on AIME 2026 and ARC-AGI-2; independent confirmation still pending. Most permissive open-weight release at this parameter scale to date. <a href="https://huggingface.co/inclusionAI/Ring-2.6-1T">→ Source</a>
+
+━━━ <b>MULTIMODAL</b> 🎨
+
+<b>ByteDance Lance</b> — Released May 15. 3B-active any-to-any model handling image/video understanding, generation, and editing in one framework via dual-stream MoE on interleaved sequences. Trained on 128 A100s from scratch. Scores 0.90 on GenEval and 85.11 VBench Total — highest among unified models, beating 7B-class baselines. Apache 2.0. <a href="https://huggingface.co/bytedance-research/Lance">→ Source</a>
+
+<b>HiDream O1 Image</b> — Released May 8. HiDream-ai's 8.8B image generation model on a Qwen3-VL backbone with chain-of-thought reasoning integrated into the generation pipeline. MIT licensed, 21K downloads. <a href="https://huggingface.co/HiDream-ai/HiDream-O1-Image">→ Source</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+
+<b>HRM-Text 1B</b> — Released May 17. Sapient Intelligence's Hierarchical Reasoning Model replaces transformer attention with dual-stack nested recurrence in latent space (2 H-updates + 6 L-updates per forward pass). Trained on ~40B tokens at ~$1K total compute. Hits 56.2% MATH and 81.9% ARC-Challenge at 1B scale. Apache 2.0. <a href="https://huggingface.co/sapientinc/HRM-Text-1B">→ Source</a>
+
+<b>Supertonic 3</b> — Released May 6. Supertone's on-device TTS grows from 5 to 31 languages at 99M parameters via ONNX (404 MB on disk). Adds expression tags (&lt;laugh&gt;, &lt;breath&gt;, &lt;sigh&gt;) and benchmarks faster on CPU than larger GPU-hosted baselines. OpenRail license. <a href="https://huggingface.co/Supertone/supertonic-3">→ Source</a>
+
+<b>Marlin 2B</b> — Released May 13. NemoStation's 2.2B video-text-to-text model fine-tuned from Qwen3.5-2B for temporal grounding and dense video captioning. Useful entry point for video understanding without scaling to 7B+ VLMs. Apache 2.0. <a href="https://huggingface.co/NemoStation/Marlin-2B">→ Source</a>
+
+━━━ <b>LOCAL READY</b> 🏠
+
+• <b>Qwen3.6-27B / 35B-A3B GGUF</b> (unsloth) — imatrix quants for both MTP variants, 900K+ combined downloads this week. <a href="https://huggingface.co/unsloth/Qwen3.6-27B-MTP-GGUF">→ HF</a>
+• <b>MiniCPM-V-4.6</b> (openbmb) — 1.3B on-device vision-language model, 196K downloads, Apache 2.0. <a href="https://huggingface.co/openbmb/MiniCPM-V-4.6">→ HF</a>
+• <b>HRM-Text-1B</b> (sapientinc) — 0.6 GiB at int4, runs locally. <a href="https://huggingface.co/sapientinc/HRM-Text-1B">→ HF</a>
+
+Total: 9 models tracked today

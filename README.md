@@ -4,7 +4,7 @@ AI model release monitor for Telegram. Tracks new models from OpenRouter, Ollama
 
 ## Architecture (v2)
 
-A small Python service on Railway plus a set of scheduled Claude routines (running on Claude.ai subscription, no API costs) that handle editorial taste, organic growth, and observability:
+A small Python service on Railway plus a set of scheduled Claude routines (running on Claude.ai subscription, no API costs) that handle editorial taste, organic growth, and health checks:
 
 - **`monitor.py`** — the deterministic core. Fetches, filters, categorizes, posts. Always runs as the safety net.
 - **`modelbytes-curator-routine`** (15:30 UTC daily) — generates the editorial digest with taste, writes `pending/<TODAY>.txt` to master; Railway reads + posts it at 16:00 UTC.
@@ -12,7 +12,7 @@ A small Python service on Railway plus a set of scheduled Claude routines (runni
 - **`modelbytes-daily-health`** (17:00 UTC daily) — verifies the post landed.
 - **`modelbytes-pr-curator`** (hourly) — reviews open PRs.
 
-See [`docs/architecture.md`](./docs/architecture.md) for the full design. See [`docs/operations.md`](./docs/operations.md) for runbooks (rotating the bot token, pausing supervisor autonomy, manually triggering a post, etc.). See [`docs/vm-deployment.md`](./docs/vm-deployment.md) for the self-managed VM deployment path.
+See [`docs/architecture.md`](./docs/architecture.md) for the full design. See [`docs/operations.md`](./docs/operations.md) for runbooks (rotating the bot token, pausing supervisor autonomy, manually triggering a post, etc.). See [`docs/vm-deployment.md`](./docs/vm-deployment.md) for the self-managed VM deployment path, and [`docs/structured-data.md`](./docs/structured-data.md) for the Postgres-first data roadmap.
 
 ## Features
 

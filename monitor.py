@@ -4,9 +4,11 @@
 Posts new model releases to Telegram @modelbytes channel with tiered, LLM-summarized digest.
 """
 
+import hashlib
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +21,14 @@ import requests
 # When DATABASE_URL is unset (local dev, --preview mode), state functions
 # degrade gracefully: load returns empty set, save is a no-op.
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+
+HTTP_RETRIES = int(os.environ.get("MODELBYTES_HTTP_RETRIES", "3"))
+HTTP_BACKOFF_SECONDS = float(os.environ.get("MODELBYTES_HTTP_BACKOFF_SECONDS", "1.0"))
+HTTP_USER_AGENT = os.environ.get(
+    "MODELBYTES_USER_AGENT",
+    "ModelBytes/1.0 (+https://github.com/SovereignSignal/modelbytes)",
+)
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 # Telegram
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -162,9 +172,87 @@ def init_database():
                     last_updated TIMESTAMP DEFAULT NOW()
                 )
             """)
+            _ensure_posted_digests_table(cur)
         conn.commit()
     finally:
         conn.close()
+
+
+def _ensure_posted_digests_table(cur):
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS posted_digests (
+            post_date DATE PRIMARY KEY,
+            source VARCHAR(50) NOT NULL,
+            digest_path TEXT,
+            message_hash VARCHAR(64),
+            posted_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+
+
+def init_posted_digest_store() -> bool:
+    """Create the post-idempotency table. Failure should not block posting."""
+    if not DATABASE_URL:
+        return False
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        try:
+            with conn.cursor() as cur:
+                _ensure_posted_digests_table(cur)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"Post idempotency store unavailable: {e}", file=sys.stderr)
+        return False
+
+
+def has_posted_digest(date_str: str) -> bool:
+    """Return True if a digest for this UTC date is already recorded as posted."""
+    if not DATABASE_URL:
+        return False
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM posted_digests WHERE post_date = %s LIMIT 1",
+                    (date_str,),
+                )
+                return cur.fetchone() is not None
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"Could not check posted digest ledger: {e}", file=sys.stderr)
+        return False
+
+
+def mark_posted_digest(date_str: str, source: str, digest_path: str, message: str) -> bool:
+    """Record a successful post for this UTC date. Returns False on best-effort failure."""
+    if not DATABASE_URL:
+        return False
+    message_hash = hashlib.sha256(message.encode("utf-8")).hexdigest() if message else None
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO posted_digests
+                        (post_date, source, digest_path, message_hash)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (post_date) DO NOTHING
+                    """,
+                    (date_str, source, digest_path, message_hash),
+                )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"Could not mark digest posted for {date_str}: {e}", file=sys.stderr)
+        return False
 
 
 def load_seen_models() -> Set[str]:
@@ -223,6 +311,55 @@ def _smart_truncate(text: str, max_len: int = 150) -> str:
     if idx > max_len * 0.3:
         return truncated[:idx].strip()
     return truncated.strip()
+
+
+def _retry_delay(response, attempt: int) -> float:
+    retry_after = None
+    if response is not None:
+        retry_after = response.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return min(float(retry_after), 30.0)
+        except ValueError:
+            pass
+    return min(HTTP_BACKOFF_SECONDS * attempt, 30.0)
+
+
+def _http_get(url: str, source_name: str, timeout: int = 30, **kwargs):
+    """GET with a consistent user-agent and light retries for flaky source APIs."""
+    attempts = max(1, HTTP_RETRIES)
+    headers = dict(kwargs.pop("headers", {}) or {})
+    headers.setdefault("User-Agent", HTTP_USER_AGENT)
+    headers.setdefault("Accept", "application/json, text/html;q=0.9, */*;q=0.8")
+
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = requests.get(url, timeout=timeout, headers=headers, **kwargs)
+            status = getattr(resp, "status_code", None)
+            if status in RETRYABLE_STATUS_CODES and attempt < attempts:
+                delay = _retry_delay(resp, attempt)
+                print(
+                    f"{source_name} HTTP {status}; retrying "
+                    f"{attempt + 1}/{attempts} in {delay:.1f}s.",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+                continue
+            resp.raise_for_status()
+            return resp
+        except requests.RequestException as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status is not None and status not in RETRYABLE_STATUS_CODES:
+                raise
+            if attempt >= attempts:
+                raise
+            delay = _retry_delay(getattr(e, "response", None), attempt)
+            print(
+                f"{source_name} request failed ({e}); retrying "
+                f"{attempt + 1}/{attempts} in {delay:.1f}s.",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
 
 
 def _format_context(ctx: Optional[int]) -> str:
@@ -379,8 +516,7 @@ def is_significant_release(model_id: str, author: str, tags: list,
 def fetch_openrouter_models() -> List[ModelRelease]:
     models = []
     try:
-        resp = requests.get("https://openrouter.ai/api/v1/models", timeout=30)
-        resp.raise_for_status()
+        resp = _http_get("https://openrouter.ai/api/v1/models", "OpenRouter", timeout=30)
         for m in resp.json().get("data", []):
             model_id = m.get("id", "")
             if not model_id:
@@ -450,8 +586,7 @@ def fetch_ollama_models() -> List[ModelRelease]:
     """Ollama library — currently low signal, fetch lightly."""
     models = []
     try:
-        resp = requests.get("https://ollama.com/library", timeout=30)
-        resp.raise_for_status()
+        resp = _http_get("https://ollama.com/library", "Ollama", timeout=30)
         seen = set()
         for m in re.findall(r'href="/library/([^"]+)"', resp.text):
             if m in seen or m.startswith("."):
@@ -487,10 +622,10 @@ def fetch_org_models(author: str) -> List[ModelRelease]:
     """Fetch models from a specific HF org, sorted by recent."""
     models = []
     try:
-        resp = requests.get(
+        resp = _http_get(
             f"https://huggingface.co/api/models?author={author}&sort=lastModified&direction=-1&limit=10",
+            f"HF org {author}",
             timeout=20)
-        resp.raise_for_status()
         for m in resp.json():
             model_id = m.get("id", "")
             if not model_id:
@@ -538,11 +673,11 @@ def fetch_hf_text_generation() -> List[ModelRelease]:
     """Fetch top HF text-generation models by downloads/likes."""
     models = []
     try:
-        resp = requests.get(
+        resp = _http_get(
             "https://huggingface.co/api/models"
             "?pipeline_tag=text-generation&sort=downloads&direction=-1&limit=30",
+            "HF top text-generation",
             timeout=20)
-        resp.raise_for_status()
         for m in resp.json():
             model_id = m.get("id", "")
             author = m.get("author", "")
@@ -581,8 +716,7 @@ def fetch_huggingface_trending() -> List[ModelRelease]:
     models = []
     try:
         # Try trending first
-        resp = requests.get("https://huggingface.co/api/trending", timeout=30)
-        resp.raise_for_status()
+        resp = _http_get("https://huggingface.co/api/trending", "HF trending", timeout=30)
         for item in resp.json().get("recentlyTrending", []):
             if item.get("repoType") != "model":
                 continue
@@ -625,11 +759,11 @@ def fetch_huggingface_trending() -> List[ModelRelease]:
             ))
 
         # Also fetch recently modified for completeness
-        resp2 = requests.get(
+        resp2 = _http_get(
             "https://huggingface.co/api/models",
+            "HF recent models",
             params={"sort": "lastModified", "direction": -1, "limit": 50},
             timeout=30)
-        resp2.raise_for_status()
         for m in resp2.json():
             model_id = m.get("id", "")
             if not model_id:
@@ -928,11 +1062,18 @@ def try_post_pending_curated() -> bool:
     """Fast-path: post a pre-curated digest written by the curator routine.
 
     The modelbytes-curator-routine writes pending/<TODAY>.txt to master
-    ~30 minutes before this cron fires. If we find that file, post it
-    verbatim and return True. Otherwise return False so main() falls
-    through to the existing deterministic pipeline.
+    ~30 minutes before this cron fires. If today's post is already recorded,
+    return True. If we find a pending file, post it verbatim, record the date,
+    and return True. Otherwise return False so main() falls through to the
+    existing deterministic pipeline.
     """
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    init_posted_digest_store()
+    if has_posted_digest(today):
+        print(f"Digest for {today} already marked posted -- skipping.")
+        return True
+
     pending_path = Path("pending") / f"{today}.txt"
 
     if not pending_path.exists():
@@ -949,6 +1090,7 @@ def try_post_pending_curated() -> bool:
               file=sys.stderr)
         return False
 
+    mark_posted_digest(today, "curated", str(pending_path), body)
     print(f"Posted curated digest for {today}.")
     return True
 
@@ -1028,6 +1170,7 @@ def main():
 
         if not send_telegram_post(message):
             return 1
+        mark_posted_digest(today, "fallback", "", message)
         print("Digest sent")
 
     else:

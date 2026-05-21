@@ -1130,7 +1130,7 @@ def main():
 
     print(f"Found {len(all_new)} new model(s)")
 
-    if is_first_run:
+    if is_first_run and not preview_mode:
         print("First run — seeding, no digest sent")
         # Seed all current models so they won't be reported as "new" next time
         for m in all_new:

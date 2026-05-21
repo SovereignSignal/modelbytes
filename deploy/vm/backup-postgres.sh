@@ -12,11 +12,13 @@ mkdir -p "$BACKUP_DIR"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 tmp_path="$BACKUP_DIR/modelbytes-$stamp.sql.gz.tmp"
 final_path="$BACKUP_DIR/modelbytes-$stamp.sql.gz"
+trap 'rm -f "$tmp_path"' EXIT
 
 docker compose -f "$COMPOSE_FILE" exec -T postgres \
   pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" | gzip -9 > "$tmp_path"
 
 mv "$tmp_path" "$final_path"
+trap - EXIT
 find "$BACKUP_DIR" -type f -name 'modelbytes-*.sql.gz' -mtime +"$RETENTION_DAYS" -delete
 
 echo "Wrote $final_path"

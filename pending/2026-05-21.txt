@@ -1,0 +1,30 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Thursday, May 21, 2026</i>
+
+<i>Google I/O's Gemini 3.5 Flash goes GA and defines the week; everywhere else the action is architectural bets and efficiency plays, not brute-scale launches.</i>
+
+━━━ <b>CLOSED GIANTS</b> 🔒
+
+<b>Gemini 3.5 Flash</b> — Released May 19 at Google I/O. Outperforms Gemini 3.1 Pro on coding and agent benchmarks (76.2% Terminal-Bench 2.1, 84.2% CharXiv Reasoning) at 4× the throughput. Priced $1.50/$9 per 1M tokens, 1M-token context, GA immediately across the Gemini API, AI Studio, and AI Mode in Search. 3.5 Pro is in internal testing for next month. <a href="https://blog.google/innovation-and-ai/models-and-research/gemini-models/gemini-3-5/">→ Source</a>
+
+<b>Grok 4.3</b> — Full API rollout May 15. Native video input, 1M-token context, and a 40% cut to input pricing ($1.25/M) in one release — xAI is positioning this as the cost-efficient frontier option for agentic workloads. Eight legacy Grok API models retired simultaneously. <a href="https://artificialanalysis.ai/articles/xai-launches-grok-4-3-with-improved-agentic-performance-and-lower-pricing">→ Source</a>
+
+<b>GPT-5.5 Instant</b> — Shipped May 5, now the default ChatGPT model. Reduced hallucination rates in legal, medical, and financial domains while maintaining low latency. The full GPT-5.5 (April 23) remains available in the API for teams that need higher reasoning ceiling over throughput. <a href="https://openai.com/index/introducing-gpt-5-5/">→ Source</a>
+
+━━━ <b>PREMIER OPEN</b> 🔓
+
+<b>Qwen3-Coder-Next</b> — Alibaba, Apache 2.0. Ultra-sparse MoE: 80B total parameters, 3B active per token, 256k context. Scores 70%+ on SWE-Bench Verified with SWE-Agent scaffold. Four weight variants on Hugging Face; architecture prioritizes multi-file and large-repo agentic coding tasks over raw single-file completion. <a href="https://qwen.ai/blog?id=qwen3-coder-next">→ Source</a>
+
+<b>ZAYA1-8B</b> — Zyphra, Apache 2.0, released May 6. Reasoning MoE with 760M active parameters from 8B total — trained entirely on AMD Instinct MI300X with no NVIDIA hardware in the stack. Zyphra's Markovian RSA test-time compute pushes math benchmark scores to approach Claude 4.5 Sonnet and Gemini 2.5 Pro. Weights on Hugging Face; free serverless endpoint at Zyphra Cloud. <a href="https://www.zyphra.com/post/zaya1-8b">→ Source</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+
+<b>SubQ</b> — Subquadratic, May 5. Claims the first commercially deployed fully-subquadratic LLM via Sparse Subquadratic Attention (SSA), with a 12M-token native context window and ~52× speed versus FlashAttention at 1M tokens (vendor figures; no independent verification yet). $29M seed round out of stealth. API-only access for now. <a href="https://subq.ai/introducing-subq">→ Source</a>
+
+━━━ <b>LOCAL READY</b> 🏠
+
+• qwen3-coder-next (HF quantized variants, Apache 2.0)
+• zaya1-8b (HF weights + Zyphra Cloud free tier, Apache 2.0)
+• nemotron-cascade-2 (30B / 3B active, HF open license, Mar 20)
+
+Total: 7 models tracked today

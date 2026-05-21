@@ -1,0 +1,1 @@
+bootstrapped 2026-05-21: Sov reviewed first-run proposal (issue #5) and approved autonomous mode. Supervisor may now auto-commit list additions per the criteria in its routine prompt: max 3 per run, KNOWN_ORGS/MAJOR_HF_ORGS/PROVIDER_NAMES/significant_families/categorize_model tier-list additions only. To pause autonomy: git rm .supervisor-bootstrapped && push.

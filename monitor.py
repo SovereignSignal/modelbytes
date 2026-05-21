@@ -81,6 +81,13 @@ PROVIDER_NAMES = {
     "unsloth": "Unsloth AI",
     "open-thoughts": "Open Thoughts",
     "inclusionai": "Inclusion AI",
+    "bartowski": "Bartowski",
+    "maziyarpanahi": "MaziyarPanahi",
+    "mradermacher": "MRadermacher",
+    "thebloke": "TheBloke",
+    "ollama": "Ollama",
+    "philschmid": "Philipp Schmid",
+    "sentence-transformers": "Sentence Transformers",
 }
 
 # Known significant orgs — never noise-filter these

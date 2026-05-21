@@ -64,6 +64,38 @@ The bot token has died on us twice in the recent past (each rotation requires re
 
 **If the channel was dark while the token was bad**: there's no auto-recovery — the missed cron is just missed. You can manually trigger a one-off post (see below) once the token is fixed.
 
+## The LLM fallback chain
+
+`monitor.py`'s deterministic pipeline (the safety net when the curator routine misses a day) ends with `summarize_models()`, which calls an OpenAI-compatible API to write digest blurbs. The relevant env vars:
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `MODELBYTES_LLM_KEY` | (none) | Primary API key. |
+| `OPENAI_API_KEY` | (none) | Fallback if `MODELBYTES_LLM_KEY` is unset. |
+| `OPENROUTER_API_KEY` | (none) | Fallback if both above are unset. |
+| `MODELBYTES_LLM_MODEL` | `gpt-4o-mini` | Model identifier. |
+| `MODELBYTES_LLM_URL` | `https://api.openai.com/v1` | API base URL. Set to OpenRouter's URL to switch providers. |
+
+**Current state on Railway**: none of these are set in `railway.toml`'s `[env]` block. If the curator routine misses (rare), the fallback path runs `build_digest_message()` instead — a template-only digest with model names, specs, and links but no LLM-written blurbs. Format is the same; editorial voice is absent.
+
+**To enable LLM-driven fallback on Railway**:
+
+```bash
+# Pick a provider. OpenAI or OpenRouter both work.
+# Use --stdin to keep the key out of shell history.
+printf '%s' '<api-key>' | railway variable set MODELBYTES_LLM_KEY --stdin --service modelbytes --environment production
+```
+
+After the next deploy, fallback days will produce LLM-written digests instead of template-only.
+
+**To verify the fallback path locally**:
+
+```bash
+DATABASE_URL="" TELEGRAM_BOT_TOKEN="" python3 monitor.py --preview
+```
+
+If `MODELBYTES_LLM_KEY` (or the fallbacks) is set in your local env, you'll see the LLM-written digest. If not, you'll see the template-only one and a `No LLM key — falling back to template digest` line in stderr.
+
 ## Manually triggering a Telegram post
 
 Useful for: testing after a token rotation, posting an off-schedule digest, validating that the fast-path works after a code change.
@@ -75,7 +107,7 @@ railway link --project model-bytes --environment production --service modelbytes
 TZ=UTC railway run python3 monitor.py
 ```
 
-`TZ=UTC` is needed when running locally because `try_post_pending_curated()` uses naive `datetime.now()` — without it, the function looks for `pending/<LOCAL_DATE>.txt` and misses the curator's `pending/<UTC_DATE>.txt`. On Railway containers this isn't a problem (Railway containers run UTC).
+`TZ=UTC` is needed when running locally because some date logic uses naive `datetime.now()` — without it, the function looks for `pending/<LOCAL_DATE>.txt` and misses the curator's `pending/<UTC_DATE>.txt`. On Railway containers this isn't a problem (Railway containers run UTC). The naive-datetime issue is being progressively fixed across `monitor.py`; some sites may still need `TZ=UTC` for correctness.
 
 If the curator routine has already produced today's pending file, this will post the curated digest. If not, the deterministic pipeline runs and posts whatever it generates.
 
@@ -96,7 +128,7 @@ Trigger IDs are in the `[[modelbytes-curator-routines]]` auto-memory file. As of
 
 ## When the curator misses (no `pending/<TODAY>.txt` was pushed)
 
-Railway will fall through to the deterministic pipeline at 16:00 UTC. The channel still gets a post — just the heuristic-only version. To investigate:
+Railway will fall through to the deterministic pipeline at 16:00 UTC. The channel still gets a post — the template-only version if `MODELBYTES_LLM_KEY` is unset (current Railway state), or an LLM-summarized one if it is. To investigate:
 
 1. **Open the curator routine's log** at https://claude.ai/code/routines/trig_017i1diXxpkQYsAL2MFU5yPe — its most recent run's output explains what happened.
 2. **Common causes**:
@@ -123,7 +155,7 @@ The publisher doesn't currently delete the pending file after posting. To avoid 
 ```bash
 cd modelbytes
 git pull --ff-only origin master
-git rm pending/2026-MM-DD.txt
+git rm pending/YYYY-MM-DD.txt
 git commit -m "chore: remove posted pending file"
 git push origin master
 ```

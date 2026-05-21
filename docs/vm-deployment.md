@@ -95,6 +95,8 @@ sudo -u modelbytes docker compose -f deploy/vm/docker-compose.yml up -d postgres
 sudo -u modelbytes docker compose -f deploy/vm/docker-compose.yml run --rm modelbytes python monitor.py --preview
 ```
 
+Preview mode fetches live sources and renders the candidate digest without sending Telegram or seeding the `models` table. On a fresh VM database, this should show what the fallback pipeline would post if the curator file were missing.
+
 ## Install Timers
 
 ```bash

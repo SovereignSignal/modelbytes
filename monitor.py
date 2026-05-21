@@ -73,8 +73,14 @@ PROVIDER_NAMES = {
     "resembleai": "Resemble AI",
     "adskailab": "Autodesk AI Lab",
     "perplexity": "Perplexity",
+    "perplexity-ai": "Perplexity",
     "cohere": "Cohere",
     "ai21": "AI21 Labs",
+    "huggingface": "Hugging Face",
+    "cognitivecomputations": "Cognitive Computations",
+    "unsloth": "Unsloth AI",
+    "open-thoughts": "Open Thoughts",
+    "inclusionai": "Inclusion AI",
 }
 
 # Known significant orgs — never noise-filter these

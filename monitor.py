@@ -423,7 +423,7 @@ def fetch_openrouter_models() -> List[ModelRelease]:
             if created:
                 rd = datetime.fromtimestamp(created, tz=timezone.utc).strftime("%Y-%m-%d")
             else:
-                rd = datetime.now().strftime("%Y-%m-%d")
+                rd = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
             desc = _smart_truncate(m.get("description", ""), 200)
             models.append(ModelRelease(
@@ -501,7 +501,7 @@ def fetch_org_models(author: str) -> List[ModelRelease]:
             if is_noise_model(model_id, author, tags, downloads, likes):
                 continue
 
-            rd = m.get("createdAt", "")[:10] or datetime.now().strftime("%Y-%m-%d")
+            rd = m.get("createdAt", "")[:10] or datetime.now(timezone.utc).strftime("%Y-%m-%d")
             desc = _smart_truncate(
                 f"{pipeline} model" if pipeline else "ML model", 200)
 
@@ -551,7 +551,7 @@ def fetch_hf_text_generation() -> List[ModelRelease]:
             if is_noise_model(model_id, author, tags, downloads, likes):
                 continue
 
-            rd = m.get("createdAt", "")[:10] or datetime.now().strftime("%Y-%m-%d")
+            rd = m.get("createdAt", "")[:10] or datetime.now(timezone.utc).strftime("%Y-%m-%d")
             pipeline = m.get("pipeline_tag", "")
             desc = _smart_truncate(
                 f"{pipeline} model" if pipeline else "LLM", 200)
@@ -603,7 +603,7 @@ def fetch_huggingface_trending() -> List[ModelRelease]:
                     or downloads >= 1000 and likes >= 30):
                 continue
 
-            rd = m.get("createdAt", "")[:10] or datetime.now().strftime("%Y-%m-%d")
+            rd = m.get("createdAt", "")[:10] or datetime.now(timezone.utc).strftime("%Y-%m-%d")
             desc = _smart_truncate(
                 f"{pipeline} model" if pipeline else m.get("cardData", {}).get("model_summary", "ML model"),
                 200)
@@ -646,7 +646,7 @@ def fetch_huggingface_trending() -> List[ModelRelease]:
                     or downloads >= 1000 and likes >= 30):
                 continue
 
-            rd = m.get("createdAt", "")[:10] or datetime.now().strftime("%Y-%m-%d")
+            rd = m.get("createdAt", "")[:10] or datetime.now(timezone.utc).strftime("%Y-%m-%d")
             pipeline = m.get("pipeline_tag", "")
             desc = _smart_truncate(
                 f"{pipeline} model" if pipeline else "ML model", 200)
@@ -735,7 +735,7 @@ def build_digest_message(models: List[ModelRelease]) -> str:
 
     lines = [
         f"🤖 <b>ModelBytes Digest</b>",
-        f"<i>{datetime.now().strftime('%A, %B %d, %Y')}</i>",
+        f"<i>{datetime.now(timezone.utc).strftime('%A, %B %d, %Y')}</i>",
         "",
     ]
 
@@ -752,7 +752,7 @@ def build_digest_message(models: List[ModelRelease]) -> str:
                 clean_desc = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', m.description)
                 lines.append(f"  {_smart_truncate(clean_desc, 150)}...")
             specs = []
-            if m.release_date and m.release_date != datetime.now().strftime("%Y-%m-%d"):
+            if m.release_date and m.release_date != datetime.now(timezone.utc).strftime("%Y-%m-%d"):
                 specs.append(f"Released: {m.release_date}")
             if m.context_window:
                 specs.append(f"Context: {_format_context(m.context_window)}")
@@ -869,17 +869,40 @@ Models:
                              json=payload, headers=headers, timeout=60)
         resp.raise_for_status()
         summary = resp.json()["choices"][0]["message"]["content"].strip()
-        header = f"🤖 <b>ModelBytes Digest</b>\n<i>{datetime.now().strftime('%A, %B %d, %Y')}</i>"
+        header = f"🤖 <b>ModelBytes Digest</b>\n<i>{datetime.now(timezone.utc).strftime('%A, %B %d, %Y')}</i>"
         return f"{header}\n\n{summary}"
     except Exception as e:
         print(f"LLM failed: {e} — falling back to template")
         return build_digest_message(models)
 
 
+TELEGRAM_MAX_CHARS = 4096
+
+
+def _truncate_for_telegram(message: str, limit: int = TELEGRAM_MAX_CHARS) -> str:
+    """Telegram rejects sendMessage over 4096 chars (UTF-16 code units, but
+    char-count is a safe lower bound). If over limit, truncate at the last
+    newline before the limit and append a truncation marker. Without this,
+    oversized messages 400-fail and never reach the channel."""
+    if len(message) <= limit:
+        return message
+    marker = "\n\n…[truncated]"
+    headroom = limit - len(marker)
+    cut = message.rfind("\n", 0, headroom)
+    if cut < headroom * 0.7:  # no good newline boundary; fall back to char cut
+        cut = headroom
+    return message[:cut].rstrip() + marker
+
+
 def send_telegram_post(message: str) -> bool:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHANNEL_ID:
         print("Telegram not configured", file=sys.stderr)
         return False
+    if len(message) > TELEGRAM_MAX_CHARS:
+        original_len = len(message)
+        message = _truncate_for_telegram(message)
+        print(f"Telegram message was {original_len} chars (over {TELEGRAM_MAX_CHARS}); "
+              f"truncated to {len(message)} chars.", file=sys.stderr)
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHANNEL_ID,
@@ -907,7 +930,7 @@ def try_post_pending_curated() -> bool:
     verbatim and return True. Otherwise return False so main() falls
     through to the existing deterministic pipeline.
     """
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     pending_path = Path("pending") / f"{today}.txt"
 
     if not pending_path.exists():
@@ -940,7 +963,7 @@ def main():
 
     init_database()
     seen_models = load_seen_models()
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     is_first_run = len(seen_models) == 0
 
     print(f"Checking {today}... Tracking {len(seen_models)} models")
@@ -971,24 +994,15 @@ def main():
         save_seen_models(seen_models)
         return 0
 
-    significant = []
+    # Models passed the fetcher-level is_noise_model checks already; the prior
+    # second pass here passed `m.provider` (display name like "Alibaba") as the
+    # author arg, which never matches `KNOWN_ORGS` slugs like "qwen". That made
+    # orgs with diverging display names (tencentarc/"Tencent ARC", allenai/"AI2")
+    # fall into the unknown-org engagement gate and get filtered as noise.
+    # Removing the broken pass; the fetcher-level filter is sufficient. (audit A11)
+    significant = list(all_new) if all_new else []
     if all_new:
-        # Apply noise filter with engagement data
-        for m in all_new:
-            base = m.name.split("/")[-1]
-            author = m.name.split("/")[0] if "/" in m.name else ""
-            if not is_noise_model(base, m.provider or "", m.unique_traits or [],
-                                  getattr(m, "downloads", 0),
-                                  getattr(m, "likes", 0)):
-                significant.append(m)
-
-        # If nothing significant, also try with author from name for HF/ORT fallback
-        if not significant and len(all_new) <= 10:
-            significant = all_new
-        elif not significant:
-            significant = all_new[:5]
-
-        digest_models = significant[:15] if significant else all_new[:10]
+        digest_models = significant[:15]
         print(f"Filtered to {len(digest_models)} significant model(s)")
 
         # Mark posted models as seen so they don't re-appear
@@ -1016,12 +1030,6 @@ def main():
 
     else:
         print("No new models")
-
-    # Small batches with no significant models: mark all as seen so
-    # we don't keep re-discovering the same noise every run
-    if all_new and not significant:
-        for m in all_new:
-            seen_models.add(m.name)
 
     save_seen_models(seen_models)
     return 0

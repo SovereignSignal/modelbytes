@@ -10,13 +10,13 @@ A daily curated digest of new AI model releases, posted to the public Telegram c
 
 **Deterministic core** — `monitor.py` in the repo root. Fetches sources, applies the heuristic filter pipeline (`is_noise_model` / `is_significant_release` / `categorize_model`), dedupes against Postgres, and posts to Telegram. This is the safety net — it must keep posting even when the Claude layer is unavailable.
 
-**Claude layer** — a set of scheduled routines on Claude.ai (no Anthropic API costs; uses the existing subscription via the Anthropic-hosted CCR environment) that handle editorial taste, growth, and observability:
+**Claude layer** — a set of scheduled routines on Claude.ai (no Anthropic API costs; uses the existing subscription via the Anthropic-hosted CCR environment) that handle editorial taste, growth, and health checks:
 
 | Routine | Cadence | Role |
 |---|---|---|
 | `modelbytes-curator-routine` | Daily 15:30 UTC | Generates the day's editorial digest with taste. Writes `pending/<TODAY>.txt` to master. Replaces the previous OpenAI gpt-4o-mini summarization step. |
 | `modelbytes-supervisor-routine` | Daily 14:00 UTC | Audits production state + grows the system organically. Auto-commits list additions (KNOWN_ORGS, PROVIDER_NAMES, etc.) when bootstrapped; opens PRs for logic changes; opens issues for ambiguous calls. |
-| `modelbytes-daily-health` | Daily 17:00 UTC | Verifies the day's post landed and looks sane. Logs to Notion; opens GH issue on FAIL. |
+| `modelbytes-daily-health` | Daily 17:00 UTC | Verifies the day's post landed and looks sane. Should record structured health state and open GH issue on FAIL. |
 | `modelbytes-pr-curator` | Hourly | Auto-reviews any open PR that lacks a `🤖 Curator review:` comment. |
 
 Routine IDs and URLs live in the auto-memory file `modelbytes-curator-routines.md`. Manage them at https://claude.ai/code/routines.
@@ -28,7 +28,7 @@ Routine IDs and URLs live in the auto-memory file `modelbytes-curator-routines.m
             ├── audit recent posts, fetched data, GitHub issues
             ├── identify growth candidates (orgs/families) + drift indicators
             ├── if .supervisor-bootstrapped on master: auto-commit top 3 list additions
-            └── log to Notion "ModelBytes Supervisor Log"
+            └── record structured supervisor outcome
 
 15:30 UTC   modelbytes-curator-routine
             ├── fetch sources (OpenRouter / Ollama / HuggingFace)
@@ -48,7 +48,7 @@ Routine IDs and URLs live in the auto-memory file `modelbytes-curator-routines.m
 17:00 UTC   modelbytes-daily-health
             ├── fetch t.me/s/ModelBytes, find today's post
             ├── verify timestamp ~16:00 UTC, header + footer + non-empty body
-            └── log status (PASS/WARN/FAIL) to Notion; GH issue on FAIL
+            └── record PASS/WARN/FAIL; GH issue on FAIL
 
 Hourly      modelbytes-pr-curator
             └── review any open PR without a curator review comment
@@ -94,9 +94,17 @@ The curator routine's prompt has its own narrower authority — it can drop / re
 
 ## Storage
 
-- **PostgreSQL** (Railway-provided) — the `models` table holds the dedup set used by `monitor.py`'s fallback path. `load_seen_models()` / `save_seen_models()` use `INSERT … ON CONFLICT DO NOTHING` (no DELETE-and-rebuild — that was an audit A5 fix in Phase 2b). The `posted_digests` table records one row per posted UTC date so publisher reruns are idempotent.
+- **PostgreSQL** — the `models` table holds the dedup set used by `monitor.py`'s fallback path. `load_seen_models()` / `save_seen_models()` use `INSERT … ON CONFLICT DO NOTHING` (no DELETE-and-rebuild — that was an audit A5 fix in Phase 2b). The `posted_digests` table records one row per posted UTC date so publisher reruns are idempotent. Future operational records should also land here as structured tables.
 - **GitHub master** — pending and committed config state. The curator's daily output lives at `pending/<TODAY>.txt`. The supervisor's commits to monitor.py's constants accumulate over time. The `.supervisor-bootstrapped` marker controls supervisor authority.
-- **Notion** — observability log surfaces. "ModelBytes Daily Health Log" (one line/day, append-only); "ModelBytes Supervisor Log" (one section/day, append-only).
+
+## Structured Operational Data
+
+The production design should keep durable operational state in Postgres, not scattered external notes. Current implemented tables:
+
+- `models` — deduplication memory for fetched model IDs.
+- `posted_digests` — one row per posted UTC date for idempotency.
+
+Recommended next tables are described in [`structured-data.md`](./structured-data.md): publish runs, per-source fetch summaries, health checks, supervisor decisions, and source candidates. The Claude routine prompts should be updated to write or propose changes against those structured records rather than external note pages.
 
 ## Sources
 

@@ -9,11 +9,10 @@ Day-to-day operational tasks for ModelBytes. For the design behind these mechani
 | Channel output | https://t.me/ModelBytes (or `https://t.me/s/ModelBytes` for HTML-scrapable history) |
 | Routine outputs | https://claude.ai/code/routines |
 | GitHub issues / PRs | https://github.com/SovereignSignal/modelbytes |
-| Notion daily health log | Notion page "ModelBytes Daily Health Log" (created on first health-check run) |
-| Notion supervisor log | Notion page "ModelBytes Supervisor Log" |
+| Structured state | Postgres tables (`models`, `posted_digests`; more planned in `docs/structured-data.md`) |
 | Railway service state | Railway dashboard → `model-bytes` project → `modelbytes` service |
 
-A clean day looks like: 1 post at 16:00 UTC in the channel, 1 health-check log line in Notion saying PASS, no new GitHub issues with the `health-incident` or `supervisor-drift` labels.
+A clean day looks like: 1 post at 16:00 UTC in the channel, today's UTC date present in `posted_digests`, health check PASS once structured health records exist, and no new GitHub issues with the `health-incident` or `supervisor-drift` labels.
 
 ## Pausing the supervisor's autonomy
 
@@ -178,7 +177,7 @@ If you intentionally need to repost a date, remove the matching row from `posted
 
 To delete a routine: visit https://claude.ai/code/routines, find the routine, delete it. Then update `[[modelbytes-curator-routines]]` to move the entry into a `## Retired` section with the date and reason.
 
-Don't delete `modelbytes-daily-health` until the supervisor has run successfully on 2-3 days — daily-health is the canary that catches things the supervisor might miss.
+Don't delete `modelbytes-daily-health` until the supervisor has run successfully on 2-3 days — daily-health is the canary that catches things the supervisor might miss. When routine prompts are refreshed, health and supervisor outcomes should go to structured storage rather than external note pages.
 
 ## When the v2 loop entirely fails
 

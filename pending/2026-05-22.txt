@@ -1,0 +1,36 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Friday, May 22, 2026</i>
+
+<i>Google I/O closed with Gemini 3.5 Flash going GA — the first Flash-tier model to beat last generation's Pro on agentic evals — while the late-April Chinese open-weight cluster keeps pulling inference spend away from closed APIs.</i>
+
+━━━ <b>CLOSED GIANTS</b> 🔒
+
+<b>Gemini 3.5 Flash</b> — GA May 19. Outperforms Gemini 3.1 Pro on coding and agentic evals (76.2% Terminal-Bench 2.1, 83.6% MCP Atlas), 4× faster than comparable frontier models at $1.50/$9.00 per 1M tokens. Multimodal (text, image, audio, video), 1M context, dynamic thinking on by default. Pro variant expected in June. <a href="https://techcrunch.com/2026/05/19/with-gemini-3-5-flash-google-bets-its-next-ai-wave-on-agents-not-chatbots/">→ TechCrunch</a>
+
+<b>Qwen3.6-Max-Preview</b> — API-only, April 20. First Qwen flagship to ship closed-weights — every prior generation was Apache 2.0. Claims top rank on SWE-Bench Pro, Terminal-Bench 2.0, and four other coding benchmarks. 260K context via Alibaba dashscope. Every prior Qwen generation was Apache 2.0 — this is a clean break. <a href="https://qwen.ai/blog?id=qwen3.6-max-preview">→ Qwen Blog</a>
+
+━━━ <b>PREMIER OPEN</b> 🔓
+
+<b>DeepSeek V4-Pro</b> — MIT, April 24. 1.6T total / 49B active MoE, 1M context. Benchmark cluster places it alongside GPT-5.5 and Claude Opus 4.7 on agentic evals. API at $1.74/$3.48 per 1M in/out; 865GB weight download on HuggingFace. <a href="https://api-docs.deepseek.com/news/news260424">→ DeepSeek</a>
+
+<b>DeepSeek V4-Flash</b> — MIT, April 24. 284B total / 13B active, same 1M context at $0.14/$0.28 per 1M. 160GB puts it within reach for teams with A100 access who want to skip the API. <a href="https://api-docs.deepseek.com/news/news260424">→ DeepSeek</a>
+
+<b>Kimi K2.6</b> (Moonshot AI) — Apache 2.0, April 20. Trillion-parameter MoE, 256K context, 66.7% Terminal-Bench 2.0. Swarm tests: 300 simultaneous sub-agents, 4,000-step coordination, 13 continuous hours — the most aggressive published agentic stress test in this cluster. <a href="https://huggingface.co/moonshotai/Kimi-K2.6">→ HuggingFace</a>
+
+<b>GLM-5.1</b> (Z.ai) — Open weights. Leads the four-lab April cluster on SWE-Bench Pro and Terminal-Bench 2, edging out Kimi K2.6 on raw coding numbers. Thinner ecosystem than Kimi, stronger benchmark claim.
+
+━━━ <b>MULTIMODAL</b> 🎨
+
+<b>Nemotron 3 Nano Omni</b> (NVIDIA) — NVIDIA Open Model License, April 28. 30B total / 3B active MoE, runs on 25GB RAM. Single model for audio, video, images, and text; 9.2× higher throughput than comparable open omni models on video, 7.4× on multi-document tasks. Commercial use permitted. <a href="https://developer.nvidia.com/blog/nvidia-nemotron-3-nano-omni-powers-multimodal-agent-reasoning-in-a-single-efficient-open-model/">→ NVIDIA Dev</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+
+<b>ZAYA1-8B</b> (Zyphra) — Apache 2.0, May 6. Small MoE trained entirely on AMD hardware — a deliberate signal for teams on AMD infrastructure. 8B active parameters, agentic task framing. The training stack, not the benchmark numbers, is the story.
+
+━━━ <b>LOCAL READY</b> 🏠
+
+• <b>DeepSeek V4-Flash</b> — MIT, 160GB, 13B active (A100-class self-host) <a href="https://api-docs.deepseek.com/news/news260424">→ DeepSeek</a>
+• <b>Nemotron 3 Nano Omni</b> — NVIDIA Open, 25GB RAM, AMD/NVIDIA <a href="https://developer.nvidia.com/blog/nvidia-nemotron-3-nano-omni-powers-multimodal-agent-reasoning-in-a-single-efficient-open-model/">→ NVIDIA</a>
+• <b>ZAYA1-8B</b> — Apache 2.0, AMD-native
+
+Total: 8 models tracked today

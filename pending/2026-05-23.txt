@@ -1,0 +1,20 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Saturday, May 23, 2026</i>
+
+<i>Post-I/O Saturday: Gemini Omni completes Google's video-generation play from this week's announcements, while Alibaba's closed Qwen3.7-Max — announced 24 hours after I/O — ran 1,000 autonomous tool calls in a 35-hour benchmark at the Hangzhou Cloud Summit.</i>
+
+━━━ <b>CLOSED GIANTS</b> 🔒
+
+<b>Gemini Omni</b> — GA May 19 (Google I/O). Any-to-any: text, image, audio, and video in; 10-second clips with synchronized audio out. Conversational editing lets you reroll style, camera angle, and objects across turns; Google's model card lists real-world physics and motion grounding as a design goal. Rolling out now to Gemini AI Plus/Pro/Ultra subscribers via the Gemini app and Google Flow, with YouTube Shorts access starting this week. <a href="https://techcrunch.com/2026/05/19/googles-gemini-omni-turns-images-audio-and-text-into-video-and-thats-just-the-start/">→ TechCrunch</a>
+
+<b>Qwen3.7-Max</b> — Announced May 20 (Alibaba Cloud Summit, Hangzhou). Proprietary agent flagship with 1M-token context. Internal stress test: 1,000+ tool calls and iterative code optimizations in a single 35-hour autonomous run with a claimed 10× inference-speed gain on Alibaba's new chip platform. Natively implements the Anthropic API — plugs into Claude Code or OpenClaw without a protocol wrapper. Ships alongside Qwen3.7-Plus (multimodal, vision). <a href="https://technode.com/2026/05/21/alibaba-introduces-qwen3-7-max-as-next-gen-ai-agent-model/">→ TechNode</a>
+
+━━━ <b>PREMIER OPEN</b> 🔓
+
+<b>Qwen3-Coder-Next</b> — Released May 14 (Apache 2.0). 80B total / 3B active MoE, 262K context. Training corpus: 800K verifiable coding tasks mined from GitHub — each with automated pass/fail signals rather than preference labels. MoE routing gives ~10× throughput vs. dense equivalents at this scale. Current benchmark leader for open coding models in this parameter budget. <a href="https://the-decoder.com/alibabas-qwen3-coder-next-delivers-solid-coding-performance-in-a-compact-package/">→ The Decoder</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+
+<b>SubQ</b> — Launched May 5 by Subquadratic ($29M seed). First commercial LLM on a subquadratic (SSA) architecture: attention complexity scales linearly with context rather than quadratically. Native 12M-token window. Vendor-reported claims: 52× faster than FlashAttention at 1M tokens, 97% on RULER-128K vs. Opus 4.6's 94%, at $8 per run vs. ~$2,600 on frontier equivalents. Weights are closed; all benchmarks are self-reported with no independent reproductions published yet. <a href="https://siliconangle.com/2026/05/05/subquadratic-launches-29m-bring-12m-token-context-windows-ai/">→ SiliconANGLE</a>
+
+Total: 4 models tracked today

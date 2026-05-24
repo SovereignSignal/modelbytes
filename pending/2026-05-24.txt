@@ -1,0 +1,23 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Sunday, May 24, 2026</i>
+
+<i>Three releases that landed in the noise of I/O week: OpenAI flips the ChatGPT default, Mistral ships its largest open-weight model under a new license, and Zyphra converts an autoregressive MoE into a diffusion model without breaking eval parity.</i>
+
+━━━ <b>PREMIER OPEN</b> 🔓
+
+<b>Mistral Medium 3.5</b> — Released April 30. 128B dense, 256k context, with reasoning mode togglable per request. Hits 77.6% on SWE-Bench Verified; runs on four H100s or A100s. Weights are on Hugging Face (mistralai/Mistral-Medium-3.5-128B) and Ollama. License is Modified MIT: fully permissive for individuals and most commercial use, but companies above a revenue threshold must negotiate separately — a clean break from Mistral's prior Apache 2.0 run. Worth tracking as a harbinger of how frontier open-weight providers intend to capture large-enterprise value. <a href="https://huggingface.co/mistralai/Mistral-Medium-3.5-128B">→ HuggingFace</a>
+
+━━━ <b>CLOSED GIANTS</b> 🔒
+
+<b>GPT-5.5 Instant</b> — ChatGPT's default since May 5, replacing GPT-5.3 Instant for all tiers (free, Plus, Pro, Business, Enterprise). OpenAI reports 52.5% fewer hallucinated claims on high-stakes prompts covering medicine, law, and finance, and 37.3% fewer across user-flagged conversations. AIME 2025 climbs from 65.4 to 81.2; HealthBench Professional jumps from 32.9 to 38.4. Responses are roughly 30% shorter on average. Available as <i>chat-latest</i> in the API; GPT-5.3 Instant remains selectable for three months before retirement. <a href="https://openai.com/index/gpt-5-5-instant/">→ OpenAI</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+
+<b>ZAYA1-8B-Diffusion-Preview</b> — Released May 15, Apache 2.0. Zyphra takes the ZAYA1-8B autoregressive checkpoint and runs 600B tokens of diffusion mid-training, then extends the context to 128k natively over another 500B tokens. The result diffuses 16 tokens per step: 4.6× faster than the AR baseline with a lossless sampler, 7.7× with a new logit-mixing sampler — both without measurable regression on eval suites. First MoE architecture in a diffusion LLM; also the first diffusion model trained end-to-end on AMD hardware. Technical report: arXiv 2605.05365. Weights on Hugging Face alongside the base model. <a href="https://www.zyphra.com/post/zaya1-8b-diffusion-preview">→ Zyphra</a>
+
+━━━ <b>LOCAL READY</b> 🏠
+
+• <b>Mistral-Medium-3.5</b> — Modified MIT, 128B dense, 4× GPU, available on Ollama <a href="https://ollama.com/library/mistral-medium-3.5">→ Ollama</a>
+• <b>ZAYA1-8B-Diffusion-Preview</b> — Apache 2.0, AMD-native, HuggingFace weights
+
+Total: 3 models tracked today

@@ -4,7 +4,7 @@ AI model release monitor for Telegram. Tracks new models from OpenRouter, Ollama
 
 ## Architecture (v2)
 
-A small Python service on Railway plus a set of scheduled Claude routines (running on Claude.ai subscription, no API costs) that handle editorial taste, organic growth, and observability:
+A small Python service on Railway plus a set of scheduled Claude routines (running on Claude.ai subscription, no API costs) that handle editorial taste, organic growth, and health checks:
 
 - **`monitor.py`** — the deterministic core. Fetches, filters, categorizes, posts. Always runs as the safety net.
 - **`modelbytes-curator-routine`** (15:30 UTC daily) — generates the editorial digest with taste, writes `pending/<TODAY>.txt` to master; Railway reads + posts it at 16:00 UTC.
@@ -12,7 +12,7 @@ A small Python service on Railway plus a set of scheduled Claude routines (runni
 - **`modelbytes-daily-health`** (17:00 UTC daily) — verifies the post landed.
 - **`modelbytes-pr-curator`** (hourly) — reviews open PRs.
 
-See [`docs/architecture.md`](./docs/architecture.md) for the full design. See [`docs/operations.md`](./docs/operations.md) for runbooks (rotating the bot token, pausing supervisor autonomy, manually triggering a post, etc.).
+See [`docs/architecture.md`](./docs/architecture.md) for the full design. See [`docs/operations.md`](./docs/operations.md) for runbooks (rotating the bot token, pausing supervisor autonomy, manually triggering a post, etc.). See [`docs/vm-deployment.md`](./docs/vm-deployment.md) for the self-managed VM deployment path, and [`docs/structured-data.md`](./docs/structured-data.md) for the Postgres-first data roadmap.
 
 ## Features
 
@@ -22,6 +22,8 @@ See [`docs/architecture.md`](./docs/architecture.md) for the full design. See [`
 - 📊 Benchmark scores when available
 - 💸 Pricing info for API models
 - 🗄️ PostgreSQL state persistence (required — set DATABASE_URL)
+- 🚦 Duplicate-post protection via a `posted_digests` ledger
+- 🔁 Retrying source fetches with a consistent ModelBytes user agent
 - 🤖 Claude-curated editorial digests with daily organic growth via the supervisor routine
 
 ## Deploy to Railway
@@ -73,6 +75,9 @@ venv/bin/python -m pytest tests/ -v
 | `MODELBYTES_LLM_KEY` | API key for the deterministic-fallback LLM summarization step (OpenAI-compatible). Falls back to `OPENAI_API_KEY` then `OPENROUTER_API_KEY` if unset. Without any of these, the fallback path produces a template-only digest (no LLM editorial). | ❌ |
 | `MODELBYTES_LLM_MODEL` | Model name for fallback summarization. Default: `gpt-4o-mini`. | ❌ |
 | `MODELBYTES_LLM_URL` | API base URL. Default: `https://api.openai.com/v1`. Set to OpenRouter or another OpenAI-compatible endpoint to switch providers. | ❌ |
+| `MODELBYTES_HTTP_RETRIES` | Source fetch attempts for transient failures. Default: `3`. | ❌ |
+| `MODELBYTES_HTTP_BACKOFF_SECONDS` | Base retry delay for source fetches. Default: `1.0`. | ❌ |
+| `MODELBYTES_USER_AGENT` | User-Agent sent to model source APIs. Default identifies ModelBytes. | ❌ |
 
 The fallback LLM path only runs when the daily curator routine hasn't produced today's `pending/<TODAY>.txt` (rare). The primary editorial layer is Claude via the [curator routine](./docs/architecture.md), which doesn't use these env vars.
 
@@ -81,6 +86,8 @@ The fallback LLM path only runs when the daily curator routine hasn't produced t
 - **OpenRouter** — 400+ models with pricing
 - **Ollama** — Local LLM models
 - **Hugging Face** — Open weights and research models
+
+See [`docs/source-growth.md`](./docs/source-growth.md) for the source expansion rubric and candidate pipeline.
 
 ## License
 

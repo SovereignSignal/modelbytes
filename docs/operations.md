@@ -9,11 +9,16 @@ Day-to-day operational tasks for ModelBytes. For the design behind these mechani
 | Channel output | https://t.me/ModelBytes (or `https://t.me/s/ModelBytes` for HTML-scrapable history) |
 | Routine outputs | https://claude.ai/code/routines |
 | GitHub issues / PRs | https://github.com/SovereignSignal/modelbytes |
-| Notion daily health log | Notion page "ModelBytes Daily Health Log" (created on first health-check run) |
-| Notion supervisor log | Notion page "ModelBytes Supervisor Log" |
+| Structured state | Postgres tables (`models`, `posted_digests`; more planned in `docs/structured-data.md`) |
 | Railway service state | Railway dashboard → `model-bytes` project → `modelbytes` service |
 
-A clean day looks like: 1 post at 16:00 UTC in the channel, 1 health-check log line in Notion saying PASS, no new GitHub issues with the `health-incident` or `supervisor-drift` labels.
+A clean day looks like: 1 post at 16:00 UTC in the channel, today's UTC date present in `posted_digests`, health check PASS once structured health records exist, and no new GitHub issues with the `health-incident` or `supervisor-drift` labels.
+
+## Pre-publish factual QA
+
+Every digest passes through `monitor.py::validate_digest_for_publish()` immediately before Telegram send. The QA pass is intentionally small and deterministic: it fixes known high-confidence fact slips, logs warnings for missing canonical source/license/parameter metadata, and blocks only severe errors that would make a post unsafe or empty.
+
+When adding a model that the curator may mention repeatedly, add a `ModelFact` entry in `monitor.py` with canonical URL, release date, license, total parameters, active parameters, and confidence. The fallback LLM prompt receives those fields and is explicitly told not to invent missing facts.
 
 ## Pausing the supervisor's autonomy
 
@@ -76,7 +81,7 @@ The bot token has died on us twice in the recent past (each rotation requires re
 | `MODELBYTES_LLM_MODEL` | `gpt-4o-mini` | Model identifier. |
 | `MODELBYTES_LLM_URL` | `https://api.openai.com/v1` | API base URL. Set to OpenRouter's URL to switch providers. |
 
-**Current state on Railway**: none of these are set in `railway.toml`'s `[env]` block. If the curator routine misses (rare), the fallback path runs `build_digest_message()` instead — a template-only digest with model names, specs, and links but no LLM-written blurbs. Format is the same; editorial voice is absent.
+**Current state on Railway**: the checked-in `railway.toml` only declares required service variables, but production also has shared OpenAI-compatible fallback variables configured in Railway. If the curator routine misses (rare), the fallback path should produce an LLM-written digest. If those shared variables are removed, unset, or fail at request time, the fallback path runs `build_digest_message()` instead — a template-only digest with model names, specs, and links but no LLM-written blurbs. Format is the same; editorial voice is absent.
 
 **To enable LLM-driven fallback on Railway**:
 
@@ -104,12 +109,10 @@ Useful for: testing after a token rotation, posting an off-schedule digest, vali
 cd modelbytes
 git pull --ff-only origin master   # make sure you have the latest pending file if curator already ran
 railway link --project model-bytes --environment production --service modelbytes
-TZ=UTC railway run python3 monitor.py
+railway run python3 monitor.py
 ```
 
-`TZ=UTC` is needed when running locally because some date logic uses naive `datetime.now()` — without it, the function looks for `pending/<LOCAL_DATE>.txt` and misses the curator's `pending/<UTC_DATE>.txt`. On Railway containers this isn't a problem (Railway containers run UTC). The naive-datetime issue is being progressively fixed across `monitor.py`; some sites may still need `TZ=UTC` for correctness.
-
-If the curator routine has already produced today's pending file, this will post the curated digest. If not, the deterministic pipeline runs and posts whatever it generates.
+If the curator routine has already produced today's pending file, this will post the curated digest. If today's UTC date already exists in the `posted_digests` table, the run exits without posting again. If no pending file exists, the deterministic pipeline runs and posts whatever it generates.
 
 ## Manually triggering a routine
 
@@ -128,7 +131,7 @@ Trigger IDs are in the `[[modelbytes-curator-routines]]` auto-memory file. As of
 
 ## When the curator misses (no `pending/<TODAY>.txt` was pushed)
 
-Railway will fall through to the deterministic pipeline at 16:00 UTC. The channel still gets a post — the template-only version if `MODELBYTES_LLM_KEY` is unset (current Railway state), or an LLM-summarized one if it is. To investigate:
+Railway will fall through to the deterministic pipeline at 16:00 UTC. The channel still gets a post — normally LLM-summarized from the shared Railway fallback variables, or template-only if the LLM env vars are unavailable. To investigate:
 
 1. **Open the curator routine's log** at https://claude.ai/code/routines/trig_017i1diXxpkQYsAL2MFU5yPe — its most recent run's output explains what happened.
 2. **Common causes**:
@@ -137,6 +140,20 @@ Railway will fall through to the deterministic pipeline at 16:00 UTC. The channe
    - The routine ran out of token budget mid-task.
 3. If the issue is transient: trigger the routine manually (see above).
 4. If recurring: tune the prompt or relax the cron timing.
+
+## When source fetches are flaky
+
+All source fetches use a shared retrying HTTP helper. It retries transient `429`, `500`, `502`, `503`, and `504` responses, plus network exceptions, and logs the source name with each retry.
+
+Tuning knobs:
+
+```bash
+MODELBYTES_HTTP_RETRIES=3
+MODELBYTES_HTTP_BACKOFF_SECONDS=1.0
+MODELBYTES_USER_AGENT="ModelBytes/1.0 (+https://github.com/SovereignSignal/modelbytes)"
+```
+
+If one source is failing but the others are healthy, the fetcher logs the error and returns an empty list for that source. The daily post should still proceed from the remaining sources.
 
 ## When the daily-health check FAILs
 
@@ -150,7 +167,7 @@ Most common failure: the cron ran but Telegram returned 401 (dead token). Follow
 
 ## Cleaning up stale `pending/` files
 
-The publisher doesn't currently delete the pending file after posting. To avoid duplicate posts from same-day Railway redeploys (rare but possible), manually clean up:
+The publisher does not delete pending files after posting. Duplicate posts are prevented by the `posted_digests` table, but old pending files can still be cleaned up for repo hygiene:
 
 ```bash
 cd modelbytes
@@ -160,13 +177,13 @@ git commit -m "chore: remove posted pending file"
 git push origin master
 ```
 
-A proper fix (Postgres `posted_dates` table) is on the follow-up list.
+If you intentionally need to repost a date, remove the matching row from `posted_digests` first. Treat that as a production operation: verify the channel state before and after.
 
 ## Decommissioning a routine
 
 To delete a routine: visit https://claude.ai/code/routines, find the routine, delete it. Then update `[[modelbytes-curator-routines]]` to move the entry into a `## Retired` section with the date and reason.
 
-Don't delete `modelbytes-daily-health` until the supervisor has run successfully on 2-3 days — daily-health is the canary that catches things the supervisor might miss.
+Don't delete `modelbytes-daily-health` until the supervisor has run successfully on 2-3 days — daily-health is the canary that catches things the supervisor might miss. When routine prompts are refreshed, health and supervisor outcomes should go to structured storage rather than external note pages.
 
 ## When the v2 loop entirely fails
 
@@ -175,7 +192,7 @@ Worst-case fallback: the cron service is cron-only, so `railway redeploy` doesn'
 1. **From your local machine** (Mac, Linux):
    ```bash
    cd modelbytes && git pull
-   TZ=UTC railway run python3 monitor.py
+   railway run python3 monitor.py
    ```
    This uses Railway env vars (token + DATABASE_URL) but runs Python on your machine. Hits the fast-path if a pending file exists, otherwise runs the deterministic pipeline. Will post to Telegram.
 

@@ -1,0 +1,16 @@
+[Unit]
+Description=Publish the daily ModelBytes digest
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=modelbytes
+Group=modelbytes
+SupplementaryGroups=docker
+WorkingDirectory=/opt/modelbytes
+ExecStartPre=/usr/bin/git pull --ff-only origin master
+ExecStartPre=/usr/bin/docker compose -f /opt/modelbytes/deploy/vm/docker-compose.yml build modelbytes
+ExecStartPre=/usr/bin/docker compose -f /opt/modelbytes/deploy/vm/docker-compose.yml up -d postgres
+ExecStart=/usr/bin/docker compose -f /opt/modelbytes/deploy/vm/docker-compose.yml run --rm modelbytes

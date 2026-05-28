@@ -1,0 +1,29 @@
+name: modelbytes
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    env_file:
+      - /etc/modelbytes/postgres.env
+    volumes:
+      - modelbytes-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-modelbytes} -d $${POSTGRES_DB:-modelbytes}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  modelbytes:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    env_file:
+      - /etc/modelbytes/modelbytes.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  modelbytes-postgres:

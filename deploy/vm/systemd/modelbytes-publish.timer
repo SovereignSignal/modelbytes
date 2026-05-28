@@ -1,0 +1,12 @@
+[Unit]
+Description=Run ModelBytes publisher daily at 16:00 UTC
+
+[Timer]
+OnCalendar=*-*-* 16:00:00
+Timezone=UTC
+Persistent=true
+RandomizedDelaySec=30s
+Unit=modelbytes-publish.service
+
+[Install]
+WantedBy=timers.target

@@ -4,13 +4,15 @@
 Posts new model releases to Telegram @modelbytes channel with tiered, LLM-summarized digest.
 """
 
+import hashlib
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Tuple
 
 import psycopg2
 import requests
@@ -19,6 +21,14 @@ import requests
 # When DATABASE_URL is unset (local dev, --preview mode), state functions
 # degrade gracefully: load returns empty set, save is a no-op.
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+
+HTTP_RETRIES = int(os.environ.get("MODELBYTES_HTTP_RETRIES", "3"))
+HTTP_BACKOFF_SECONDS = float(os.environ.get("MODELBYTES_HTTP_BACKOFF_SECONDS", "1.0"))
+HTTP_USER_AGENT = os.environ.get(
+    "MODELBYTES_USER_AGENT",
+    "ModelBytes/1.0 (+https://github.com/SovereignSignal/modelbytes)",
+)
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 # Telegram
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -127,12 +137,76 @@ class ModelRelease:
     unique_traits: List[str] = None
     downloads: int = 0
     likes: int = 0
+    license: Optional[str] = None
+    total_parameters: Optional[str] = None
+    active_parameters: Optional[str] = None
+    canonical_url: Optional[str] = None
+    confidence: str = "medium"
+    validation_notes: List[str] = None
 
     def __post_init__(self):
         if self.performance_scores is None:
             self.performance_scores = {}
         if self.unique_traits is None:
             self.unique_traits = []
+        if self.validation_notes is None:
+            self.validation_notes = []
+
+
+@dataclass(frozen=True)
+class ModelFact:
+    canonical_name: str
+    aliases: Tuple[str, ...]
+    canonical_url: str
+    release_date: str
+    license: str
+    total_parameters: str
+    active_parameters: Optional[str]
+    confidence: str = "high"
+
+
+KNOWN_MODEL_FACTS: Tuple[ModelFact, ...] = (
+    ModelFact(
+        canonical_name="ZAYA1-8B",
+        aliases=("zaya1-8b", "zyphra/zaya1-8b"),
+        canonical_url="https://www.zyphra.com/post/zaya1-8b",
+        release_date="2026-05-06",
+        license="Apache 2.0",
+        total_parameters="8.4B",
+        active_parameters="760M",
+    ),
+    ModelFact(
+        canonical_name="DeepSeek V4-Pro",
+        aliases=("deepseek v4-pro", "deepseek-v4-pro", "deepseek-ai/deepseek-v4-pro"),
+        canonical_url="https://api-docs.deepseek.com/news/news260424",
+        release_date="2026-04-24",
+        license="MIT",
+        total_parameters="1.6T",
+        active_parameters="49B",
+    ),
+    ModelFact(
+        canonical_name="DeepSeek V4-Flash",
+        aliases=("deepseek v4-flash", "deepseek-v4-flash", "deepseek-ai/deepseek-v4-flash"),
+        canonical_url="https://api-docs.deepseek.com/news/news260424",
+        release_date="2026-04-24",
+        license="MIT",
+        total_parameters="284B",
+        active_parameters="13B",
+    ),
+    ModelFact(
+        canonical_name="Nemotron 3 Nano Omni",
+        aliases=("nemotron 3 nano omni", "nemotron-3-nano-omni"),
+        canonical_url=(
+            "https://developer.nvidia.com/blog/"
+            "nvidia-nemotron-3-nano-omni-powers-multimodal-agent-reasoning-in-a-single-efficient-open-model"
+        ),
+        release_date="2026-04-28",
+        license="NVIDIA Open Model License",
+        total_parameters="30B",
+        active_parameters="3B",
+    ),
+)
+ZAYA_FACT = KNOWN_MODEL_FACTS[0]
 
 
 def init_database():
@@ -162,9 +236,87 @@ def init_database():
                     last_updated TIMESTAMP DEFAULT NOW()
                 )
             """)
+            _ensure_posted_digests_table(cur)
         conn.commit()
     finally:
         conn.close()
+
+
+def _ensure_posted_digests_table(cur):
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS posted_digests (
+            post_date DATE PRIMARY KEY,
+            source VARCHAR(50) NOT NULL,
+            digest_path TEXT,
+            message_hash VARCHAR(64),
+            posted_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+
+
+def init_posted_digest_store() -> bool:
+    """Create the post-idempotency table. Failure should not block posting."""
+    if not DATABASE_URL:
+        return False
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        try:
+            with conn.cursor() as cur:
+                _ensure_posted_digests_table(cur)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"Post idempotency store unavailable: {e}", file=sys.stderr)
+        return False
+
+
+def has_posted_digest(date_str: str) -> bool:
+    """Return True if a digest for this UTC date is already recorded as posted."""
+    if not DATABASE_URL:
+        return False
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM posted_digests WHERE post_date = %s LIMIT 1",
+                    (date_str,),
+                )
+                return cur.fetchone() is not None
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"Could not check posted digest ledger: {e}", file=sys.stderr)
+        return False
+
+
+def mark_posted_digest(date_str: str, source: str, digest_path: str, message: str) -> bool:
+    """Record a successful post for this UTC date. Returns False on best-effort failure."""
+    if not DATABASE_URL:
+        return False
+    message_hash = hashlib.sha256(message.encode("utf-8")).hexdigest() if message else None
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO posted_digests
+                        (post_date, source, digest_path, message_hash)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (post_date) DO NOTHING
+                    """,
+                    (date_str, source, digest_path, message_hash),
+                )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"Could not mark digest posted for {date_str}: {e}", file=sys.stderr)
+        return False
 
 
 def load_seen_models() -> Set[str]:
@@ -223,6 +375,204 @@ def _smart_truncate(text: str, max_len: int = 150) -> str:
     if idx > max_len * 0.3:
         return truncated[:idx].strip()
     return truncated.strip()
+
+
+def _compact_match_text(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
+
+
+def _fact_matches_text(fact: ModelFact, text: str) -> bool:
+    haystack = (text or "").lower()
+    compact = _compact_match_text(text)
+    for alias in fact.aliases:
+        if alias.lower() in haystack or _compact_match_text(alias) in compact:
+            return True
+    return False
+
+
+def _known_fact_for(text: str) -> Optional[ModelFact]:
+    for fact in KNOWN_MODEL_FACTS:
+        if _fact_matches_text(fact, text):
+            return fact
+    return None
+
+
+def _license_from_traits(traits: List[str]) -> Optional[str]:
+    for trait in traits or []:
+        if trait.startswith("license:"):
+            slug = trait.split(":", 1)[1].strip()
+            if slug:
+                return (
+                    slug.replace("-", " ").upper()
+                    if slug.lower() in {"mit"}
+                    else slug.replace("-", " ").title()
+                )
+    return None
+
+
+def enrich_model_metadata(model: ModelRelease) -> ModelRelease:
+    """Attach known canonical facts and confidence without inventing missing specs."""
+    fact = _known_fact_for(model.name)
+    if fact:
+        model.release_date = model.release_date or fact.release_date
+        model.license = model.license or fact.license
+        model.total_parameters = model.total_parameters or fact.total_parameters
+        model.active_parameters = model.active_parameters or fact.active_parameters
+        model.canonical_url = model.canonical_url or fact.canonical_url
+        model.confidence = fact.confidence
+    else:
+        model.license = model.license or _license_from_traits(model.unique_traits)
+        if model.is_open_source is False and not model.license:
+            model.license = "Closed/API"
+        if not model.confidence:
+            model.confidence = "medium"
+
+    notes = []
+    if not model.url and not model.canonical_url:
+        notes.append("missing source URL")
+    if not model.release_date:
+        notes.append("missing release date")
+    if not model.license:
+        notes.append("missing license")
+    if not model.total_parameters:
+        notes.append("unknown total parameters")
+    if not model.active_parameters:
+        notes.append("unknown active parameters")
+    model.validation_notes = notes
+
+    if not (model.url or model.canonical_url) or not model.release_date:
+        model.confidence = "low"
+    elif notes:
+        model.confidence = "medium" if model.confidence != "high" else model.confidence
+    else:
+        model.confidence = "high"
+    return model
+
+
+def prepare_models_for_digest(models: List[ModelRelease]) -> Tuple[List[ModelRelease], List[str]]:
+    prepared = [enrich_model_metadata(m) for m in models]
+    notes = []
+    for model in prepared:
+        if model.validation_notes:
+            notes.append(
+                f"{model.name}: {', '.join(model.validation_notes)} "
+                f"(confidence={model.confidence})"
+            )
+    return prepared, notes
+
+
+def _normalize_known_fact_claims(message: str) -> Tuple[str, List[str]]:
+    """Fix high-confidence factual slips before a pending digest can publish."""
+    corrections = []
+    original = message
+    if _fact_matches_text(ZAYA_FACT, message):
+        message = re.sub(
+            r"\b8(?:\.0)?B\s+active\s+parameters\b",
+            "8.4B total / 760M active parameters",
+            message,
+            flags=re.IGNORECASE,
+        )
+        message = re.sub(
+            r"\b8(?:\.0)?B\s+active\s+params\b",
+            "8.4B total / 760M active params",
+            message,
+            flags=re.IGNORECASE,
+        )
+        message = re.sub(
+            r"\b8(?:\.0)?B\s+active\b",
+            "8.4B total / 760M active",
+            message,
+            flags=re.IGNORECASE,
+        )
+    if message != original:
+        corrections.append("corrected ZAYA1-8B active/total parameter wording")
+    return message, corrections
+
+
+def validate_digest_for_publish(message: str) -> Tuple[str, List[str], List[str]]:
+    """Return normalized message plus warnings/errors for pre-publish QA."""
+    warnings = []
+    errors = []
+    normalized = (message or "").strip()
+    normalized, corrections = _normalize_known_fact_claims(normalized)
+    warnings.extend(corrections)
+
+    if not normalized:
+        errors.append("digest body is empty")
+    if "ModelBytes Digest" not in normalized:
+        warnings.append("digest header is missing")
+    if "models tracked today" not in normalized.lower():
+        warnings.append("tracked-model footer is missing")
+
+    for fact in KNOWN_MODEL_FACTS:
+        if not _fact_matches_text(fact, normalized):
+            continue
+        if fact.canonical_url not in normalized:
+            warnings.append(f"{fact.canonical_name}: canonical source URL missing")
+        if fact.license and fact.license.lower() not in normalized.lower():
+            warnings.append(f"{fact.canonical_name}: license not stated")
+        if fact.total_parameters and fact.total_parameters.lower() not in normalized.lower():
+            warnings.append(f"{fact.canonical_name}: total parameter count not stated")
+        if fact.active_parameters and fact.active_parameters.lower() not in normalized.lower():
+            warnings.append(f"{fact.canonical_name}: active parameter count not stated")
+
+    if _fact_matches_text(ZAYA_FACT, normalized) and re.search(
+        r"\b8(?:\.0)?B\s+active\b",
+        normalized,
+        flags=re.IGNORECASE,
+    ):
+        errors.append("ZAYA1-8B still has an incorrect 8B-active-parameter claim")
+
+    return normalized, warnings, errors
+
+
+def _retry_delay(response, attempt: int) -> float:
+    retry_after = None
+    if response is not None:
+        retry_after = response.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return min(float(retry_after), 30.0)
+        except ValueError:
+            pass
+    return min(HTTP_BACKOFF_SECONDS * attempt, 30.0)
+
+
+def _http_get(url: str, source_name: str, timeout: int = 30, **kwargs):
+    """GET with a consistent user-agent and light retries for flaky source APIs."""
+    attempts = max(1, HTTP_RETRIES)
+    headers = dict(kwargs.pop("headers", {}) or {})
+    headers.setdefault("User-Agent", HTTP_USER_AGENT)
+    headers.setdefault("Accept", "application/json, text/html;q=0.9, */*;q=0.8")
+
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = requests.get(url, timeout=timeout, headers=headers, **kwargs)
+            status = getattr(resp, "status_code", None)
+            if status in RETRYABLE_STATUS_CODES and attempt < attempts:
+                delay = _retry_delay(resp, attempt)
+                print(
+                    f"{source_name} HTTP {status}; retrying "
+                    f"{attempt + 1}/{attempts} in {delay:.1f}s.",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+                continue
+            resp.raise_for_status()
+            return resp
+        except requests.RequestException as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status is not None and status not in RETRYABLE_STATUS_CODES:
+                raise
+            if attempt >= attempts:
+                raise
+            delay = _retry_delay(getattr(e, "response", None), attempt)
+            print(
+                f"{source_name} request failed ({e}); retrying "
+                f"{attempt + 1}/{attempts} in {delay:.1f}s.",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
 
 
 def _format_context(ctx: Optional[int]) -> str:
@@ -379,8 +729,7 @@ def is_significant_release(model_id: str, author: str, tags: list,
 def fetch_openrouter_models() -> List[ModelRelease]:
     models = []
     try:
-        resp = requests.get("https://openrouter.ai/api/v1/models", timeout=30)
-        resp.raise_for_status()
+        resp = _http_get("https://openrouter.ai/api/v1/models", "OpenRouter", timeout=30)
         for m in resp.json().get("data", []):
             model_id = m.get("id", "")
             if not model_id:
@@ -450,8 +799,7 @@ def fetch_ollama_models() -> List[ModelRelease]:
     """Ollama library — currently low signal, fetch lightly."""
     models = []
     try:
-        resp = requests.get("https://ollama.com/library", timeout=30)
-        resp.raise_for_status()
+        resp = _http_get("https://ollama.com/library", "Ollama", timeout=30)
         seen = set()
         for m in re.findall(r'href="/library/([^"]+)"', resp.text):
             if m in seen or m.startswith("."):
@@ -487,10 +835,10 @@ def fetch_org_models(author: str) -> List[ModelRelease]:
     """Fetch models from a specific HF org, sorted by recent."""
     models = []
     try:
-        resp = requests.get(
+        resp = _http_get(
             f"https://huggingface.co/api/models?author={author}&sort=lastModified&direction=-1&limit=10",
+            f"HF org {author}",
             timeout=20)
-        resp.raise_for_status()
         for m in resp.json():
             model_id = m.get("id", "")
             if not model_id:
@@ -538,11 +886,11 @@ def fetch_hf_text_generation() -> List[ModelRelease]:
     """Fetch top HF text-generation models by downloads/likes."""
     models = []
     try:
-        resp = requests.get(
+        resp = _http_get(
             "https://huggingface.co/api/models"
             "?pipeline_tag=text-generation&sort=downloads&direction=-1&limit=30",
+            "HF top text-generation",
             timeout=20)
-        resp.raise_for_status()
         for m in resp.json():
             model_id = m.get("id", "")
             author = m.get("author", "")
@@ -581,8 +929,7 @@ def fetch_huggingface_trending() -> List[ModelRelease]:
     models = []
     try:
         # Try trending first
-        resp = requests.get("https://huggingface.co/api/trending", timeout=30)
-        resp.raise_for_status()
+        resp = _http_get("https://huggingface.co/api/trending", "HF trending", timeout=30)
         for item in resp.json().get("recentlyTrending", []):
             if item.get("repoType") != "model":
                 continue
@@ -625,11 +972,11 @@ def fetch_huggingface_trending() -> List[ModelRelease]:
             ))
 
         # Also fetch recently modified for completeness
-        resp2 = requests.get(
+        resp2 = _http_get(
             "https://huggingface.co/api/models",
+            "HF recent models",
             params={"sort": "lastModified", "direction": -1, "limit": 50},
             timeout=30)
-        resp2.raise_for_status()
         for m in resp2.json():
             model_id = m.get("id", "")
             if not model_id:
@@ -719,6 +1066,7 @@ def build_digest_message(models: List[ModelRelease]) -> str:
     """Build tiered digest message (HTML format)."""
     if not models:
         return "No new models today."
+    models, _ = prepare_models_for_digest(models)
 
     # Deduplicate by base name
     seen = set()
@@ -758,14 +1106,22 @@ def build_digest_message(models: List[ModelRelease]) -> str:
                 specs.append(f"Released: {m.release_date}")
             if m.context_window:
                 specs.append(f"Context: {_format_context(m.context_window)}")
+            if m.license:
+                specs.append(f"License: {m.license}")
+            if m.total_parameters:
+                if m.active_parameters:
+                    specs.append(f"Params: {m.total_parameters} total / {m.active_parameters} active")
+                else:
+                    specs.append(f"Params: {m.total_parameters}")
             if m.pricing_input is not None and m.pricing_input > 0:
                 specs.append(f"${m.pricing_input:.2f}/${m.pricing_output:.2f} per 1M")
             elif m.pricing_input == 0:
                 specs.append("FREE")
             if specs:
                 lines.append(f"  {' | '.join(specs)}")
-            if m.url:
-                lines.append(f"  🔗 {m.url}")
+            link = m.canonical_url or m.url
+            if link:
+                lines.append(f"  🔗 {link}")
             lines.append("")
 
     _section("PREMIER OPEN WEIGHTS", "🔓", tiers["premier_open"])
@@ -791,6 +1147,9 @@ def summarize_models(models: List[ModelRelease]) -> str:
     """Use LLM for concise digest if key available."""
     if not models:
         return "No new models today."
+    models, validation_notes = prepare_models_for_digest(models)
+    for note in validation_notes:
+        print(f"Digest QA: {note}", file=sys.stderr)
 
     seen = set()
     deduped = []
@@ -813,10 +1172,21 @@ def summarize_models(models: List[ModelRelease]) -> str:
             s += f"\nDesc: {_smart_truncate(m.description, 200)}"
         if m.context_window:
             s += f"\nContext: {_format_context(m.context_window)}"
+        if m.license:
+            s += f"\nLicense: {m.license}"
+        if m.total_parameters:
+            s += f"\nTotal params: {m.total_parameters}"
+        if m.active_parameters:
+            s += f"\nActive params: {m.active_parameters}"
+        s += f"\nConfidence: {m.confidence}"
+        if m.validation_notes:
+            s += f"\nUnknowns: {', '.join(m.validation_notes)}"
         if m.pricing_input is not None:
             s += f"\nPricing: {'FREE' if m.pricing_input == 0 else f'${m.pricing_input:.2f}/${m.pricing_output:.2f} per 1M'}"
+        if m.canonical_url:
+            s += f"\nCanonical URL: {m.canonical_url}"
         if m.url:
-            s += f"\nURL: {m.url}"
+            s += f"\nObserved URL: {m.url}"
         info.append(s)
 
     prompt = f"""You are ModelBytes, an AI model tracker. Write a SHORT Telegram digest.
@@ -841,6 +1211,10 @@ RULES:
 - Link as <a href="URL">→ Source</a>
 - 2 sentences max per model
 - SKIP: fine-tunes, ONNX, LoRA, GGUF, embedders, experiments, distilled, personal merges
+- Treat each model's Confidence and Unknowns as pre-publish QA.
+- Only mention release date, license, total params, or active params if explicitly provided below.
+- Do not infer or invent parameter counts, license terms, benchmark numbers, or release dates.
+- If a model is low confidence, skip it unless it is the only item in its section.
 - No filler verbs: explores, reveals, highlights, offering, showcases, demonstrates, unpacks, breaks down, dives into, worth watching, notable, gaining traction
 - HIDE empty sections
 - Deduplicate across platforms
@@ -928,11 +1302,18 @@ def try_post_pending_curated() -> bool:
     """Fast-path: post a pre-curated digest written by the curator routine.
 
     The modelbytes-curator-routine writes pending/<TODAY>.txt to master
-    ~30 minutes before this cron fires. If we find that file, post it
-    verbatim and return True. Otherwise return False so main() falls
-    through to the existing deterministic pipeline.
+    ~30 minutes before this cron fires. If today's post is already recorded,
+    return True. If we find a pending file, post it verbatim, record the date,
+    and return True. Otherwise return False so main() falls through to the
+    existing deterministic pipeline.
     """
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    init_posted_digest_store()
+    if has_posted_digest(today):
+        print(f"Digest for {today} already marked posted -- skipping.")
+        return True
+
     pending_path = Path("pending") / f"{today}.txt"
 
     if not pending_path.exists():
@@ -942,6 +1323,15 @@ def try_post_pending_curated() -> bool:
     if not body:
         print(f"Pending file {pending_path} is empty — falling back to pipeline.")
         return False
+    body, qa_warnings, qa_errors = validate_digest_for_publish(body)
+    for warning in qa_warnings:
+        print(f"Digest QA warning ({pending_path}): {warning}", file=sys.stderr)
+    if qa_errors:
+        print(
+            f"Pending curated digest failed pre-publish QA: {'; '.join(qa_errors)}",
+            file=sys.stderr,
+        )
+        return False
 
     print(f"Pending curated digest found at {pending_path} ({len(body)} chars). Posting.")
     if not send_telegram_post(body):
@@ -949,6 +1339,7 @@ def try_post_pending_curated() -> bool:
               file=sys.stderr)
         return False
 
+    mark_posted_digest(today, "curated", str(pending_path), body)
     print(f"Posted curated digest for {today}.")
     return True
 
@@ -988,7 +1379,7 @@ def main():
 
     print(f"Found {len(all_new)} new model(s)")
 
-    if is_first_run:
+    if is_first_run and not preview_mode:
         print("First run — seeding, no digest sent")
         # Seed all current models so they won't be reported as "new" next time
         for m in all_new:
@@ -1018,6 +1409,15 @@ def main():
                 seen_models.add(m.name)
 
         message = summarize_models(digest_models)
+        message, qa_warnings, qa_errors = validate_digest_for_publish(message)
+        for warning in qa_warnings:
+            print(f"Digest QA warning (fallback): {warning}", file=sys.stderr)
+        if qa_errors:
+            print(
+                f"Fallback digest failed pre-publish QA: {'; '.join(qa_errors)}",
+                file=sys.stderr,
+            )
+            return 1
 
         if preview_mode:
             print("=== PREVIEW ===")
@@ -1028,6 +1428,7 @@ def main():
 
         if not send_telegram_post(message):
             return 1
+        mark_posted_digest(today, "fallback", "", message)
         print("Digest sent")
 
     else:

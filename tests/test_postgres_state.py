@@ -65,3 +65,47 @@ def test_load_seen_models_returns_empty_set_without_database_url():
         result = monitor.load_seen_models()
     assert result == set(), f"expected empty set, got {result!r}"
     assert not mock_connect.called, "load_seen_models tried to connect despite no DATABASE_URL"
+
+
+def test_init_database_creates_posted_digests_table():
+    """init_database must create the post idempotency ledger."""
+    mock_cur, mock_conn = _setup_pg_mocks()
+    with patch.object(monitor, "DATABASE_URL", "postgres://fake"), \
+         patch.object(monitor.psycopg2, "connect", return_value=mock_conn):
+        monitor.init_database()
+
+    sql_strings = _all_sql_issued(mock_cur)
+    assert any("POSTED_DIGESTS" in sql.upper() for sql in sql_strings), (
+        f"init_database did not create posted_digests. SQL issued: {sql_strings}"
+    )
+
+
+def test_has_posted_digest_queries_ledger():
+    """has_posted_digest checks the posted_digests table by UTC date."""
+    mock_cur, mock_conn = _setup_pg_mocks()
+    mock_cur.fetchone.return_value = (1,)
+    with patch.object(monitor, "DATABASE_URL", "postgres://fake"), \
+         patch.object(monitor.psycopg2, "connect", return_value=mock_conn):
+        result = monitor.has_posted_digest("2026-05-21")
+
+    assert result is True
+    sql_strings = _all_sql_issued(mock_cur)
+    assert any("FROM POSTED_DIGESTS" in sql.upper() for sql in sql_strings)
+
+
+def test_mark_posted_digest_upserts_ledger():
+    """mark_posted_digest records date/source/path/hash without overwriting."""
+    mock_cur, mock_conn = _setup_pg_mocks()
+    with patch.object(monitor, "DATABASE_URL", "postgres://fake"), \
+         patch.object(monitor.psycopg2, "connect", return_value=mock_conn):
+        result = monitor.mark_posted_digest(
+            "2026-05-21",
+            "curated",
+            "pending/2026-05-21.txt",
+            "hello",
+        )
+
+    assert result is True
+    sql_strings = _all_sql_issued(mock_cur)
+    assert any("INSERT INTO POSTED_DIGESTS" in sql.upper() for sql in sql_strings)
+    assert any("ON CONFLICT" in sql.upper() for sql in sql_strings)

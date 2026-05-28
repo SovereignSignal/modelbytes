@@ -1,6 +1,6 @@
 # ModelBytes Architecture
 
-This document describes how ModelBytes works end-to-end as of v2 (2026-05-21). For runbook-style operations (token rotation, supervisor pause/resume, manual triggers), see [`operations.md`](./operations.md). For the audit-fix history that got us here, see the plan files in `docs/superpowers/plans/`.
+This document describes how ModelBytes works end-to-end as of v2 (2026-05-21). For runbook-style operations (token rotation, supervisor pause/resume, manual triggers), see [`operations.md`](./operations.md). For the self-managed VM deployment path, see [`vm-deployment.md`](./vm-deployment.md). For the audit-fix history that got us here, see the plan files in `docs/superpowers/plans/`.
 
 ## What ModelBytes is
 
@@ -10,13 +10,13 @@ A daily curated digest of new AI model releases, posted to the public Telegram c
 
 **Deterministic core** — `monitor.py` in the repo root. Fetches sources, applies the heuristic filter pipeline (`is_noise_model` / `is_significant_release` / `categorize_model`), dedupes against Postgres, and posts to Telegram. This is the safety net — it must keep posting even when the Claude layer is unavailable.
 
-**Claude layer** — a set of scheduled routines on Claude.ai (no Anthropic API costs; uses the existing subscription via the Anthropic-hosted CCR environment) that handle editorial taste, growth, and observability:
+**Claude layer** — a set of scheduled routines on Claude.ai (no Anthropic API costs; uses the existing subscription via the Anthropic-hosted CCR environment) that handle editorial taste, growth, and health checks:
 
 | Routine | Cadence | Role |
 |---|---|---|
 | `modelbytes-curator-routine` | Daily 15:30 UTC | Generates the day's editorial digest with taste. Writes `pending/<TODAY>.txt` to master. Replaces the previous OpenAI gpt-4o-mini summarization step. |
 | `modelbytes-supervisor-routine` | Daily 14:00 UTC | Audits production state + grows the system organically. Auto-commits list additions (KNOWN_ORGS, PROVIDER_NAMES, etc.) when bootstrapped; opens PRs for logic changes; opens issues for ambiguous calls. |
-| `modelbytes-daily-health` | Daily 17:00 UTC | Verifies the day's post landed and looks sane. Logs to Notion; opens GH issue on FAIL. |
+| `modelbytes-daily-health` | Daily 17:00 UTC | Verifies the day's post landed and looks sane. Should record structured health state and open GH issue on FAIL. |
 | `modelbytes-pr-curator` | Hourly | Auto-reviews any open PR that lacks a `🤖 Curator review:` comment. |
 
 Routine IDs and URLs live in the auto-memory file `modelbytes-curator-routines.md`. Manage them at https://claude.ai/code/routines.
@@ -28,7 +28,7 @@ Routine IDs and URLs live in the auto-memory file `modelbytes-curator-routines.m
             ├── audit recent posts, fetched data, GitHub issues
             ├── identify growth candidates (orgs/families) + drift indicators
             ├── if .supervisor-bootstrapped on master: auto-commit top 3 list additions
-            └── log to Notion "ModelBytes Supervisor Log"
+            └── record structured supervisor outcome
 
 15:30 UTC   modelbytes-curator-routine
             ├── fetch sources (OpenRouter / Ollama / HuggingFace)
@@ -39,14 +39,17 @@ Routine IDs and URLs live in the auto-memory file `modelbytes-curator-routines.m
 
 16:00 UTC   Railway cron
             ├── monitor.py runs
+            ├── ensure posted_digests exists for duplicate-post protection
+            ├── if posted_digests already has today: exit 0
             ├── try_post_pending_curated() → reads pending/<TODAY>.txt
-            ├── if file exists: post verbatim to Telegram, exit 0
+            ├── run pre-publish factual QA / known-fact normalization
+            ├── if file exists: post verbatim, record posted_digests, exit 0
             └── if missing: fall through to deterministic monitor.py pipeline
 
 17:00 UTC   modelbytes-daily-health
             ├── fetch t.me/s/ModelBytes, find today's post
             ├── verify timestamp ~16:00 UTC, header + footer + non-empty body
-            └── log status (PASS/WARN/FAIL) to Notion; GH issue on FAIL
+            └── record PASS/WARN/FAIL; GH issue on FAIL
 
 Hourly      modelbytes-pr-curator
             └── review any open PR without a curator review comment
@@ -57,12 +60,16 @@ Hourly      modelbytes-pr-curator
 The curator routine and the Railway publisher don't talk directly. They communicate via a file in the repo:
 
 - Curator writes `pending/YYYY-MM-DD.txt` (UTC date) containing Telegram-ready HTML — `<b>`, `<i>`, `<a href>` only.
-- Railway's `monitor.py::try_post_pending_curated()` reads it. If present and non-empty, posts verbatim and exits.
-- If absent (curator failed or didn't run), `monitor.py` falls back to its deterministic pipeline (fetch → filter → categorize → `summarize_models()` via `gpt-4o-mini` → post).
+- Railway's `monitor.py::try_post_pending_curated()` first checks Postgres `posted_digests`. If today's date is already marked posted, it exits without sending anything.
+- If today's pending file is present and non-empty, Railway posts it verbatim, records the date in `posted_digests`, and exits.
+- Before any curated or fallback digest is posted, `monitor.py::validate_digest_for_publish()` runs a lightweight factual QA pass. It normalizes high-confidence known facts (for example, ZAYA1-8B is 8.4B total / ~760M active, not "8B active"), warns when canonical source/license/parameter metadata is missing, and blocks only severe publish errors such as an empty body or a known-bad fact that remains after normalization.
+- If absent (curator failed or didn't run), `monitor.py` falls back to its deterministic pipeline (fetch → filter → categorize → `summarize_models()` via `gpt-4o-mini` → post). A successful fallback post also records today's date in `posted_digests`.
 
 **Why this pattern**: claude.ai routines fire on cron, not on-demand. Inline Anthropic API calls from Railway would cost money. File handoff via the repo gets us "Claude-curated content in production" using only the Claude.ai subscription quota — at the cost of a 30-minute time gap (curator runs at 15:30, post is at 16:00).
 
-**What the fallback looks like**: when no `pending/<TODAY>.txt` exists, `monitor.py` runs its full pipeline. The pipeline's final step is `summarize_models()`, which calls an OpenAI-compatible API to write the digest body. The API endpoint and key are configured by `MODELBYTES_LLM_KEY` / `MODELBYTES_LLM_MODEL` / `MODELBYTES_LLM_URL` env vars (see README). If `MODELBYTES_LLM_KEY` (and its `OPENAI_API_KEY` / `OPENROUTER_API_KEY` fallbacks) are unset — which is the case on Railway today — `summarize_models()` returns early and the deterministic template-only `build_digest_message()` runs instead. Same output format as a curated digest (tier headers, model entries, link, footer), without the editorial blurbs. The channel stays alive; the post is just less interesting that day.
+**Duplicate protection**: `posted_digests` is the source of truth for whether a UTC date has already posted. This means same-day Railway redeploys, manual re-runs, and stale pending files do not post twice once the first successful send has been recorded. If Postgres is temporarily unavailable, the curated fast-path still tries to post so the channel does not go dark, but the log will say the idempotency ledger could not be checked or written.
+
+**What the fallback looks like**: when no `pending/<TODAY>.txt` exists, `monitor.py` runs its full pipeline. The pipeline's final step is `summarize_models()`, which calls an OpenAI-compatible API to write the digest body. The API endpoint and key are configured by `MODELBYTES_LLM_KEY` / `MODELBYTES_LLM_MODEL` / `MODELBYTES_LLM_URL`, with `OPENAI_API_KEY` and `OPENROUTER_API_KEY` as key fallbacks (see README). Railway production currently has shared OpenAI-compatible fallback variables configured, so fallback days should produce LLM-written digests. If those variables are removed or fail, `summarize_models()` returns early and the deterministic template-only `build_digest_message()` runs instead. Same output format as a curated digest (tier headers, model entries, link, footer), without the editorial blurbs.
 
 ## The supervisor bootstrap gate
 
@@ -89,24 +96,33 @@ The curator routine's prompt has its own narrower authority — it can drop / re
 
 ## Storage
 
-- **PostgreSQL** (Railway-provided) — the `models` table holds the dedup set used by `monitor.py`'s fallback path. `load_seen_models()` / `save_seen_models()` use `INSERT … ON CONFLICT DO NOTHING` (no DELETE-and-rebuild — that was an audit A5 fix in Phase 2b).
+- **PostgreSQL** — the `models` table holds the dedup set used by `monitor.py`'s fallback path. `load_seen_models()` / `save_seen_models()` use `INSERT … ON CONFLICT DO NOTHING` (no DELETE-and-rebuild — that was an audit A5 fix in Phase 2b). The `posted_digests` table records one row per posted UTC date so publisher reruns are idempotent. Future operational records should also land here as structured tables.
 - **GitHub master** — pending and committed config state. The curator's daily output lives at `pending/<TODAY>.txt`. The supervisor's commits to monitor.py's constants accumulate over time. The `.supervisor-bootstrapped` marker controls supervisor authority.
-- **Notion** — observability log surfaces. "ModelBytes Daily Health Log" (one line/day, append-only); "ModelBytes Supervisor Log" (one section/day, append-only).
+
+## Structured Operational Data
+
+The production design should keep durable operational state in Postgres, not scattered external notes. Current implemented tables:
+
+- `models` — deduplication memory for fetched model IDs.
+- `posted_digests` — one row per posted UTC date for idempotency.
+
+Recommended next tables are described in [`structured-data.md`](./structured-data.md): publish runs, per-source fetch summaries, health checks, supervisor decisions, and source candidates. The Claude routine prompts should be updated to write or propose changes against those structured records rather than external note pages.
 
 ## Sources
 
-- **OpenRouter** (`https://openrouter.ai/api/v1/models`) — 400+ models with pricing + descriptions
+- **OpenRouter** (`https://openrouter.ai/api/v1/models`) — model API catalog with pricing + descriptions
 - **Ollama** (`https://ollama.com/library`) — local LLM availability
 - **HuggingFace** (`https://huggingface.co/api/*`) — trending + per-org listings + top text-generation
 
-Public APIs, no authentication required (HF may rate-limit anonymous traffic; that's been on the audit watchlist but hasn't bitten production yet).
+All source fetches go through `monitor.py::_http_get()`, which sends a stable ModelBytes user agent and retries transient 429/5xx failures. Tuning knobs: `MODELBYTES_HTTP_RETRIES`, `MODELBYTES_HTTP_BACKOFF_SECONDS`, and `MODELBYTES_USER_AGENT`.
+
+Public APIs, no authentication required (HF may rate-limit anonymous traffic; now retryable and visible in logs). For the growth rubric and candidate pipeline, see [`source-growth.md`](./source-growth.md); for the working queue, see [`source-candidates.md`](./source-candidates.md).
 
 ## Known follow-ups (not blocking)
 
-- **TZ bug in `try_post_pending_curated()`**: uses naive `datetime.now()`. Works on Railway (UTC container) but mis-dates the lookup on non-UTC dev machines. Fix: `datetime.now(timezone.utc)`.
-- **Idempotency on the fast-path**: if Railway redeploys after the cron has fired (and the pending file is still on master), the next run will re-read + re-post. Fix candidate: Postgres `posted_dates` table or have publisher commit the file deletion back to master.
-- **`categorize_model` tests** — audit B13's golden-fixture tests were deferred. The PR curator flagged this in its review of PR #8 (grok-4 fix had no test guarding the new behavior). Worth picking up alongside any future filter-pipeline work.
-- **Filter-list consolidation (audit A12)** — `KNOWN_ORGS`, `MAJOR_HF_ORGS`, `PROVIDER_NAMES`, `significant_families`, and the `categorize_model` tier lists overlap and drift. Consolidation needs golden tests as a safety net first.
+- **Broader filter golden tests** — `categorize_model` has regression coverage now, but `is_noise_model()` and `is_significant_release()` still need fixture-based tests before larger taxonomy changes.
+- **Filter-list consolidation (audit A12)** — `KNOWN_ORGS`, `MAJOR_HF_ORGS`, `PROVIDER_NAMES`, `significant_families`, and the `categorize_model` tier lists overlap and drift. Consolidation needs the broader golden tests first.
+- **Source growth loop** — the source expansion rubric and candidate queue exist, but the supervisor prompt still needs to be updated to use them automatically.
 
 ## How v2 got here
 

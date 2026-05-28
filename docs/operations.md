@@ -14,6 +14,12 @@ Day-to-day operational tasks for ModelBytes. For the design behind these mechani
 
 A clean day looks like: 1 post at 16:00 UTC in the channel, today's UTC date present in `posted_digests`, health check PASS once structured health records exist, and no new GitHub issues with the `health-incident` or `supervisor-drift` labels.
 
+## Pre-publish factual QA
+
+Every digest passes through `monitor.py::validate_digest_for_publish()` immediately before Telegram send. The QA pass is intentionally small and deterministic: it fixes known high-confidence fact slips, logs warnings for missing canonical source/license/parameter metadata, and blocks only severe errors that would make a post unsafe or empty.
+
+When adding a model that the curator may mention repeatedly, add a `ModelFact` entry in `monitor.py` with canonical URL, release date, license, total parameters, active parameters, and confidence. The fallback LLM prompt receives those fields and is explicitly told not to invent missing facts.
+
 ## Pausing the supervisor's autonomy
 
 If the supervisor starts proposing bad additions (or proactively, before a risky period like an upcoming release window), revoke its auto-commit authority:

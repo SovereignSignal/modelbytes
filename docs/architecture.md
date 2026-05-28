@@ -42,6 +42,7 @@ Routine IDs and URLs live in the auto-memory file `modelbytes-curator-routines.m
             ├── ensure posted_digests exists for duplicate-post protection
             ├── if posted_digests already has today: exit 0
             ├── try_post_pending_curated() → reads pending/<TODAY>.txt
+            ├── run pre-publish factual QA / known-fact normalization
             ├── if file exists: post verbatim, record posted_digests, exit 0
             └── if missing: fall through to deterministic monitor.py pipeline
 
@@ -61,6 +62,7 @@ The curator routine and the Railway publisher don't talk directly. They communic
 - Curator writes `pending/YYYY-MM-DD.txt` (UTC date) containing Telegram-ready HTML — `<b>`, `<i>`, `<a href>` only.
 - Railway's `monitor.py::try_post_pending_curated()` first checks Postgres `posted_digests`. If today's date is already marked posted, it exits without sending anything.
 - If today's pending file is present and non-empty, Railway posts it verbatim, records the date in `posted_digests`, and exits.
+- Before any curated or fallback digest is posted, `monitor.py::validate_digest_for_publish()` runs a lightweight factual QA pass. It normalizes high-confidence known facts (for example, ZAYA1-8B is 8.4B total / ~760M active, not "8B active"), warns when canonical source/license/parameter metadata is missing, and blocks only severe publish errors such as an empty body or a known-bad fact that remains after normalization.
 - If absent (curator failed or didn't run), `monitor.py` falls back to its deterministic pipeline (fetch → filter → categorize → `summarize_models()` via `gpt-4o-mini` → post). A successful fallback post also records today's date in `posted_digests`.
 
 **Why this pattern**: claude.ai routines fire on cron, not on-demand. Inline Anthropic API calls from Railway would cost money. File handoff via the repo gets us "Claude-curated content in production" using only the Claude.ai subscription quota — at the cost of a 30-minute time gap (curator runs at 15:30, post is at 16:00).

@@ -32,7 +32,7 @@ def test_try_post_pending_returns_false_when_no_file(tmp_path, monkeypatch):
 def test_try_post_pending_posts_when_file_exists(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "pending").mkdir()
-    today = monitor.datetime.now().strftime("%Y-%m-%d")
+    today = monitor.datetime.now(monitor.timezone.utc).strftime("%Y-%m-%d")
     body = "🤖 ModelBytes Digest test body\n\n3 models tracked today"
     _write_pending(tmp_path, today, body)
 
@@ -51,7 +51,7 @@ def test_try_post_pending_posts_when_file_exists(tmp_path, monkeypatch):
 def test_try_post_pending_skips_empty_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "pending").mkdir()
-    today = monitor.datetime.now().strftime("%Y-%m-%d")
+    today = monitor.datetime.now(monitor.timezone.utc).strftime("%Y-%m-%d")
     _write_pending(tmp_path, today, "")
 
     monkeypatch.setattr(monitor, "send_telegram_post", lambda msg: True)
@@ -64,7 +64,7 @@ def test_try_post_pending_returns_false_when_send_fails(tmp_path, monkeypatch):
     """If Telegram send fails, return False so fallback can try."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "pending").mkdir()
-    today = monitor.datetime.now().strftime("%Y-%m-%d")
+    today = monitor.datetime.now(monitor.timezone.utc).strftime("%Y-%m-%d")
     _write_pending(tmp_path, today, "🤖 ModelBytes Digest test")
 
     monkeypatch.setattr(monitor, "send_telegram_post", lambda msg: False)
@@ -76,7 +76,7 @@ def test_try_post_pending_returns_false_when_send_fails(tmp_path, monkeypatch):
 def test_try_post_pending_skips_when_date_already_marked(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "pending").mkdir()
-    today = monitor.datetime.now().strftime("%Y-%m-%d")
+    today = monitor.datetime.now(monitor.timezone.utc).strftime("%Y-%m-%d")
     _write_pending(tmp_path, today, "🤖 ModelBytes Digest test")
 
     sent = []
@@ -92,7 +92,7 @@ def test_try_post_pending_skips_when_date_already_marked(tmp_path, monkeypatch):
 def test_try_post_pending_marks_date_after_success(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "pending").mkdir()
-    today = monitor.datetime.now().strftime("%Y-%m-%d")
+    today = monitor.datetime.now(monitor.timezone.utc).strftime("%Y-%m-%d")
     body = "🤖 ModelBytes Digest test"
     _write_pending(tmp_path, today, body)
 

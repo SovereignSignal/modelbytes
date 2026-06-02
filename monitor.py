@@ -1253,6 +1253,7 @@ Models:
 
 
 TELEGRAM_MAX_CHARS = 4096
+DIGEST_LIMIT = 15  # max models included in one daily digest
 
 
 def _truncate_for_telegram(message: str, limit: int = TELEGRAM_MAX_CHARS) -> str:
@@ -1393,19 +1394,38 @@ def main():
     # orgs with diverging display names (tencentarc/"Tencent ARC", allenai/"AI2")
     # fall into the unknown-org engagement gate and get filtered as noise.
     # Removing the broken pass; the fetcher-level filter is sufficient. (audit A11)
-    significant = list(all_new) if all_new else []
     if all_new:
-        digest_models = significant[:15]
-        print(f"Filtered to {len(digest_models)} significant model(s)")
+        def _author(m):
+            return m.name.split("/")[0].lower() if "/" in m.name else ""
 
-        # Mark posted models as seen so they don't re-appear
+        def _significant(m):
+            return is_significant_release(
+                m.name, _author(m), m.unique_traits or [], m.downloads or 0
+            )
+
+        # Rank by significance, then engagement, so the daily cap keeps the
+        # most important releases rather than whichever source was fetched first.
+        ranked = sorted(
+            all_new,
+            key=lambda m: (1 if _significant(m) else 0, m.downloads or 0, m.likes or 0),
+            reverse=True,
+        )
+        digest_models = ranked[:DIGEST_LIMIT]
+        held = ranked[DIGEST_LIMIT:]
+        print(
+            f"Posting top {len(digest_models)} of {len(all_new)} new model(s)"
+            + (f"; {len(held)} held for a later run" if held else "")
+        )
+
+        # Mark posted models as seen so they don't re-appear.
         for m in digest_models:
             seen_models.add(m.name)
-
-        # When a large batch is found, also mark noise models as seen
-        # to avoid re-scanning hundreds of unknown org repos every run
-        if len(all_new) > 10:
-            for m in all_new:
+        # For the overflow, mark ONLY confirmed-insignificant models as seen so
+        # we don't re-scan noise every run -- but keep significant-but-unposted
+        # models UNSEEN so a busy-day overflow (or a model gaining traction)
+        # surfaces on a later run instead of being silently dropped.
+        for m in held:
+            if not _significant(m):
                 seen_models.add(m.name)
 
         message = summarize_models(digest_models)

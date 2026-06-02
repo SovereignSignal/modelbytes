@@ -1428,7 +1428,15 @@ def main():
 
         if not send_telegram_post(message):
             return 1
-        mark_posted_digest(today, "fallback", "", message)
+        # Record what we published so the Slack review report (which reads
+        # pending/<today>.txt) reflects the latest digest instead of a stale file.
+        # Safe re-post-wise: the posted_digests ledger short-circuits any rerun.
+        pending_path = Path("pending") / f"{today}.txt"
+        try:
+            pending_path.write_text(message, encoding="utf-8")
+        except OSError as exc:
+            print(f"Could not record published digest to {pending_path}: {exc}", file=sys.stderr)
+        mark_posted_digest(today, "fallback", str(pending_path), message)
         print("Digest sent")
 
     else:

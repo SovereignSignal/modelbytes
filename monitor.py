@@ -1219,7 +1219,7 @@ RULES:
 - HIDE empty sections
 - Deduplicate across platforms
 - MAX 2800 chars
-- End: "X models tracked today"
+- Do NOT write a totals/count line; it is appended automatically.
 - Technical and direct, no hype
 
 Models:
@@ -1245,8 +1245,12 @@ Models:
                              json=payload, headers=headers, timeout=60)
         resp.raise_for_status()
         summary = resp.json()["choices"][0]["message"]["content"].strip()
+        # The model is unreliable at filling the count (it echoes the literal
+        # "X"); strip any footer it emitted and append a deterministic one.
+        summary = re.sub(r"(?im)^\s*(?:total:\s*)?[\dx]+\s+models tracked today\s*$", "", summary).rstrip()
         header = f"🤖 <b>ModelBytes Digest</b>\n<i>{datetime.now(timezone.utc).strftime('%A, %B %d, %Y')}</i>"
-        return f"{header}\n\n{summary}"
+        footer = f"Total: {len(models)} models tracked today"
+        return f"{header}\n\n{summary}\n\n{footer}"
     except Exception as e:
         print(f"LLM failed: {e} — falling back to template")
         return build_digest_message(models)

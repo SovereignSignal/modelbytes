@@ -11,6 +11,7 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
@@ -33,6 +34,12 @@ RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 # Telegram
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID", "")
+
+# Slack mirror (optional). When both are set, each published digest is also
+# posted to this Slack channel. Unset = Telegram-only (no-op), so this is safe
+# to ship dormant and activate later by adding the env vars.
+SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
+MODELBYTES_SLACK_CHANNEL_ID = os.environ.get("MODELBYTES_SLACK_CHANNEL_ID", "")
 
 # LLM Summarization
 LLM_API_KEY = os.environ.get("MODELBYTES_LLM_KEY",
@@ -1341,6 +1348,113 @@ def send_telegram_post(message: str) -> bool:
         return False
 
 
+class _SlackMrkdwnConverter(HTMLParser):
+    """Convert the small Telegram-HTML subset we emit (<b>, <i>, <a href>,
+    <code>) into Slack mrkdwn: *bold*, _italic_, <url|label>, preserving line
+    breaks. Mirrors the content-engine converter so Slack rendering is identical.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: List[str] = []
+        self._in_link = False
+        self._href = ""
+        self._link_text: List[str] = []
+
+    @staticmethod
+    def _esc(text: str) -> str:
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("b", "strong"):
+            self.parts.append("*")
+        elif tag in ("i", "em"):
+            self.parts.append("_")
+        elif tag in ("code", "pre"):
+            self.parts.append("`")
+        elif tag == "br":
+            self.parts.append("\n")
+        elif tag == "a":
+            self._in_link = True
+            self._href = dict(attrs).get("href", "") or ""
+            self._link_text = []
+
+    def handle_endtag(self, tag):
+        if tag in ("b", "strong"):
+            self.parts.append("*")
+        elif tag in ("i", "em"):
+            self.parts.append("_")
+        elif tag in ("code", "pre"):
+            self.parts.append("`")
+        elif tag == "a":
+            label = "".join(self._link_text).strip()
+            href = self._href.strip()
+            if href and label:
+                self.parts.append(f"<{href}|{self._esc(label).replace('|', '/')}>")
+            elif href:
+                self.parts.append(f"<{href}>")
+            else:
+                self.parts.append(self._esc(label))
+            self._in_link = False
+            self._href = ""
+            self._link_text = []
+
+    def handle_data(self, data):
+        if self._in_link:
+            self._link_text.append(data)
+        else:
+            self.parts.append(self._esc(data))
+
+    def result(self) -> str:
+        return "".join(self.parts)
+
+
+def _telegram_html_to_slack_mrkdwn(value: str) -> str:
+    parser = _SlackMrkdwnConverter()
+    parser.feed(value)
+    text = parser.result()
+    text = "\n".join(line.rstrip() for line in text.splitlines())
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def send_slack_post(message: str) -> bool:
+    """Mirror a published digest to Slack via chat.postMessage.
+
+    No-op (returns False) unless both SLACK_BOT_TOKEN and
+    MODELBYTES_SLACK_CHANNEL_ID are configured, so Telegram-only deploys are
+    unaffected. Failures are logged but never abort the publish (Telegram is
+    the primary channel).
+    """
+    if not SLACK_BOT_TOKEN or not MODELBYTES_SLACK_CHANNEL_ID:
+        print("Slack not configured — skipping Slack mirror", file=sys.stderr)
+        return False
+    text = _telegram_html_to_slack_mrkdwn(message)
+    try:
+        resp = requests.post(
+            "https://slack.com/api/chat.postMessage",
+            headers={
+                "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
+                "Content-Type": "application/json; charset=utf-8",
+            },
+            json={
+                "channel": MODELBYTES_SLACK_CHANNEL_ID,
+                "text": text[:39000],
+                "unfurl_links": False,
+                "unfurl_media": False,
+            },
+            timeout=30,
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            print(f"Slack error: {data.get('error', resp.text[:300])}", file=sys.stderr)
+            return False
+        print("Mirrored digest to Slack.", file=sys.stderr)
+        return True
+    except Exception as e:
+        print(f"Slack send error: {e}", file=sys.stderr)
+        return False
+
+
 def try_post_pending_curated() -> bool:
     """Fast-path: post a pre-curated digest written by the curator routine.
 
@@ -1383,6 +1497,7 @@ def try_post_pending_curated() -> bool:
         return False
 
     mark_posted_digest(today, "curated", str(pending_path), body)
+    send_slack_post(body)  # mirror to Slack (no-op unless configured)
     print(f"Posted curated digest for {today}.")
     return True
 
@@ -1499,6 +1614,7 @@ def main():
         except OSError as exc:
             print(f"Could not record published digest to {pending_path}: {exc}", file=sys.stderr)
         mark_posted_digest(today, "fallback", str(pending_path), message)
+        send_slack_post(message)  # mirror to Slack (no-op unless configured)
         print("Digest sent")
 
     else:

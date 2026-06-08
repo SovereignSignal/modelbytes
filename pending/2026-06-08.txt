@@ -1,0 +1,23 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Monday, June 08, 2026</i>
+
+<i>US labs closed the open-weight gap this week: a 550B hybrid mamba-transformer from NVIDIA, a 16GB multimodal from Google, and a coding-SotA closed model from Anthropic all landed in five days.</i>
+
+━━━ <b>PREMIER OPEN</b> 🔓
+<b>NVIDIA Nemotron 3 Ultra 550B A55B</b> — Released Jun 4. Hybrid LatentMoE with interleaved Mamba-2 and MoE attention layers: 550B total, 55B active per token, 1M-token context. Scores 48 on the Artificial Analysis Intelligence Index — highest for any US open-weight model. Vendor benchmarks: 71.9% SWE-Bench Verified, 56.4% Terminal Bench 2.1, 570.0 on IOI 2025. Four checkpoints on HuggingFace (BF16 instruct, BF16 base, NVFP4, GenRM); also live on OpenRouter and NVIDIA NIM. OpenMDW-1.1 license, 10 languages supported. <a href="https://huggingface.co/collections/nvidia/nvidia-nemotron-v3">→ HuggingFace</a>
+
+━━━ <b>CLOSED GIANTS</b> 🔒
+<b>Claude Opus 4.8</b> — Released May 28 (Anthropic). Dynamic Workflows: Claude Code can now run hundreds of parallel subagents within a single session. 88.6% SWE-bench Verified, 74.6% Terminal-Bench 2.1. Standard API: $5/$25 per 1M in/out; Fast Mode: $10/$50. 1M-token context. Available on Anthropic API (claude-opus-4-8), Bedrock, Vertex AI, and GitHub Copilot. <a href="https://www.anthropic.com/claude/opus">→ Anthropic</a>
+
+<b>Qwen3.7-Plus</b> — GA Jun 2 (Alibaba). Proprietary multimodal agent: text, image, and video input; 1M-token context; 65K output tokens. Priced at $0.40/$1.60 per 1M tokens — roughly one-sixth the price of Qwen3.7-Max. 79.0 ScreenSpot Pro (vs. GPT-5.4's 67.4), 81.0 AndroidWorld, 70.3 Terminal Bench 2.0. Served via Alibaba Dashscope as qwen3.7-plus. <a href="https://qwen.ai/blog?id=qwen3.7">→ Qwen Blog</a>
+
+━━━ <b>MULTIMODAL</b> 🎨
+<b>Gemma 4 12B</b> — Released Jun 3 (Google DeepMind). Encoder-free architecture: vision and audio route directly into the LLM backbone, bypassing heavy encoder stages. First mid-sized Gemma with native audio input. Apache 2.0, 12B params, 256K context. 77.2% MMLU Pro, 94.9% DocVQA. Fits 16GB VRAM. <a href="https://huggingface.co/google/gemma-4-12B">→ HuggingFace</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+<b>NVIDIA Cosmos 3</b> — Released Jun 1. Physical AI world model: two-tower Mixture-of-Transformers unifying vision reasoning, world generation, and action prediction in a single forward pass. Trained on 20T multimodal tokens (video, images, audio, text, human and robot action data). Ships as Cosmos 3 Super (physics accuracy) and Cosmos 3 Nano (sub-second inference). Designed for robotic and autonomous-vehicle synthetic data pipelines. OpenMDW-1.1 license. <a href="https://nvidianews.nvidia.com/news/nvidia-launches-cosmos-3-the-open-frontier-foundation-model-for-physical-ai">→ NVIDIA Newsroom</a>
+
+━━━ <b>LOCAL READY</b> 🏠
+• <b>Gemma 4 12B</b> — Apache 2.0, 12B params, 16GB VRAM, native audio + vision input; Kaggle and HuggingFace <a href="https://huggingface.co/google/gemma-4-12B">→ HuggingFace</a>
+
+Total: 5 models tracked today

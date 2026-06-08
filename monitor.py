@@ -501,7 +501,8 @@ def validate_digest_for_publish(message: str) -> Tuple[str, List[str], List[str]
         errors.append("digest body is empty")
     if "ModelBytes Digest" not in normalized:
         warnings.append("digest header is missing")
-    if "models tracked today" not in normalized.lower():
+    _lower = normalized.lower()
+    if "models tracked today" not in _lower and "scanned" not in _lower:
         warnings.append("tracked-model footer is missing")
 
     for fact in KNOWN_MODEL_FACTS:
@@ -607,6 +608,11 @@ def is_noise_model(model_id: str, author: str, tags: list,
             "_length", "stella", "text2sql", "_calculator",
             "_seed", "_bs", "_epoch", "_step", "_checkpoint",
             "-finetuned", "-finetune", "_finetuned",
+            # RL / preference / SFT training variants — these are derivative
+            # artifacts of a base model, not standalone releases. Filter them
+            # even from KNOWN_ORGS (e.g. open-thoughts/...-SFT-100K variant spam).
+            "-sft", "_sft", "-dpo", "_dpo", "-grpo", "_grpo",
+            "-orpo", "-kto", "-rlhf", "-ppo", "_ppo", "-rlaif",
             "-classifier", "_classifier",
             "-email-", "-spam-", "-sentiment-",
             "_micn_", "_lr", "-bsz", "_bsz",
@@ -1121,7 +1127,7 @@ def build_digest_message(models: List[ModelRelease]) -> str:
                 lines.append(f"  {' | '.join(specs)}")
             link = m.canonical_url or m.url
             if link:
-                lines.append(f"  🔗 {link}")
+                lines.append(f'  <a href="{link}">→ Source</a>')
             lines.append("")
 
     _section("PREMIER OPEN WEIGHTS", "🔓", tiers["premier_open"])
@@ -1133,7 +1139,12 @@ def build_digest_message(models: List[ModelRelease]) -> str:
     if tiers["other"]:
         lines.extend(["", "━━━ <b>ALSO TRACKED</b>", ""])
         for m in tiers["other"][:10]:
-            lines.append(f"  • {m.name.split('/')[-1]} ({m.source})")
+            name = m.name.split('/')[-1]
+            link = m.canonical_url or m.url
+            if link:
+                lines.append(f'  • <a href="{link}">{name}</a> ({m.source})')
+            else:
+                lines.append(f"  • {name} ({m.source})")
         if len(tiers["other"]) > 10:
             lines.append(f"  …and {len(tiers['other']) - 10} more")
         lines.append("")
@@ -1141,6 +1152,23 @@ def build_digest_message(models: List[ModelRelease]) -> str:
     total = len(models)
     lines.extend(["", f"Total: {total} models tracked today"])
     return "\n".join(lines)
+
+
+def _count_surfaced_models(summary: str) -> int:
+    """Count model entries actually rendered in an LLM digest body.
+
+    Entries are bold-name lines followed by an em-dash/hyphen
+    ("<b>Name</b> — ...") plus Local Ready bullets ("• ..."). Tier headers
+    like "<b>🔓 Premier Open</b>" have no trailing dash and are not counted.
+    """
+    count = 0
+    for raw in summary.splitlines():
+        line = raw.strip()
+        if re.match(r"^<b>[^<]+</b>\s*[—-]", line):
+            count += 1
+        elif line.startswith("•"):
+            count += 1
+    return count
 
 
 def summarize_models(models: List[ModelRelease]) -> str:
@@ -1233,7 +1261,9 @@ Models:
         payload = {
             "model": LLM_MODEL,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 1200,
+            # Headroom for reasoning models (e.g. GLM-5.1) that spend tokens on
+            # hidden reasoning before emitting the digest body.
+            "max_tokens": 3000,
             "temperature": 0.3,
         }
         headers = {
@@ -1248,8 +1278,16 @@ Models:
         # The model is unreliable at filling the count (it echoes the literal
         # "X"); strip any footer it emitted and append a deterministic one.
         summary = re.sub(r"(?im)^\s*(?:total:\s*)?[\dx]+\s+models tracked today\s*$", "", summary).rstrip()
+        summary = re.sub(r"(?im)^\s*📊?\s*surfaced\b.*\bscanned\b.*today\s*$", "", summary).rstrip()
+        # Reasoning models (e.g. GLM) can spend their whole budget on hidden
+        # reasoning and return an empty content field — don't ship a headerless
+        # blank; fall back to the deterministic template instead.
+        if not summary:
+            print("LLM returned an empty digest body — falling back to template")
+            return build_digest_message(models)
         header = f"🤖 <b>ModelBytes Digest</b>\n<i>{datetime.now(timezone.utc).strftime('%A, %B %d, %Y')}</i>"
-        footer = f"Total: {len(models)} models tracked today"
+        # Honest footer: how many we actually surfaced vs how many we scanned.
+        footer = f"📊 Surfaced {_count_surfaced_models(summary)} · scanned {len(models)} today"
         return f"{header}\n\n{summary}\n\n{footer}"
     except Exception as e:
         print(f"LLM failed: {e} — falling back to template")

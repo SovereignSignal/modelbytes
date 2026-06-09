@@ -92,6 +92,7 @@ PROVIDER_NAMES = {
     "perplexity": "Perplexity",
     "perplexity-ai": "Perplexity",
     "cohere": "Cohere",
+    "coherelabs": "Cohere",
     "ai21": "AI21 Labs",
     "huggingface": "Hugging Face",
     "cognitivecomputations": "Cognitive Computations",
@@ -119,7 +120,7 @@ KNOWN_ORGS = {
     "maziyarpanahi", "mradermacher", "ibm", "allenai",
     "x-ai", "z-ai", "zai-org", "arcee-ai", "openbmb",
     "minimaxai", "netflix", "k2-fsa", "xiaomi", "rekaai",
-    "baai", "huggingface", "baidu", "perplexity", "cohere", "ai21",
+    "baai", "huggingface", "baidu", "perplexity", "cohere", "coherelabs", "ai21",
     "sulphurai", "supertone", "hidream-ai", "zyphra",
     "circlestone-labs", "moonshotai", "bytedance-seed",
     "amazon", "perplexity-ai", "inclusionai",
@@ -841,6 +842,7 @@ MAJOR_HF_ORGS = [
     "HiDream-ai", "SulphurAI", "Zyphra",
     "circlestone-labs", "Supertone",
     "TencentARC", "ResembleAI", "ADSKAILab", "open-thoughts",
+    "CohereLabs",
 ]
 
 

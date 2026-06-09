@@ -1,0 +1,15 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Tuesday, June 09, 2026</i>
+
+<i>Open-weight 1M-context multimodal clears $1/1M input this week; the hyperscaler bet on in-house training signals the OpenAI-as-default stack assumption has an expiry date.</i>
+
+━━━ <b>PREMIER OPEN</b> 🔓
+<b>MiniMax M3</b> — API since Jun 1; weights due ~Jun 11. Fine-grained MoE on MSA (MiniMax Sparse Attention): 229.9B total / 9.8B active across 256 experts, 1M-token context, native text + image + video input. Vendor benchmarks: 59.0% SWE-Bench Pro (above GPT-5.5), 66.0% Terminal-Bench 2.1, 74.2% MCP Atlas — all runs on MiniMax infrastructure, independent verification pending. API at $0.60/$2.40 per 1M in/out (50% launch discount active); license and technical report to ship with weights. <a href="https://www.minimax.io/blog/minimax-m3">→ MiniMax</a>
+
+━━━ <b>CLOSED GIANTS</b> 🔒
+<b>Microsoft MAI-Thinking-1</b> — Released Jun 2 (Build 2026). Microsoft's first in-house reasoning model, built from scratch on commercially licensed data with no OpenAI or third-party distillation. Sparse MoE: ~1T total / 35B active, 256K context. Self-reported benchmarks: 97.0% AIME 2025, 94.5% AIME 2026 — no independent confirmation published at launch. Private preview via Azure AI Foundry, Fireworks AI, Baseten, and OpenRouter. <a href="https://microsoft.ai/news/introducing-mai-thinking-1/">→ Microsoft AI</a>
+
+━━━ <b>LOCAL READY</b> 🏠
+• <b>MAI-Code-1-Flash</b> (Microsoft, Jun 2) — 5B coding model, open weights under permissive license. 51.2% SWE-Bench Pro; uses 60% fewer tokens than comparable models on the same tasks. Default model for all paying GitHub Copilot users; weights available via OpenRouter, Fireworks, and Baseten. <a href="https://microsoft.ai/news/introducingmai-code-1-flash/">→ Microsoft AI</a>
+
+Total: 3 models tracked today

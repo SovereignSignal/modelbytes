@@ -1065,7 +1065,8 @@ def categorize_model(model: ModelRelease) -> str:
         return "audio"
     # Known significant orgs always get meaningful categorization
     sig_org_map = {"tencentarc": "image_gen", "resembleai": "audio", "adskailab": "other",
-                   "open-thoughts": "reasoning", "deepseek-ai": "premier_open"}
+                   "open-thoughts": "reasoning", "deepseek-ai": "premier_open",
+                   "inclusionai": "premier_open"}
     if provider in sig_org_map:
         cat = sig_org_map[provider]
         return cat

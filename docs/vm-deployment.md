@@ -1,4 +1,9 @@
-# ModelBytes VM Deployment
+# ModelBytes VM Deployment (RETIRED)
+
+> **⚠️ RETIRED 2026-06-08.** ModelBytes runs exclusively on Railway; the VM
+> deployment described here was decommissioned (timers disabled, Postgres
+> migrated). This doc and `deploy/vm/` are kept as reference for anyone who
+> wants a self-managed deployment shape — they are not the production path.
 
 This guide moves the publisher from Railway to a self-managed VM while keeping the existing GitHub/Claude routine handoff intact.
 

@@ -12,7 +12,16 @@ A small Python service on Railway plus a set of scheduled Claude routines (runni
 - **`modelbytes-daily-health`** (17:00 UTC daily) — verifies the post landed.
 - **`modelbytes-pr-curator`** (hourly) — reviews open PRs.
 
-See [`docs/architecture.md`](./docs/architecture.md) for the full design. See [`docs/operations.md`](./docs/operations.md) for runbooks (rotating the bot token, pausing supervisor autonomy, manually triggering a post, etc.). See [`docs/vm-deployment.md`](./docs/vm-deployment.md) for the self-managed VM deployment path, and [`docs/structured-data.md`](./docs/structured-data.md) for the Postgres-first data roadmap.
+See [`docs/architecture.md`](./docs/architecture.md) for the full design and [`docs/operations.md`](./docs/operations.md) for runbooks (rotating the bot token, pausing supervisor autonomy, manually triggering a post, etc.). The digest format (identity tiers + availability tags) is specified in [`docs/superpowers/specs/2026-06-10-builder-digest-format-v3-design.md`](./docs/superpowers/specs/2026-06-10-builder-digest-format-v3-design.md). [`docs/vm-deployment.md`](./docs/vm-deployment.md) is a retired deployment path kept for reference; [`docs/structured-data.md`](./docs/structured-data.md) covers the Postgres-first data roadmap.
+
+## Digest format (v3)
+
+Identity tiers say what kind of model it is; a per-entry tag says how you can use it today:
+
+- 🔓 **OPEN FRONTIER** / 🔒 **CLOSED FRONTIER** / 🎯 **SPECIALIZED** / 🏠 **LOCAL** / 👀 **WATCH**
+- Every entry: bold name → *italic differentiator sentence* → hard facts → ⚡ API / 📦 weights availability tag → source link
+- Lifecycle moves count: weights landing (WATCH graduations), big price changes, Ollama/OpenRouter arrivals
+- Footer: `Total: N items tracked today`
 
 ## Features
 

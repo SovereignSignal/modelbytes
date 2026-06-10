@@ -10,7 +10,7 @@ Day-to-day operational tasks for ModelBytes. For the design behind these mechani
 | Routine outputs | https://claude.ai/code/routines |
 | GitHub issues / PRs | https://github.com/SovereignSignal/modelbytes |
 | Structured state | Postgres tables (`models`, `posted_digests`; more planned in `docs/structured-data.md`) |
-| Railway service state | Railway dashboard → `model-bytes` project → `modelbytes` service |
+| Railway service state | Railway dashboard → `modelbytes` project → `modelbytes` service |
 
 A clean day looks like: 1 post at 16:00 UTC in the channel, today's UTC date present in `posted_digests`, health check PASS once structured health records exist, and no new GitHub issues with the `health-incident` or `supervisor-drift` labels.
 
@@ -108,7 +108,7 @@ Useful for: testing after a token rotation, posting an off-schedule digest, vali
 ```bash
 cd modelbytes
 git pull --ff-only origin master   # make sure you have the latest pending file if curator already ran
-railway link --project model-bytes --environment production --service modelbytes
+railway link --project modelbytes --environment production --service modelbytes
 railway run python3 monitor.py
 ```
 

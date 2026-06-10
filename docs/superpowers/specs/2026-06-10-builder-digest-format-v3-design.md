@@ -75,4 +75,4 @@ Scheduled claude.ai routine, daily 17:00 UTC: fetch `https://t.me/s/ModelBytes`,
 
 ## Runtime note
 
-As of 2026-06-10, modelbytes runs **only on Railway** (project `<railway-project-id>`, service `modelbytes`, cron 16:00 UTC, auto-deploy-on-push from master). The VM (the-vm) is fully retired for modelbytes — timers confirmed disabled + inactive today.
+As of 2026-06-10, modelbytes runs **only on Railway** (service `modelbytes`, cron 16:00 UTC, auto-deploy-on-push from master). The previous self-managed VM deployment is fully retired — timers confirmed disabled + inactive today.

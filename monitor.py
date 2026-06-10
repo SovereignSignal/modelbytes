@@ -510,7 +510,9 @@ def validate_digest_for_publish(message: str) -> Tuple[str, List[str], List[str]
     if "ModelBytes Digest" not in normalized:
         warnings.append("digest header is missing")
     _lower = normalized.lower()
-    if "models tracked today" not in _lower and "scanned" not in _lower:
+    if ("items tracked today" not in _lower
+            and "models tracked today" not in _lower
+            and "scanned" not in _lower):
         warnings.append("tracked-model footer is missing")
 
     for fact in KNOWN_MODEL_FACTS:
@@ -1052,30 +1054,42 @@ def categorize_model(model: ModelRelease) -> str:
 
     if any(p in name for p in premier) or provider in ["meta", "mistral ai", "alibaba"]:
         if "closed" not in traits and model.is_open_source is not False:
-            return "premier_open"
+            return "open_frontier"
     if any(c in name for c in closed) or provider in ["openai", "anthropic", "google"]:
-        return "closed_giants"
+        return "closed_frontier"
+    # Domain keywords (reasoning / coding / image / audio) all land in the
+    # single SPECIALIZED tier under format v3
     if any(r in name for r in reasoning):
-        return "reasoning"
+        return "specialized"
     if any(c in name for c in coding):
-        return "coding"
+        return "specialized"
     if any(i in name for i in image_gen):
-        return "image_gen"
+        return "specialized"
     if any(a in name for a in audio):
-        return "audio"
+        return "specialized"
     # Known significant orgs always get meaningful categorization
-    sig_org_map = {"tencentarc": "image_gen", "resembleai": "audio", "adskailab": "other",
-                   "open-thoughts": "reasoning", "deepseek-ai": "premier_open",
-                   "inclusionai": "premier_open"}
+    sig_org_map = {"tencentarc": "specialized", "resembleai": "specialized",
+                   "adskailab": "other", "open-thoughts": "specialized",
+                   "deepseek-ai": "open_frontier", "inclusionai": "open_frontier"}
     if provider in sig_org_map:
         cat = sig_org_map[provider]
         return cat
     if model.source == "ollama":
-        return "local_ready"
+        return "local"
     # Give high-engagement unknown orgs a shot at being shown
     if getattr(model, "likes", 0) >= 500 or getattr(model, "downloads", 0) >= 50000:
         return "other"
     return "other"
+
+
+def _availability_tag(m: ModelRelease) -> str:
+    """Format v3 per-entry action tag: how a builder can use this model today,
+    derived deterministically from where we observed it."""
+    if m.source == "openrouter":
+        return "⚡ API live · OpenRouter"
+    if m.source == "ollama":
+        return "📦 Ollama pull-ready"
+    return "📦 Open weights · HF"
 
 
 def build_digest_message(models: List[ModelRelease]) -> str:
@@ -1094,8 +1108,8 @@ def build_digest_message(models: List[ModelRelease]) -> str:
             deduped.append(m)
     models = deduped[:20]
 
-    tiers = {"premier_open": [], "closed_giants": [], "reasoning": [],
-             "coding": [], "image_gen": [], "audio": [], "local_ready": [], "other": []}
+    tiers = {"open_frontier": [], "closed_frontier": [], "specialized": [],
+             "local": [], "other": []}
     for m in models:
         tiers[categorize_model(m)].append(m)
 
@@ -1135,16 +1149,16 @@ def build_digest_message(models: List[ModelRelease]) -> str:
                 specs.append("FREE")
             if specs:
                 lines.append(f"  {' | '.join(specs)}")
+            lines.append(f"  {_availability_tag(m)}")
             link = m.canonical_url or m.url
             if link:
                 lines.append(f'  <a href="{link}">→ Source</a>')
             lines.append("")
 
-    _section("PREMIER OPEN WEIGHTS", "🔓", tiers["premier_open"])
-    _section("CLOSED GIANTS", "🔒", tiers["closed_giants"])
-    _section("SPECIALIZED", "🎯", tiers["reasoning"] + tiers["coding"])
-    _section("MULTIMODAL", "🎨", tiers["image_gen"] + tiers["audio"])
-    _section("LOCAL READY", "🏠", tiers["local_ready"])
+    _section("OPEN FRONTIER", "🔓", tiers["open_frontier"])
+    _section("CLOSED FRONTIER", "🔒", tiers["closed_frontier"])
+    _section("SPECIALIZED", "🎯", tiers["specialized"])
+    _section("LOCAL", "🏠", tiers["local"])
 
     if tiers["other"]:
         lines.extend(["", "━━━ <b>ALSO TRACKED</b>", ""])
@@ -1160,7 +1174,7 @@ def build_digest_message(models: List[ModelRelease]) -> str:
         lines.append("")
 
     total = len(models)
-    lines.extend(["", f"Total: {total} models tracked today"])
+    lines.extend(["", f"Total: {total} items tracked today"])
     return "\n".join(lines)
 
 
@@ -1229,25 +1243,28 @@ def summarize_models(models: List[ModelRelease]) -> str:
 
     prompt = f"""You are ModelBytes, an AI model tracker. Write a SHORT Telegram digest.
 
-FORMAT:
-<b>🔓 Premier Open</b>
-<b>Model Name</b> — Released Apr 12. 2 sentences on why it matters. Specs. <a href="URL">→ OpenRouter</a>
+FORMAT (tiers in this order, hide empty ones):
+━━━ <b>OPEN FRONTIER</b> 🔓
+<b>Model Name</b> — <i>One sentence: the differentiator / value prop — why a builder should care.</i> Hard facts (params, context, license, pricing — only if provided). ⚡ or 📦 availability. <a href="URL">→ Source</a>
 
-<b>🔒 Closed Giants</b>
-(same format)
+━━━ <b>CLOSED FRONTIER</b> 🔒
+(same entry format)
 
-<b>🎯 Specialized</b>
-(same format)
+━━━ <b>SPECIALIZED</b> 🎯
+(same entry format — domain models: coding, audio, image, video)
 
-<b>🏠 Local Ready</b>
-• model-name — ollama run model-name
+━━━ <b>LOCAL</b> 🏠
+(same entry format — models whose headline is running on your own hardware)
+
+ENTRY GRAMMAR (every entry, no exceptions):
+1. <b>Name</b> — then an <i>italic differentiator sentence</i>: what makes this model different / why it exists. Not a spec recitation.
+2. Hard facts from the data below.
+3. Availability tag: "⚡ API live · OpenRouter" (openrouter source), "📦 Open weights · HF" (huggingface), "📦 Ollama pull-ready" (ollama).
+4. <a href="URL">→ Source</a> using the canonical URL when given.
 
 RULES:
 - ONLY HTML tags: <b>, <i>, <a href>
-- One line per model, no bullets except Local Ready
 - Release date as "Released Apr 7" (no year)
-- Link as <a href="URL">→ Source</a>
-- 2 sentences max per model
 - SKIP: fine-tunes, ONNX, LoRA, GGUF, embedders, experiments, distilled, personal merges
 - Treat each model's Confidence and Unknowns as pre-publish QA.
 - Only mention release date, license, total params, or active params if explicitly provided below.
@@ -1287,7 +1304,7 @@ Models:
         summary = resp.json()["choices"][0]["message"]["content"].strip()
         # The model is unreliable at filling the count (it echoes the literal
         # "X"); strip any footer it emitted and append a deterministic one.
-        summary = re.sub(r"(?im)^\s*(?:total:\s*)?[\dx]+\s+models tracked today\s*$", "", summary).rstrip()
+        summary = re.sub(r"(?im)^\s*(?:total:\s*)?[\dx]+\s+(?:models|items) tracked today\s*$", "", summary).rstrip()
         summary = re.sub(r"(?im)^\s*📊?\s*surfaced\b.*\bscanned\b.*today\s*$", "", summary).rstrip()
         # Reasoning models (e.g. GLM) can spend their whole budget on hidden
         # reasoning and return an empty content field — don't ship a headerless

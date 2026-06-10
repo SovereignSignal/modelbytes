@@ -57,7 +57,7 @@ def test_also_tracked_entries_link_to_content():
 
 def test_section_entries_use_html_links_not_raw_urls():
     m = _model("acme/Premier-1", canonical_url="https://acme.ai/premier-1")
-    with patch.object(monitor, "categorize_model", return_value="premier_open"):
+    with patch.object(monitor, "categorize_model", return_value="open_frontier"):
         msg = monitor.build_digest_message([m])
     assert '<a href="https://acme.ai/premier-1">' in msg
     assert "🔗 https://" not in msg  # no bare URL dumps
@@ -105,7 +105,7 @@ def test_empty_llm_body_falls_back_to_template():
          patch.object(monitor.requests, "post", return_value=fake):
         msg = monitor.summarize_models(models)
     assert "ModelBytes Digest" in msg
-    assert "models tracked today" in msg  # template footer, not an empty body
+    assert "items tracked today" in msg  # template footer, not an empty body
 
 
 def test_validate_accepts_the_new_surfaced_footer():

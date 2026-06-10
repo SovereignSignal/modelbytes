@@ -77,11 +77,12 @@ One model = one tier, the most DISTINCTIVE one. (A 5B open coder → SPECIALIZED
 or LOCAL, not both. A frontier MoE with live API and weights pending → OPEN
 FRONTIER with the pending note inline, not a second WATCH entry.)
 
-ENTRY GRAMMAR (every entry, no exceptions):
+ENTRY GRAMMAR (every entry in EVERY tier — WATCH entries included, no exceptions):
 <b>Model Name</b> — <i>{ONE sentence: the differentiator / value prop. Why does
 this model exist and why should a builder care? Not a spec recitation.}</i>
 {Hard facts: params total/active, context, headline benchmark + whose runs}.
 {⚡/📦 availability tag}. <a href="URL">→ Named Source</a>
+The differentiator sentence is ALWAYS wrapped in <i>…</i> — including in WATCH.
 
 AVAILABILITY TAGS (the action line — exactly one per entry):
 - ⚡ API live: $X/$Y per 1M (provider) — hosted access, pricing if public

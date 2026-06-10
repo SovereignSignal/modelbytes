@@ -89,6 +89,7 @@ PROVIDER_NAMES = {
     "tencentarc": "Tencent ARC",
     "resembleai": "Resemble AI",
     "adskailab": "Autodesk AI Lab",
+    "lgai-exaone": "LG AI Research",
     "perplexity": "Perplexity",
     "perplexity-ai": "Perplexity",
     "cohere": "Cohere",
@@ -125,6 +126,7 @@ KNOWN_ORGS = {
     "circlestone-labs", "moonshotai", "bytedance-seed",
     "amazon", "perplexity-ai", "inclusionai",
     "tencentarc", "resembleai", "adskailab", "open-thoughts",
+    "lgai-exaone",
 }
 
 
@@ -720,6 +722,7 @@ def is_significant_release(model_id: str, author: str, tags: list,
         "deepseek-v3", "deepseek-v4", "deepseek-ocr",
         "minicpm", "supertonic", "supertone",
         "sulphur", "hidream", "zamba", "zaya",
+        "exaone", "k-exaone",
         "anima", "reka-edge", "lyria-",
         "openai/o1", "openai/o3", "anthropic/claude",
         "wan2", "dramabox", "pixal3d", "agent",
@@ -844,7 +847,7 @@ MAJOR_HF_ORGS = [
     "HiDream-ai", "SulphurAI", "Zyphra",
     "circlestone-labs", "Supertone",
     "TencentARC", "ResembleAI", "ADSKAILab", "open-thoughts",
-    "CohereLabs",
+    "CohereLabs", "LGAI-EXAONE",
 ]
 
 

@@ -1,0 +1,19 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Wednesday, June 10, 2026</i>
+
+<i>The publicly available performance ceiling lifted by a full tier overnight: Mythos-class intelligence is now on the open API, and developers who previously traded down for affordability now have a 6-point SWE-bench jump available at 2× the Opus price.</i>
+
+━━━ <b>CLOSED FRONTIER</b> 🔒
+<b>Claude Fable 5</b> — <i>Anthropic's first publicly available Mythos-class model lifts the effective ceiling for API-accessible intelligence, clearing 95.0% SWE-bench Verified — six points above Opus 4.8 — and outperforming every prior generally-available Claude across all tested evals.</i> 1M-token context, 128K max output; adaptive thinking on by default. Vendor benchmarks (Anthropic-run): 95.0% SWE-bench Verified, 80.0% SWE-bench Pro, 88.0% Terminal-Bench 2.1, 72.9% CursorBench. ⚡ API live: $10/$50 per 1M in/out (claude-fable-5), batch $5/$25; Anthropic API, Bedrock, Vertex AI, Microsoft Foundry, GitHub Copilot, Databricks. <a href="https://www.anthropic.com/news/claude-fable-5-mythos-5">→ Anthropic</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+<b>MAI-Image-2.5</b> (Microsoft, Jun 2) — <i>Adds controllable image-to-image editing to Microsoft's image pipeline, reaching #2 on Arena.ai for image generation at launch.</i> Diffusion-based; +75 pts vs MAI-Image-2 overall, with largest gains in text rendering (+107) and cartoon/fantasy (+90) — vendor-run. ⚡ API live: $5/1M input tokens; Azure AI Foundry · OpenRouter · Baseten · Fireworks. <a href="https://microsoft.ai/news/introducing-mai-image-2-5/">→ Microsoft AI</a>
+
+<b>MAI-Transcribe-1.5</b> (Microsoft, Jun 2) — <i>Expands Microsoft's speech-to-text model to 43 languages (up from 25) while improving accuracy and transcribing an hour of audio in under 15 seconds.</i> 3.7% WER on FLEURS, best-in-class (vendor-run); 5× faster than Gemini 3.1, Scribe v2, and GPT-4o-Transcribe on long audio. ⚡ API live: $0.36/hr; Azure Speech · OpenRouter. <a href="https://microsoft.ai/models/mai-transcribe-1-5/">→ Microsoft AI</a>
+
+<b>MAI-Voice-2</b> (Microsoft, Jun 2) — <i>Microsoft's first TTS model with cross-lingual voice cloning, enabling voice transfer from a short speaker sample across 15+ languages with built-in cloning safeguards.</i> ⚡ API live: $22/1M chars; Azure Speech. <a href="https://microsoft.ai/news/building-a-hillclimbing-machine-launching-seven-new-mai-models/">→ Microsoft AI</a>
+
+━━━ <b>WATCH</b> 👀
+<b>Claude Mythos 5</b> (Anthropic, Jun 9) — Gated sibling to Fable 5 with fewer safety-routing classifiers, deployed only to organizations pre-approved by Anthropic; no public release date announced. ⚡ Private preview (Anthropic-approved orgs only). <a href="https://www.anthropic.com/news/claude-fable-5-mythos-5">→ Anthropic</a>
+
+Total: 5 items tracked today

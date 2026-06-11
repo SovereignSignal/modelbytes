@@ -117,3 +117,38 @@ def test_validate_accepts_the_new_surfaced_footer():
     _, warnings, errors = monitor.validate_digest_for_publish(body)
     assert errors == []
     assert not any("footer is missing" in w for w in warnings)
+
+
+# ── 2026-06-11 incident hardening: quant suffixes + stale back-catalog ──
+
+def test_quant_serving_suffixes_are_noise():
+    # command-a-plus-05-2026-w4a4 / -fp8 leaked into the 06-11 fallback digest:
+    # serving/quant builds of an already-released model, not new releases.
+    assert monitor.is_noise_model(
+        "CohereLabs/command-a-plus-05-2026-w4a4", "CohereLabs", [],
+        downloads=999999, likes=9999) is True
+    assert monitor.is_noise_model(
+        "CohereLabs/command-a-plus-05-2026-fp8", "CohereLabs", [],
+        downloads=999999, likes=9999) is True
+
+
+def test_speculative_decoding_variants_are_noise():
+    # Eagle3 = speculative-decoding draft head, a derivative artifact.
+    assert monitor.is_noise_model(
+        "moonshotai/Kimi-K2.5-Thinking-Eagle3", "moonshotai", [],
+        downloads=999999, likes=9999) is True
+
+
+def test_base_release_with_version_not_filtered_by_quant_rule():
+    assert monitor.is_noise_model(
+        "CohereLabs/command-a-plus-05-2026", "CohereLabs", []) is False
+
+
+def test_stale_release_gate():
+    # New-org backfill: when the supervisor adds an org, its whole back-catalog
+    # is "unseen" — a 2025 model must not appear in a 2026 "new today" digest.
+    assert monitor.is_stale_release("2025-04-09", today="2026-06-11") is True
+    assert monitor.is_stale_release("2026-01-01", today="2026-06-11") is True
+    assert monitor.is_stale_release("2026-06-05", today="2026-06-11") is False
+    assert monitor.is_stale_release(None, today="2026-06-11") is False  # unknown date: keep
+    assert monitor.is_stale_release("garbage", today="2026-06-11") is False  # unparseable: keep

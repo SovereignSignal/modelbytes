@@ -157,3 +157,17 @@ def test_tencentarc_specialized():
         downloads=0,
     )
     assert monitor.categorize_model(m_raw) == "specialized"
+
+
+# ---------- issue #16: Kimi / moonshotai ----------
+
+def test_kimi_k2_open_frontier():
+    """Issue #16: 'kimi' was in the closed-name list, sending Moonshot's
+    open-weight K2 models to closed_frontier (with a contradictory 📦 tag in
+    the 06-11 fallback digest). moonshotai releases are open-weight."""
+    m = monitor.ModelRelease(
+        name="moonshotai/Kimi-K2.6", provider="moonshotai",
+        source="huggingface", url="https://example.com/moonshotai/Kimi-K2.6",
+        description="", is_open_source=True, unique_traits=[], likes=0, downloads=0,
+    )
+    assert monitor.categorize_model(m) == "open_frontier"

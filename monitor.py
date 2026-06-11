@@ -615,6 +615,11 @@ def is_noise_model(model_id: str, author: str, tags: list,
             "lora-", "-lora", "-loras", "_lora",
             "-onnx", "_onnx", "-awq", "-gptq",
             "-fp16", "-bf16", "-int8", "-int4",
+            # Serving/quant builds and speculative-decoding draft heads —
+            # derivative artifacts of an already-released model (06-11 leak:
+            # command-a-plus-…-w4a4/-fp8, Kimi-…-Eagle3).
+            "-fp8", "-fp4", "-w4a4", "-w8a8", "-w4a16", "-w8a16",
+            "-eagle", "_eagle", "-mtp", "-draft-head",
             "_ftjob_", "-merged", ".onnx",
             "-distilled", "-distill", "_distilled", "_distill",
             "moved", "deprecated", "archived", "old", "backup",
@@ -699,6 +704,26 @@ def is_noise_model(model_id: str, author: str, tags: list,
                 return True
 
     return False
+
+
+def is_stale_release(release_date, today: str = None, max_age_days: int = 14) -> bool:
+    """True when a model's release date is too old to count as news.
+
+    Guards against new-org backfill: when the supervisor adds an org to the
+    fetch lists, that org's entire back-catalog is unseen by the dedup DB and
+    would flood the digest as "new" (2026-06-11: Kimi-VL from 2025-04 appeared
+    in a "new today" digest). Unknown or unparseable dates are kept — absence
+    of a date is not evidence of staleness.
+    """
+    if not release_date:
+        return False
+    try:
+        released = datetime.strptime(str(release_date)[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return False
+    ref = (datetime.strptime(today, "%Y-%m-%d").date() if today
+           else datetime.now(timezone.utc).date())
+    return (ref - released).days > max_age_days
 
 
 def is_significant_release(model_id: str, author: str, tags: list,
@@ -1049,8 +1074,9 @@ def categorize_model(model: ModelRelease) -> str:
                "gemma-2-27b", "gemma-4", "gemma-3", "command-r-plus", "command-a", "nemotron",
                "sulphur", "minicpm", "zaya", "glm-5", "glm-4.7",
                "minimax", "grok-2", "grok-3"]
-    closed = ["gpt-4", "claude-3", "claude-4", "claude-opus-4", "o1-", "o3-", "gemini-1.5", "gemini-2", "gemini-3", "grok-4",
-              "kimi"]
+    # NOTE: 'kimi' must NOT be in this list — Moonshot's Kimi K2 models are
+    # open-weight (issue #16); moonshotai routes via sig_org_map below.
+    closed = ["gpt-4", "claude-3", "claude-4", "claude-opus-4", "o1-", "o3-", "gemini-1.5", "gemini-2", "gemini-3", "grok-4"]
     reasoning = ["reasoning", "r1", "o1", "o3"]
     coding = ["codestral", "coder", "code-", "claude-3.5", "devstral"]
     image_gen = ["dall-e", "flux", "stable-diffusion", "midjourney", "wan2", "pixal"]
@@ -1074,7 +1100,8 @@ def categorize_model(model: ModelRelease) -> str:
     # Known significant orgs always get meaningful categorization
     sig_org_map = {"tencentarc": "specialized", "resembleai": "specialized",
                    "adskailab": "other", "open-thoughts": "specialized",
-                   "deepseek-ai": "open_frontier", "inclusionai": "open_frontier"}
+                   "deepseek-ai": "open_frontier", "inclusionai": "open_frontier",
+                   "moonshotai": "open_frontier"}
     if provider in sig_org_map:
         cat = sig_org_map[provider]
         return cat
@@ -1293,8 +1320,10 @@ Models:
             "model": LLM_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             # Headroom for reasoning models (e.g. GLM-5.1) that spend tokens on
-            # hidden reasoning before emitting the digest body.
-            "max_tokens": 3000,
+            # hidden reasoning before emitting the digest body. 3000 produced
+            # empty bodies twice (2026-06-08, 2026-06-11) — reasoning consumed
+            # the whole budget before any content tokens.
+            "max_tokens": 8000,
             "temperature": 0.3,
         }
         headers = {
@@ -1479,6 +1508,34 @@ def send_slack_post(message: str) -> bool:
         return False
 
 
+PENDING_RAW_BASE = os.environ.get(
+    "MODELBYTES_PENDING_RAW_BASE",
+    "https://raw.githubusercontent.com/SovereignSignal/modelbytes/master/pending",
+)
+
+
+def _fetch_pending_from_github(today: str) -> Optional[str]:
+    """Fetch today's curated pending file straight from GitHub raw.
+
+    The Railway image only contains the pending file if a deploy happened
+    AFTER the curator's ~15:45 UTC push — a race the 2026-06-11 publish lost
+    (stale 14:19 image → bare template went out despite a good curated digest
+    sitting on master). Fetching from the repo at publish time removes the
+    deploy-timing dependency entirely. Returns None when absent/unreachable.
+    """
+    url = f"{PENDING_RAW_BASE}/{today}.txt"
+    try:
+        resp = requests.get(url, timeout=20)
+        if resp.status_code == 200 and resp.text.strip():
+            print(f"Fetched curated digest from GitHub raw ({url}).")
+            return resp.text
+        if resp.status_code != 404:
+            print(f"GitHub raw pending fetch: HTTP {resp.status_code}", file=sys.stderr)
+    except Exception as e:
+        print(f"GitHub raw pending fetch failed: {e}", file=sys.stderr)
+    return None
+
+
 def try_post_pending_curated() -> bool:
     """Fast-path: post a pre-curated digest written by the curator routine.
 
@@ -1497,13 +1554,20 @@ def try_post_pending_curated() -> bool:
 
     pending_path = Path("pending") / f"{today}.txt"
 
-    if not pending_path.exists():
-        return False
-
-    body = pending_path.read_text().strip()
-    if not body:
-        print(f"Pending file {pending_path} is empty — falling back to pipeline.")
-        return False
+    if pending_path.exists():
+        body = pending_path.read_text().strip()
+        if not body:
+            print(f"Pending file {pending_path} is empty — falling back to pipeline.")
+            return False
+    else:
+        # Stale image (deploy race): the curator may have pushed after this
+        # image was built. Ask GitHub directly before giving up.
+        remote = _fetch_pending_from_github(today)
+        if remote is None:
+            return False
+        body = remote.strip()
+        if not body:
+            return False
     body, qa_warnings, qa_errors = validate_digest_for_publish(body)
     for warning in qa_warnings:
         print(f"Digest QA warning ({pending_path}): {warning}", file=sys.stderr)
@@ -1558,6 +1622,16 @@ def main():
                 # Don't add to seen_models yet — noise models should be
                 # re-evaluated next run with updated engagement data.
                 # Only posted/significant models get added later.
+
+    stale = [m for m in all_new if is_stale_release(m.release_date)]
+    if stale:
+        print(f"Dropping {len(stale)} stale back-catalog model(s): "
+              + ", ".join(m.name for m in stale[:5])
+              + ("…" if len(stale) > 5 else ""))
+        # Mark them seen so they stop resurfacing on every future run.
+        for m in stale:
+            seen_models.add(m.name)
+        all_new = [m for m in all_new if not is_stale_release(m.release_date)]
 
     print(f"Found {len(all_new)} new model(s)")
 

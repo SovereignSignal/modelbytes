@@ -36,11 +36,14 @@ a model whose state hasn't changed.
 
 SILENCE IS FAILURE. The model ecosystem moves daily. If your first pass is thin,
 you MUST research: use the HuggingFace tools (trending + new models by major
-orgs) and WebSearch for provider announcements (DeepSeek, Qwen/Alibaba, Mistral,
-Meta, Google, OpenAI, Anthropic, Microsoft, NVIDIA, Moonshot, Z.ai, Cohere, Ai2,
-MiniMax, etc.) AND for lifecycle moves (pricing pages, Ollama library, OpenRouter
-new listings). WebFetch the PRIMARY source (vendor blog, model card, release
-notes, paper) before writing — never a news aggregator.
+orgs + the daily papers feed — https://huggingface.co/papers or paper_search;
+model-release papers and tech reports are prime WATCH material and early
+SPECIALIZED signal, but skip pure method/survey/benchmark papers with no
+concrete model) and WebSearch for provider announcements (DeepSeek, Qwen/Alibaba,
+Mistral, Meta, Google, OpenAI, Anthropic, Microsoft, NVIDIA, Moonshot, Z.ai,
+Cohere, Ai2, MiniMax, etc.) AND for lifecycle moves (pricing pages, Ollama
+library, OpenRouter new listings). WebFetch the PRIMARY source (vendor blog,
+model card, release notes, paper) before writing — never a news aggregator.
 
 THE BAR — every entry must be SPECIFIC: hard facts verified from the primary
 source (release date, license, total/active params, context window, pricing if

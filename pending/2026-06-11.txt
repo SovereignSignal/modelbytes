@@ -1,0 +1,18 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Wednesday, June 11, 2026</i>
+
+<i>Parallel decoding is now open-weight and production-ready — the AR quality advantage holds for now, but the speed gap is real enough to route latency-sensitive workloads to diffusion today.</i>
+
+━━━ <b>OPEN FRONTIER</b> 🔓
+<b>DiffusionGemma 26B-A4B-it</b> (Google, Jun 10) — <i>First production text diffusion LLM from a major lab: generates token blocks in parallel via block-autoregressive multi-canvas sampling rather than token-by-token AR, with acknowledged lower quality than standard Gemma 4.</i> 25.2B total / 3.8B active (MoE), 256K context. Vendor-run: MMLU Pro 77.6%, AIME 2026 69.1%, LiveCodeBench v6 69.1%, GPQA Diamond 73.2%; 1100+ tokens/sec (H100, low-batch). 📦 Open weights, Apache 2.0 · HuggingFace (google/diffusiongemma-26B-A4B-it) · NVIDIA NIM · Google Cloud Model Garden. <a href="https://developers.googleblog.com/posts/diffusiongemma-developer-guide/">→ Google Developers Blog</a>
+
+━━━ <b>WATCH</b> 👀
+<b>Grok V9-Medium</b> (xAI, ~mid-Jun) — <i>1.5T-parameter model trained on Cursor developer workflows; now serving Tesla vehicles and the X platform, but the xAI developer API is still pending.</i> 1.5T total params; no benchmarks published. ⚡ Expected: xAI API, mid-June. <a href="https://www.techtimes.com/articles/318165/20260610/grok-v9-rolls-tesla-cars-x-why-musks-distribution-flywheel-worries-ai-rivals.htm">→ TechTimes</a>
+
+<b>MiniMax M3</b> (MiniMax, weights overdue) — <i>Open weights committed "within 10 days" of the Jun 1 API launch have not landed on HuggingFace as of Jun 11 — the delivery window has closed without weights.</i> 229.9B total / 9.8B active, 1M context. ⚡ API live: $0.60/$2.40 per 1M in/out; weights expected at HuggingFace (MiniMaxAI). <a href="https://www.minimax.io/blog/minimax-m3">→ MiniMax</a>
+
+<b>Gemini 3.5 Pro</b> (Google, ~late Jun) — <i>2M-context flagship with Deep Think reasoning; Vertex AI limited preview only, GA still pending.</i> 2M context; expected ~$15/$60 per 1M in/out. ⚡ Private preview: Vertex AI. <a href="https://blog.google/innovation-and-ai/models-and-research/gemini-models/gemini-3-5/">→ Google</a>
+
+<b>Claude Mythos 5</b> (Anthropic) — <i>Safeguard-minimal sibling to Fable 5 for vetted orgs via Project Glasswing; no public release timeline announced.</i> 1M context; $10/$50 per 1M in/out. ⚡ Private preview: Anthropic-approved orgs only. <a href="https://www.anthropic.com/news/claude-fable-5-mythos-5">→ Anthropic</a>
+
+Total: 5 items tracked today

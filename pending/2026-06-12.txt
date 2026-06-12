@@ -1,0 +1,19 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Friday, June 12, 2026</i>
+
+<i>Open-weight delivery is tightening: MiniMax closes its weights gap with a same-day tech report, and Moonshot ships a coding step-up with weights on launch day — builder validation no longer waits on lab schedules.</i>
+
+━━━ <b>OPEN FRONTIER</b> 🔓
+<b>MiniMax M3</b> (was WATCH, Jun 9) — <i>Weights and technical report landed June 11, completing the open-source commitment made at the Jun 1 API launch; at ~428B/23B active it is the largest available open-weight MoE with a 1M-context window and native multimodal training.</i> ~428B total / ~23B active (MoE, MiniMax Sparse Attention), 1M context; vendor-run: 59.0% SWE-Bench Pro, 66.0% Terminal-Bench 2.1, 14.2× prefill speedup vs. M2 at 1M context (H800); arXiv:2606.13392. 📦 Open weights, minimax-community license · HuggingFace (MiniMaxAI/MiniMax-M3) · OpenRouter ($0.30/1M input); API live $0.60/$2.40 per 1M in/out (MiniMax). <a href="https://arxiv.org/abs/2606.13392">→ arXiv Tech Report</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+<b>Kimi K2.7 Code</b> (Moonshot AI, Jun 12) — <i>Coding-focused upgrade over K2.6 that cuts thinking-token usage ~30% while beating Claude Opus 4.8 on MCPMark Verified (81.1% vs. 76.4%).</i> 1T total / 32B active (MoE, 384 experts, 8+1 selected per pass), 256K context; vendor-run: 81.1% MCPMark Verified, 62.0 Kimi Code Bench v2 (+21.8% vs. K2.6), 53.6 Program Bench. 📦 Open weights, Modified MIT · HuggingFace (moonshotai/Kimi-K2.7-Code) · Moonshot API · ModelScope. <a href="https://huggingface.co/moonshotai/Kimi-K2.7-Code">→ HuggingFace</a>
+
+━━━ <b>WATCH</b> 👀
+<b>Grok V9-Medium</b> (xAI, ~mid-Jun) — <i>1.5T-parameter model trained on Cursor developer workflows; now serving Tesla vehicles and the X platform, but the xAI developer API remains pending.</i> 1.5T total params; no public benchmarks. ⚡ Expected: xAI API, mid-June. <a href="https://www.techtimes.com/articles/318165/20260610/grok-v9-rolls-tesla-cars-x-why-musks-distribution-flywheel-worries-ai-rivals.htm">→ TechTimes</a>
+
+<b>Gemini 3.5 Pro</b> (Google, ~late Jun) — <i>2M-context flagship with Deep Think reasoning; Vertex AI limited preview only, GA still pending.</i> 2M context; expected ~$15/$60 per 1M in/out. ⚡ Private preview: Vertex AI. <a href="https://blog.google/innovation-and-ai/models-and-research/gemini-models/gemini-3-5/">→ Google</a>
+
+<b>Claude Mythos 5</b> (Anthropic) — <i>Safeguard-minimal sibling to Fable 5 for vetted orgs via Project Glasswing; no public release timeline announced.</i> 1M context; $10/$50 per 1M in/out. ⚡ Private preview: Anthropic-approved orgs only. <a href="https://www.anthropic.com/news/claude-fable-5-mythos-5">→ Anthropic</a>
+
+Total: 5 items tracked today

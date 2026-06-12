@@ -131,6 +131,16 @@ def test_flux_specialized():
     assert monitor.categorize_model(m) == "specialized"
 
 
+def test_grok_build_specialized():
+    """Grok Build 0.1 is a coding agent — 'grok-build' keyword → specialized."""
+    assert monitor.categorize_model(_model("x-ai/grok-build-0.1")) == "specialized"
+
+
+def test_grok_imagine_specialized():
+    """Grok Imagine Video 1.5 is a video/image generation model → specialized."""
+    assert monitor.categorize_model(_model("x-ai/grok-imagine-video-1.5")) == "specialized"
+
+
 def test_supertone_specialized():
     m = _model("Supertone/Supertonic-v2", provider="Supertone")
     assert monitor.categorize_model(m) == "specialized"

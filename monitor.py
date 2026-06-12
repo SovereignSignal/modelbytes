@@ -1078,8 +1078,8 @@ def categorize_model(model: ModelRelease) -> str:
     # open-weight (issue #16); moonshotai routes via sig_org_map below.
     closed = ["gpt-4", "claude-3", "claude-4", "claude-opus-4", "o1-", "o3-", "gemini-1.5", "gemini-2", "gemini-3", "grok-4"]
     reasoning = ["reasoning", "r1", "o1", "o3"]
-    coding = ["codestral", "coder", "code-", "claude-3.5", "devstral"]
-    image_gen = ["dall-e", "flux", "stable-diffusion", "midjourney", "wan2", "pixal"]
+    coding = ["codestral", "coder", "code-", "claude-3.5", "devstral", "grok-build"]
+    image_gen = ["dall-e", "flux", "stable-diffusion", "midjourney", "wan2", "pixal", "grok-imagine"]
     audio = ["lyria", "supertone", "supertonic", "dramabox"]
 
     if any(p in name for p in premier) or provider in ["meta", "mistral ai", "alibaba"]:

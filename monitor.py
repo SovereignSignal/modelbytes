@@ -1071,7 +1071,7 @@ def categorize_model(model: ModelRelease) -> str:
 
     premier = ["llama-3.3", "llama-3.2", "mistral-large", "mixtral",
                "qwen2.5-72b", "qwen3", "qwen3.6", "deepseek-v3", "deepseek-v4",
-               "gemma-2-27b", "gemma-4", "gemma-3", "command-r-plus", "command-a", "nemotron",
+               "gemma-2-27b", "gemma-4", "gemma-3", "diffusiongemma", "command-r-plus", "command-a", "nemotron",
                "sulphur", "minicpm", "zaya", "glm-5", "glm-4.7",
                "minimax", "grok-2", "grok-3"]
     # NOTE: 'kimi' must NOT be in this list — Moonshot's Kimi K2 models are

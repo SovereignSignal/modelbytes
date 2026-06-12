@@ -73,6 +73,14 @@ def test_mistral_provider_open_frontier():
 
 # ---------- closed_frontier ----------
 
+def test_diffusiongemma_open_frontier():
+    """DiffusionGemma is open-weights (Apache 2.0). Without 'diffusiongemma' in
+    premier the Google-provider guard routes it to closed_frontier — premier is
+    checked first."""
+    m = _model("google/diffusiongemma-26B-A4B-it", is_open_source=True)
+    assert monitor.categorize_model(m) == "open_frontier"
+
+
 def test_gpt_4_closed_frontier():
     assert monitor.categorize_model(_model("openai/gpt-4o")) == "closed_frontier"
 

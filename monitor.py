@@ -47,6 +47,9 @@ LLM_API_KEY = os.environ.get("MODELBYTES_LLM_KEY",
     os.environ.get("OPENROUTER_API_KEY", "")))
 LLM_MODEL = os.environ.get("MODELBYTES_LLM_MODEL", "gpt-4o-mini")
 LLM_BASE_URL = os.environ.get("MODELBYTES_LLM_URL", "https://api.openai.com/v1")
+# Daily cron, no latency pressure. A frontier reasoning model (deepseek-v4-pro)
+# writing a full 15-model digest needs well over the old 60s.
+LLM_TIMEOUT = int(os.environ.get("MODELBYTES_LLM_TIMEOUT", "240"))
 
 # Provider name resolution: raw org → display name
 PROVIDER_NAMES = {
@@ -1057,12 +1060,14 @@ def is_noise_model(model_id: str, author: str, tags: list,
             "-local", "-dev", "-dev1", "-dev2", "-exp", "-exp1", "-exp2",
             "-draft", "-wip", "-wip1", "-wip2", "-wip3"]
     
-    # GGUF: noise for unknown orgs, allow for known orgs (unsloth, bartowski, etc.)
-    if ("-gguf" in model_lower or "_gguf" in model_lower):
-        if author_prefix not in KNOWN_ORGS:
-            return True
-        # Known org GGUF = legitimate distribution, continue checking other junk
-    
+    # GGUF is a quant repackage, never a primary "new model" for this digest —
+    # always noise, even from known orgs (unsloth/bartowski's whole output is
+    # GGUF repackages of other people's models). Previously allowed for known
+    # orgs, which leaked e.g. unsloth/diffusiongemma-…-GGUF into the candidate
+    # set, where the publish-QA quant gate then blocked the entire digest.
+    if "-gguf" in model_lower or "_gguf" in model_lower:
+        return True
+
     # '-base' as standalone suffix = classifier noise, but 'X-2-base' = real model
     if "-base" in model_lower:
         # Only flag as noise if '-base' is the LAST segment (classifier pattern)
@@ -1758,8 +1763,11 @@ Models:
             "Content-Type": "application/json",
         }
         print(f"Calling LLM ({LLM_MODEL})...")
+        # A daily cron has no latency pressure; a frontier reasoning model
+        # (deepseek-v4-pro) writing a full 15-model digest needs more than 60s.
+        # Configurable via MODELBYTES_LLM_TIMEOUT.
         resp = requests.post(f"{LLM_BASE_URL}/chat/completions",
-                             json=payload, headers=headers, timeout=60)
+                             json=payload, headers=headers, timeout=LLM_TIMEOUT)
         resp.raise_for_status()
         summary = resp.json()["choices"][0]["message"]["content"].strip()
         # The model is unreliable at filling the count (it echoes the literal
@@ -2267,6 +2275,20 @@ def main():
             message, mode="fallback")
         for warning in qa_warnings:
             print(f"Digest QA warning (fallback): {warning}", file=sys.stderr)
+
+        # Preview must be fully side-effect-free: no alerts, no DB writes, no
+        # heartbeat, no send. This MUST come before the qa-error/alert path —
+        # otherwise a preview run DMs the operator a false "NO POST" alert
+        # (exactly what happened 2026-06-13 while validating a model).
+        if preview_mode:
+            print("=== PREVIEW ===")
+            print(message)
+            print(f"=== END ({len(message)} chars) ===")
+            if qa_errors:
+                print(f"[preview] would BLOCK on QA errors: {'; '.join(qa_errors)}")
+            print("Preview mode — not sending (no alerts, no DB writes)")
+            return 0
+
         if qa_errors:
             print(
                 f"Fallback digest failed pre-publish QA: {'; '.join(qa_errors)}",
@@ -2281,13 +2303,6 @@ def main():
                                error="; ".join(qa_errors))
             ping_heartbeat(False, "fallback blocked by QA")
             return 1
-
-        if preview_mode:
-            print("=== PREVIEW ===")
-            print(message)
-            print(f"=== END ({len(message)} chars) ===")
-            print("Preview mode — not sending")
-            return 0
 
         if not send_telegram_post(message):
             send_ops_alert(f"NO POST today ({today}): Telegram send failed on "
@@ -2326,11 +2341,12 @@ def main():
 
     else:
         print("No new models")
-        send_ops_alert(f"No post today ({today}): no curated digest and no new "
-                       "models surfaced by the fallback. If sources look quiet "
-                       "several days running, check fetchers.")
-        record_publish_run(today, "fallback", "no-models", models_found=0)
-        ping_heartbeat(True, "no models")
+        if not preview_mode:
+            send_ops_alert(f"No post today ({today}): no curated digest and no new "
+                           "models surfaced by the fallback. If sources look quiet "
+                           "several days running, check fetchers.")
+            record_publish_run(today, "fallback", "no-models", models_found=0)
+            ping_heartbeat(True, "no models")
 
     save_seen_models(seen_models)
     return 0

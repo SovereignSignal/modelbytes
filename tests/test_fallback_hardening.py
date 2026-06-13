@@ -180,3 +180,46 @@ def test_abliteration_and_uncensored_finetunes_are_noise():
 def test_base_instruct_release_not_caught_by_new_patterns():
     # The real base model from a known org must still pass.
     assert monitor.is_noise_model("google/gemma-4-12B-it", "google", []) is False
+
+
+# ── 2026-06-13: GGUF always-noise + preview is side-effect-free ──
+
+def test_gguf_is_noise_even_from_known_orgs():
+    # unsloth is a KNOWN_ORG; its GGUF repackages used to pass the noise filter,
+    # then trip the publish-QA quant gate and BLOCK the whole digest (dark
+    # channel). A GGUF is never a primary release here → always noise.
+    assert monitor.is_noise_model(
+        "unsloth/diffusiongemma-26B-A4B-it-GGUF", "unsloth", []) is True
+    assert monitor.is_noise_model(
+        "bartowski/SomeModel-7B-GGUF", "bartowski", []) is True
+
+
+def test_preview_with_qa_error_sends_no_ops_alert(monkeypatch, tmp_path, capsys):
+    # A preview run whose fallback digest trips a QA error must NOT alert the
+    # operator or write to the DB — it just prints what WOULD block.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["monitor.py", "--preview"])
+    monkeypatch.setattr(monitor, "try_post_pending_curated", lambda: False)
+    monkeypatch.setattr(monitor, "init_database", lambda: None)
+    monkeypatch.setattr(monitor, "load_seen_models", lambda: {"seed/x"})
+    monkeypatch.setattr(monitor, "save_seen_models", lambda s: None)
+    for f in ["fetch_ollama_models", "fetch_huggingface_trending",
+              "fetch_major_orgs", "fetch_hf_text_generation"]:
+        monkeypatch.setattr(monitor, f, lambda: [])
+    # One model that will produce a digest; force a QA error via summarize.
+    m = monitor.ModelRelease(name="acme/Model-1", provider="acme",
+                             source="huggingface", url="https://hf.co/acme/Model-1",
+                             description="x", is_open_source=True)
+    monkeypatch.setattr(monitor, "fetch_openrouter_models", lambda: [m])
+    monkeypatch.setattr(monitor, "summarize_models",
+                        lambda models: "<b>Bad</b> — <i>x</i> <script>alert</script>")
+    alerts, runs = [], []
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda t: alerts.append(t) or True)
+    monkeypatch.setattr(monitor, "record_publish_run", lambda *a, **k: runs.append(a) or True)
+    monkeypatch.setattr(monitor, "ping_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(monitor, "send_telegram_post", lambda m: (_ for _ in ()).throw(AssertionError("preview must not send")))
+
+    rc = monitor.main()
+    assert rc == 0
+    assert alerts == [], f"preview sent ops alerts: {alerts}"
+    assert runs == [], f"preview wrote publish_runs: {runs}"

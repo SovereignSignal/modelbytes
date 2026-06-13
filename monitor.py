@@ -158,6 +158,8 @@ class ModelRelease:
     canonical_url: Optional[str] = None
     confidence: str = "medium"
     validation_notes: List[str] = None
+    # Short benchmark/fact string pulled from the HF model card (inline path).
+    card_facts: Optional[str] = None
 
     def __post_init__(self):
         if self.performance_scores is None:
@@ -1302,6 +1304,111 @@ MAJOR_HF_ORGS = [
 ]
 
 
+ENRICH_HF_CARDS = os.environ.get("MODELBYTES_ENRICH_HF_CARDS", "1") == "1"
+
+
+def _param_size_from_name(name: str) -> Optional[str]:
+    """The size token a model advertises in its own name ('…-32B', '…-A4B',
+    '…-70M'). The canonical headline size — more trustworthy than HF
+    safetensors.total, which is often a partial/sharded/adapter upload. Returns
+    the LARGEST token (total, not the MoE active count) or None."""
+    seg = name.split("/")[-1]
+    best = None
+    for num, unit in re.findall(r"(\d+(?:\.\d+)?)\s*([BM])\b", seg):
+        val = float(num) * (1e9 if unit.upper() == "B" else 1e6)
+        if best is None or val > best[0]:
+            best = (val, f"{num}{unit.upper()}")
+    return best[1] if best else None
+
+
+def _format_param_count(n) -> Optional[str]:
+    """Raw HF safetensors total → '12B' / '760M'. None for 0/missing/unparseable."""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return None
+    if n >= 1_000_000_000:
+        v = n / 1_000_000_000
+        return (f"{v:.1f}".rstrip("0").rstrip(".")) + "B"
+    if n >= 1_000_000:
+        return f"{round(n / 1_000_000)}M"
+    return f"{n}"
+
+
+def _extract_card_benchmarks(card_data: dict) -> str:
+    """Pull a short benchmark string from a model card's model-index results.
+    Defensive against the format's many shapes; returns '' when nothing usable."""
+    out = []
+    try:
+        for entry in card_data.get("model-index", []) or []:
+            for result in entry.get("results", []) or []:
+                name = (result.get("dataset", {}) or {}).get("name")
+                metrics = result.get("metrics", []) or []
+                val = next((m.get("value") for m in metrics
+                            if isinstance(m.get("value"), (int, float))), None)
+                if name and val is not None:
+                    out.append(f"{name} {val}")
+                if len(out) >= 5:
+                    break
+            if len(out) >= 5:
+                break
+    except Exception:
+        return ""
+    return ", ".join(out)
+
+
+def fetch_hf_card(model_id: str) -> dict:
+    """Fetch a HuggingFace model's card metadata (license, total params, context,
+    benchmarks) so the inline LLM has real facts to write from. Returns only the
+    keys actually found; {} on any failure — never raises (a missing card just
+    yields a thinner entry, never a crash)."""
+    card = {}
+    try:
+        resp = _http_get(f"https://huggingface.co/api/models/{model_id}",
+                         f"HF card {model_id}", timeout=20)
+        data = resp.json()
+        card_data = data.get("cardData", {}) or {}
+        lic = card_data.get("license") or card_data.get("license_name")
+        # "other"/"unknown" are HF placeholders, not real licenses — don't
+        # publish "other license".
+        if isinstance(lic, str) and lic.lower() not in ("other", "unknown", "none", ""):
+            card["license"] = lic
+        # Trust the model's own name over safetensors.total (often partial — a
+        # 32B model whose repo holds only a 676K adapter must not become "676K").
+        params = _param_size_from_name(model_id) or _format_param_count(
+            (data.get("safetensors", {}) or {}).get("total"))
+        if params:
+            card["total_parameters"] = params
+        ctx = (data.get("config", {}) or {}).get("max_position_embeddings")
+        if isinstance(ctx, int) and ctx > 0:
+            card["context_window"] = ctx
+        bench = _extract_card_benchmarks(card_data)
+        if bench:
+            card["benchmarks"] = bench
+    except Exception as e:
+        print(_redact_secrets(f"HF card {model_id} fetch failed: {e}"), file=sys.stderr)
+    return card
+
+
+def enrich_with_hf_cards(models: List[ModelRelease]) -> None:
+    """Fill missing hard-facts on HF-sourced models from their cards, in place.
+    Bounded by the caller (pass the digest set, ≤15). Never overwrites a value
+    we already have; never raises."""
+    for m in models:
+        if not (m.source or "").startswith("huggingface") or "/" not in m.name:
+            continue
+        card = fetch_hf_card(m.name)
+        if not card:
+            continue
+        m.license = m.license or card.get("license")
+        m.total_parameters = m.total_parameters or card.get("total_parameters")
+        m.context_window = m.context_window or card.get("context_window")
+        if card.get("benchmarks") and not m.card_facts:
+            m.card_facts = card["benchmarks"]
+
+
 def fetch_org_models(author: str) -> List[ModelRelease]:
     """Fetch models from a specific HF org, sorted by recent."""
     models = []
@@ -1693,6 +1800,8 @@ def summarize_models(models: List[ModelRelease]) -> str:
             s += f"\nTotal params: {m.total_parameters}"
         if m.active_parameters:
             s += f"\nActive params: {m.active_parameters}"
+        if m.card_facts:
+            s += f"\nBenchmarks (from model card): {m.card_facts}"
         s += f"\nConfidence: {m.confidence}"
         if m.validation_notes:
             s += f"\nUnknowns: {', '.join(m.validation_notes)}"
@@ -1731,7 +1840,8 @@ RULES:
 - SKIP: fine-tunes, ONNX, LoRA, GGUF, embedders, experiments, distilled, personal merges
 - Treat each model's Confidence and Unknowns as pre-publish QA.
 - Only mention release date, license, total params, or active params if explicitly provided below.
-- Do not infer or invent parameter counts, license terms, benchmark numbers, or release dates.
+- DO weave in the concrete specs provided (params, context, license, and any "Benchmarks (from model card)" line) — they make an entry land. Prefer one hard number over a vague adjective.
+- Do not infer or invent parameter counts, license terms, benchmark numbers, or release dates beyond what is provided below.
 - If a model is low confidence, skip it unless it is the only item in its section.
 - No filler verbs: explores, reveals, highlights, offering, showcases, demonstrates, unpacks, breaks down, dives into, worth watching, notable, gaining traction
 - HIDE empty sections
@@ -2268,6 +2378,12 @@ def main():
         for m in held:
             if not _significant(m):
                 seen_models.add(m.name)
+
+        # Enrich the top candidates with real HF-card facts (params, license,
+        # context, benchmarks) so the inline model writes from specs, not just
+        # its training knowledge — closes the research gap vs the old curator.
+        if ENRICH_HF_CARDS:
+            enrich_with_hf_cards(digest_models)
 
         message = summarize_models(digest_models)
         fallback_mode = f"fallback-{LAST_SUMMARY_MODE}"

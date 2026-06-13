@@ -1,0 +1,13 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Saturday, June 13, 2026</i>
+
+<i>MoE efficiency plus domain-specific training now routinely outscores models 4× larger — a 3B-active coder out-indexes 120B models and a 4B TTS covers 100 languages; parameter count keeps getting weaker as a capability proxy.</i>
+
+━━━ <b>SPECIALIZED</b> 🎯
+<b>North Mini Code 1.0</b> (Cohere, Jun 9) — <i>Cohere's first open developer model: a 30B/3B-active MoE coder that outperforms Nemotron 3 Super (120B) and Devstral 2 (123B) on the Artificial Analysis Coding Index, and fits on a single H100 at FP8.</i> 30B total / 3B active (MoE), 256K context, 64K max output; vendor-run: 33.4 Artificial Analysis Coding Index, 61.0% SWE-Bench Verified (pass@1, mini-SWE-Agent harness). 📦 Open weights, Apache-2.0 · HuggingFace (CohereLabs/North-Mini-Code-1.0) · OpenRouter · Cohere API. <a href="https://cohere.com/blog/north-mini-code">→ Cohere</a>
+
+<b>Higgs Audio v3 TTS</b> (Boson AI, Jun 4) — <i>Designed for real-time voice agents rather than document narration: inline emotion and prosody control tokens change speaker style mid-utterance, covering 100+ languages with zero-shot voice cloning from a short sample.</i> 4.65B params; vendor-run: WER 3.61 on Higgs-Multilingual (111 langs), 53.65% preference win rate vs. competitors; 24 kHz output, RTF 0.262 on H100 (16 concurrent). 📦 Open weights, Boson Non-Commercial Research License · HuggingFace (bosonai/higgs-audio-v3-tts-4b); Boson API available (commercial license required separately). <a href="https://www.boson.ai/blog/higgs-audio-v3-tts">→ Boson AI</a>
+
+<b>SCAIL-2</b> (Z.AI / Zhipu AI, Jun 9) — <i>End-to-end character animation that transfers motion from any driving video to any reference character — human, animal, or non-standard figure — without intermediate skeleton extraction, handling multi-character and cross-identity scenes in a single pass.</i> 14B params (Wan2.1-14B-I2V backbone), trained on MotionPair-60K (59K pairs); vendor-run Studio-Bench: SSIM 0.6453, PSNR 19.09. 📦 Open weights, MIT · HuggingFace (zai-org/SCAIL-2). <a href="https://arxiv.org/abs/2606.10804">→ arXiv</a>
+
+Total: 3 items tracked today

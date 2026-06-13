@@ -9,7 +9,7 @@ A small Python service on Railway plus a set of scheduled Claude routines (runni
 - **`monitor.py`** — the deterministic core. Fetches, filters, categorizes, posts. Always runs as the safety net.
 - **`modelbytes-curator-routine`** (15:30 UTC daily) — generates the editorial digest with taste, writes `pending/<TODAY>.txt` to master; Railway reads + posts it at 16:00 UTC.
 - **`modelbytes-supervisor-routine`** (14:00 UTC daily) — audits the system + grows it organically. Auto-commits list additions when bootstrapped; opens PRs for logic changes; opens issues for ambiguous calls.
-- **`modelbytes-daily-health`** (17:00 UTC daily) — verifies the post landed.
+- **`modelbytes-daily-health`** (17:00 UTC daily) — verifies the post landed. *(Currently disabled — health signal now comes from the in-process ops alerts + `publish_runs` audit; see `docs/operations.md`.)*
 - **`modelbytes-pr-curator`** (hourly) — reviews open PRs.
 
 See [`docs/architecture.md`](./docs/architecture.md) for the full design and [`docs/operations.md`](./docs/operations.md) for runbooks (rotating the bot token, pausing supervisor autonomy, manually triggering a post, etc.). The digest format (identity tiers + availability tags) is specified in [`docs/superpowers/specs/2026-06-10-builder-digest-format-v3-design.md`](./docs/superpowers/specs/2026-06-10-builder-digest-format-v3-design.md). [`docs/vm-deployment.md`](./docs/vm-deployment.md) is a retired deployment path kept for reference; [`docs/structured-data.md`](./docs/structured-data.md) covers the Postgres-first data roadmap.
@@ -34,6 +34,7 @@ Identity tiers say what kind of model it is; a per-entry tag says how you can us
 - 🚦 Duplicate-post protection via a `posted_digests` ledger
 - 🔁 Retrying source fetches with a consistent ModelBytes user agent
 - 🤖 Claude-curated editorial digests with daily organic growth via the supervisor routine
+- 🛡️ Reliability: every run is recorded in a `publish_runs` audit table, and failures or degradation alert the operator (Telegram DM, Slack fallback). The publisher reads the curated digest from GitHub at publish time, so it doesn't depend on deploy timing.
 
 ## Deploy to Railway
 
@@ -87,6 +88,11 @@ venv/bin/python -m pytest tests/ -v
 | `MODELBYTES_HTTP_RETRIES` | Source fetch attempts for transient failures. Default: `3`. | ❌ |
 | `MODELBYTES_HTTP_BACKOFF_SECONDS` | Base retry delay for source fetches. Default: `1.0`. | ❌ |
 | `MODELBYTES_USER_AGENT` | User-Agent sent to model source APIs. Default identifies ModelBytes. | ❌ |
+| `MODELBYTES_ADMIN_CHAT_ID` | Telegram chat to DM on publish failures or degradation (operator alerts). | ❌ |
+| `MODELBYTES_OPS_SLACK_CHANNEL_ID` | Slack channel used as a fallback for operator alerts when the Telegram DM can't be reached. | ❌ |
+| `MODELBYTES_HEARTBEAT_URL` | Dead-man's-switch ping URL (e.g. healthchecks.io) — the only signal that catches "the cron never fired". | ❌ |
+| `MODELBYTES_PENDING_GRACE_SECONDS` | How long the publisher waits for a late curator digest before falling back. Default: `600`. | ❌ |
+| `MODELBYTES_ALLOW_SEED` | Set to `1` to let the fallback path seed an empty `models` table (otherwise it refuses, to guard wiped/migrated state). | ❌ |
 
 The fallback LLM path only runs when the daily curator routine hasn't produced today's `pending/<TODAY>.txt` (rare). The primary editorial layer is Claude via the [curator routine](./docs/architecture.md), which doesn't use these env vars.
 

@@ -9,16 +9,88 @@ Day-to-day operational tasks for ModelBytes. For the design behind these mechani
 | Channel output | https://t.me/ModelBytes (or `https://t.me/s/ModelBytes` for HTML-scrapable history) |
 | Routine outputs | https://claude.ai/code/routines |
 | GitHub issues / PRs | https://github.com/SovereignSignal/modelbytes |
-| Structured state | Postgres tables (`models`, `posted_digests`; more planned in `docs/structured-data.md`) |
+| Structured state | Postgres tables (`models`, `posted_digests`, `publish_runs`; see `docs/structured-data.md`) |
+| Per-run audit | `publish_runs` table — one row per `monitor.py` run (see "Reading the publish_runs audit" below) |
+| Ops alerts | Telegram DM to the admin chat, falling back to the ops Slack channel (see "Ops alerts" below) |
 | Railway service state | Railway dashboard → `modelbytes` project → `modelbytes` service |
 
-A clean day looks like: 1 post at 16:00 UTC in the channel, today's UTC date present in `posted_digests`, health check PASS once structured health records exist, and no new GitHub issues with the `health-incident` or `supervisor-drift` labels.
+A clean day looks like: 1 post at 16:00 UTC in the channel, today's UTC date present in `posted_digests`, a `posted`-status row in `publish_runs`, no ops alert in the admin chat, and no new GitHub issues with the `health-incident` or `supervisor-drift` labels.
+
+> The `daily-health` watchdog routine is **currently disabled** (it false-FAILed because `t.me/s/ModelBytes` 403-blocks datacenter IPs). Health signal now comes from the in-process ops alert layer plus the `publish_runs` audit — see "Ops alerts" and the daily-health section below.
 
 ## Pre-publish factual QA
 
 Every digest passes through `monitor.py::validate_digest_for_publish()` immediately before Telegram send. The QA pass is intentionally small and deterministic: it fixes known high-confidence fact slips, logs warnings for missing canonical source/license/parameter metadata, and blocks only severe errors that would make a post unsafe or empty.
 
-When adding a model that the curator may mention repeatedly, add a `ModelFact` entry in `monitor.py` with canonical URL, release date, license, total parameters, active parameters, and confidence. The fallback LLM prompt receives those fields and is explicitly told not to invent missing facts.
+When adding a model that the curator may mention repeatedly, add a `ModelFact` entry in `monitor.py` with canonical URL, release date, license, total parameters, active parameters, and confidence. The fallback LLM prompt receives those fields and is explicitly told not to invent missing facts. `ModelFact` entries carry a 45-day freshness window (`_fact_active`) so old correction regexes stop mutating unrelated copy after the fact goes stale.
+
+## Ops alerts
+
+**Live since 2026-06-12.** The publisher tells on itself in-process — it does not depend on the (now-disabled) `daily-health` watchdog. `monitor.py::send_ops_alert(text)` routes problems to the operator:
+
+1. **Primary:** a Telegram DM to `MODELBYTES_ADMIN_CHAT_ID`.
+2. **Fallback:** a message to the ops Slack channel `MODELBYTES_OPS_SLACK_CHANNEL_ID`.
+
+The two are in isolated `try` blocks, so a Telegram outage still reaches Slack (and vice versa). `send_ops_alert()` never raises — a broken alert path cannot take down a publish run. All alert text (and every log line) passes through `_redact_secrets()`, which scrubs the bot token and the `DATABASE_URL` before anything is sent or logged.
+
+Alerts fire on: fallback days (the curator missed), blocked/failed publishes, late curator (grace window expired), a lost `DATABASE_URL`, content-damage QA warnings (fact drift, floods), and an uncaught crash (the `__main__` crash handler alerts + heartbeats, then re-raises). Cosmetic format-drift warnings do **not** alert (anti-noise). Escalating fallback alerts are driven by `fallback_streak()` reading consecutive fallback rows out of `publish_runs`.
+
+### Setting up the admin chat
+
+The admin chat ID is the operator's own Telegram chat with the bot. To capture it:
+
+1. **DM the bot** (`@ModelBytes_bot`) and send `/start` (or any message) from the operator account.
+2. **Read the chat id** from `getUpdates`:
+   ```bash
+   curl -s "https://api.telegram.org/bot<BOT_TOKEN>/getUpdates" | python3 -m json.tool
+   ```
+   Find `result[].message.chat.id` — a positive integer for a direct chat (e.g. `12345678`). If `getUpdates` is empty, send the bot another message and retry (Telegram only returns recent, un-consumed updates).
+3. **Set the Railway var** (keep it out of shell history):
+   ```bash
+   printf '%s' '<chat-id>' | railway variable set MODELBYTES_ADMIN_CHAT_ID --stdin --service modelbytes --environment production
+   ```
+4. Optionally set `MODELBYTES_OPS_SLACK_CHANNEL_ID` (a `C0XXXXXXXXX` channel id, requires `SLACK_BOT_TOKEN`) as the alert fallback.
+
+To verify, force a fallback-path run (see "Manually triggering a Telegram post") on a day with no pending file and confirm the alert lands in the DM.
+
+### Heartbeat (dead-man's switch)
+
+`ping_heartbeat(ok, msg)` POSTs to `MODELBYTES_HEARTBEAT_URL` (e.g. a healthchecks.io check URL), hitting the `/fail` endpoint on failure. This is the **only** thing that catches "cron never fired at all" — every other alert assumes the process actually ran. It is **optional and currently UNSET**. To enable: create a healthchecks.io check with the expected schedule (daily near 16:00 UTC, with grace), then:
+
+```bash
+printf '%s' '<heartbeat-ping-url>' | railway variable set MODELBYTES_HEARTBEAT_URL --stdin --service modelbytes --environment production
+```
+
+### Reading the publish_runs audit
+
+Every `monitor.py` run records exactly one `publish_runs` row, so this table is the ground truth for "what did the publisher do today and why". Recent rows:
+
+```sql
+SELECT run_at, post_date, mode, status,
+       models_found, models_emitted, message_chars,
+       telegram_message_id, slack_ok, error
+FROM publish_runs
+ORDER BY run_at DESC
+LIMIT 20;
+```
+
+`mode` is `curated` or `fallback`. `status` values:
+
+| Status | Meaning |
+|---|---|
+| `posted` | Digest sent to Telegram successfully (`telegram_message_id` populated; `slack_ok` shows the mirror result). |
+| `blocked` | A digest existed but `validate_digest_for_publish` raised an ERROR — nothing was sent. Investigate the `error` field. |
+| `send-failed` | Validation passed but the Telegram send failed (e.g. dead token, 4xx/5xx) — check `error`, then the token-rotation runbook. |
+| `no-models` | Fallback path ran but found no significant releases after filtering/dedup, so there was nothing to post. |
+| `seeded` | An empty `models` table was seeded (only happens with `MODELBYTES_ALLOW_SEED=1`); no digest posted that run. |
+
+To see the recent fallback streak that drives escalating alerts:
+
+```sql
+SELECT run_at, status FROM publish_runs
+WHERE mode = 'fallback'
+ORDER BY run_at DESC LIMIT 10;
+```
 
 ## Pausing the supervisor's autonomy
 
@@ -101,6 +173,37 @@ DATABASE_URL="" TELEGRAM_BOT_TOKEN="" python3 monitor.py --preview
 
 If `MODELBYTES_LLM_KEY` (or the fallbacks) is set in your local env, you'll see the LLM-written digest. If not, you'll see the template-only one and a `No LLM key — falling back to template digest` line in stderr.
 
+## Environment variables
+
+Required (the service will not publish without these):
+
+| Env var | Purpose |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | Bot token for the publishing bot. |
+| `TELEGRAM_CHANNEL_ID` | Target channel (`-100XXXXXXXXXX`). |
+| `DATABASE_URL` | Postgres for the `models` / `posted_digests` / `publish_runs` tables. |
+
+Optional / tuning:
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `MODELBYTES_LLM_KEY` / `MODELBYTES_LLM_MODEL` / `MODELBYTES_LLM_URL` | see "The LLM fallback chain" | Fallback summarizer (prod = GLM via Tenspire). |
+| `SLACK_BOT_TOKEN` + `MODELBYTES_SLACK_CHANNEL_ID` | (none) | Slack mirror of the daily post. |
+| `MODELBYTES_ADMIN_CHAT_ID` | (none) | Telegram DM target for ops alerts (primary). **Live since 2026-06-12.** |
+| `MODELBYTES_OPS_SLACK_CHANNEL_ID` | (none) | Slack channel for ops alerts (fallback when the Telegram DM fails). |
+| `MODELBYTES_HEARTBEAT_URL` | (none) | Dead-man's-switch ping target (e.g. healthchecks.io). Currently UNSET. |
+| `MODELBYTES_PENDING_GRACE_SECONDS` | `600` (10 min) | How long `_wait_for_pending` polls GitHub raw for a late curator before giving up to the fallback path. |
+| `MODELBYTES_PENDING_POLL_SECONDS` | `120` | Poll interval inside the grace window. |
+| `MODELBYTES_ALLOW_SEED` | unset | Set to `1` to allow seeding an empty `models` table (see "Live-mode guards"). |
+| `MODELBYTES_HTTP_RETRIES` / `MODELBYTES_HTTP_BACKOFF_SECONDS` / `MODELBYTES_USER_AGENT` | see "When source fetches are flaky" | Retrying HTTP helper knobs. |
+
+## Live-mode guards
+
+`main()` refuses to silently no-op when its state looks wrong (these guards exist because a wiped/migrated DB used to make every day skip silently):
+
+- **Lost `DATABASE_URL`**: fires an ops alert, then **still attempts the curated path** (which needs no DB — the digest comes from GitHub raw and is idempotent only via `posted_digests`, so a duplicate is possible but a post still happens). For the **fallback path** a missing `DATABASE_URL` is **fatal** (exit 1), because dedup/audit are not optional there.
+- **Empty `models` table**: the run refuses to silently seed and post a from-nothing digest. It exits unless `MODELBYTES_ALLOW_SEED=1` is set, in which case it seeds (recorded as a `seeded` row in `publish_runs`) rather than treating the empty table as "no news today".
+
 ## Manually triggering a Telegram post
 
 Useful for: testing after a token rotation, posting an off-schedule digest, validating that the fast-path works after a code change.
@@ -122,18 +225,17 @@ Routines can be triggered ad-hoc from claude.ai. From this Claude session you ca
 RemoteTrigger(action="run", trigger_id="<trigger_id>")
 ```
 
-Trigger IDs are in the `[[modelbytes-curator-routines]]` auto-memory file. As of 2026-05-21:
-
-- Curator: `trig_017i1diXxpkQYsAL2MFU5yPe`
-- Supervisor: `trig_01T7SJqAbNraE3ET11z9VCi5`
-- Daily-health: `trig_01Eade8Cqc5wjBayzJencZAC`
-- PR curator: `trig_016bmdGxfvVwuxwF7Jnv7fcy`
+Live trigger IDs are not listed here — they have churned (the routines were
+recreated once after a deletion, so any hardcoded list goes stale; daily-health
+is currently **disabled**). Find the current IDs at https://claude.ai/code/routines,
+via `RemoteTrigger(action="list")`, or in the operator's
+`modelbytes-curator-routines` notes.
 
 ## When the curator misses (no `pending/<TODAY>.txt` was pushed)
 
 Railway will fall through to the deterministic pipeline at 16:00 UTC. The channel still gets a post — normally LLM-summarized from the shared Railway fallback variables, or template-only if the LLM env vars are unavailable. To investigate:
 
-1. **Open the curator routine's log** at https://claude.ai/code/routines/trig_017i1diXxpkQYsAL2MFU5yPe — its most recent run's output explains what happened.
+1. **Open the curator routine's log** at https://claude.ai/code/routines — its most recent run's output explains what happened.
 2. **Common causes**:
    - Fetcher 403s from the Anthropic CCR sandbox (some endpoints not on the network allowlist) — the routine should log this and exit cleanly without a partial pending file.
    - `gh push` failed (auth issue, branch conflict).
@@ -155,15 +257,24 @@ MODELBYTES_USER_AGENT="ModelBytes/1.0 (+https://github.com/SovereignSignal/model
 
 If one source is failing but the others are healthy, the fetcher logs the error and returns an empty list for that source. The daily post should still proceed from the remaining sources.
 
-## When the daily-health check FAILs
+## The daily-health watchdog (currently disabled)
 
-The routine will open a GitHub issue with the `health-incident` label. Open it for details:
+The `daily-health` routine (17:00 UTC) is **disabled**. It scraped `t.me/s/ModelBytes` to confirm the day's post landed, but that endpoint **403-blocks datacenter IPs**, so the check false-FAILed every day from a cloud runner. A receipt-based replacement (confirm the post from the captured `telegram_message_id` / `publish_runs` row rather than by scraping the public web view) is **designed but tabled**.
+
+Until it returns, health signal comes from two in-process sources instead of the watchdog:
+
+1. **Ops alerts** (Telegram DM → Slack fallback) fire in-process on fallback days, blocked/failed publishes, a late curator, a lost `DATABASE_URL`, content-damage warnings, and crashes. See "Ops alerts" above.
+2. **The `publish_runs` audit** — query for a missing or non-`posted` row for today's UTC date. See "Reading the publish_runs audit" above.
+
+The one gap neither covers is "the cron never fired at all" — only the optional `MODELBYTES_HEARTBEAT_URL` dead-man's switch catches that.
+
+If a `health-incident` GitHub issue from a past run is still open, close it once confirmed stale:
 
 ```bash
 gh issue list --repo SovereignSignal/modelbytes --label health-incident --state open
 ```
 
-Most common failure: the cron ran but Telegram returned 401 (dead token). Follow the bot-token-rotation runbook above.
+Most common real failure remains: the cron ran but Telegram returned 401 (dead token), which now surfaces as a `send-failed` row in `publish_runs` plus an ops alert. Follow the bot-token-rotation runbook above.
 
 ## Cleaning up stale `pending/` files
 
@@ -183,7 +294,7 @@ If you intentionally need to repost a date, remove the matching row from `posted
 
 To delete a routine: visit https://claude.ai/code/routines, find the routine, delete it. Then update `[[modelbytes-curator-routines]]` to move the entry into a `## Retired` section with the date and reason.
 
-Don't delete `modelbytes-daily-health` until the supervisor has run successfully on 2-3 days — daily-health is the canary that catches things the supervisor might miss. When routine prompts are refreshed, health and supervisor outcomes should go to structured storage rather than external note pages.
+`modelbytes-daily-health` is already disabled (it false-FAILed by scraping a web view that 403s datacenter IPs — see "The daily-health watchdog" above). Its job has been superseded by the in-process ops alert layer and the `publish_runs` audit, so a receipt-based re-enable is tabled rather than urgent. Health and supervisor outcomes now live in structured storage (`publish_runs`) rather than external note pages.
 
 ## When the v2 loop entirely fails
 

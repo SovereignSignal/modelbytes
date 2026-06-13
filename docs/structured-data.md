@@ -7,30 +7,32 @@ ModelBytes should use Postgres as the durable system of record for production st
 | Table | Status | Purpose |
 |---|---|---|
 | `models` | implemented | Deduplicates model IDs already seen by the fallback pipeline. |
-| `posted_digests` | in PR | Records one posted digest per UTC date so reruns are idempotent. |
+| `posted_digests` | implemented | Records one posted digest per UTC date so reruns are idempotent. |
+| `publish_runs` | implemented | One audit row per `monitor.py` run, including failures. |
 
-## Recommended Next Tables
+### `publish_runs` schema
 
-These are intentionally small. They can be added incrementally once the VM deployment path is stable.
+`record_publish_run(...)` writes one row best-effort on **every** run — posted, blocked, send-failed, no-models, or seeded — so a failed run is just as visible as a successful one.
 
-### `publish_runs`
-
-One row per execution of `monitor.py`.
-
-Useful fields:
+Shipped columns:
 
 - `id`
-- `started_at`
-- `finished_at`
-- `mode` (`curated`, `fallback`, `preview`, `seed`, `health`)
-- `status` (`success`, `skipped`, `failed`)
-- `post_date`
+- `run_at` (`timestamptz`)
+- `post_date` (`date`)
+- `mode` (`varchar`, e.g. `curated`, `fallback-llm`, `fallback-template`)
+- `status` (`posted`, `blocked`, `send-failed`, `no-models`, `seeded`)
 - `models_found`
 - `models_emitted`
 - `message_chars`
-- `error`
+- `telegram_message_id` (`bigint`)
+- `slack_ok` (`boolean`)
+- `error` (`text`)
 
-Why it matters: gives the team a daily audit trail without reading raw logs.
+Why it matters: gives a daily audit trail without reading raw logs. It powers `fallback_streak()` (which drives escalating fallback alerts) and is the intended data source for a future re-enabled daily-health reader.
+
+## Recommended Next Tables
+
+These are intentionally small and can be added incrementally.
 
 ### `source_fetches`
 
@@ -101,11 +103,12 @@ Why it matters: lets the supervisor discover and rank source candidates without 
 
 ## Migration Order
 
-1. Add `publish_runs` and `source_fetches`.
-2. Teach `monitor.py` to write one run summary and one source summary per fetcher.
-3. Add `health_checks` and update the health routine prompt to write structured results.
-4. Add `supervisor_runs` and update the supervisor routine prompt to record decisions.
-5. Promote `docs/source-candidates.md` into `source_candidates` only after the markdown queue has proven useful.
+`models`, `posted_digests`, and `publish_runs` are already shipped. Remaining order:
+
+1. Add `source_fetches` and teach `monitor.py` to write one source summary per fetcher.
+2. Add `health_checks` and update the health routine prompt to write structured results.
+3. Add `supervisor_runs` and update the supervisor routine prompt to record decisions.
+4. Promote `docs/source-candidates.md` into `source_candidates` only after the markdown queue has proven useful.
 
 ## Design Notes
 

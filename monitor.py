@@ -1035,7 +1035,11 @@ def is_noise_model(model_id: str, author: str, tags: list,
             # derivative artifacts of an already-released model (06-11 leak:
             # command-a-plus-…-w4a4/-fp8, Kimi-…-Eagle3).
             "-fp8", "-fp4", "-w4a4", "-w8a8", "-w4a16", "-w8a16",
+            "nvfp4", "qat-mobile",  # FP4 quant + QAT mobile-packaging variants
             "-eagle", "_eagle", "-mtp", "-draft-head",
+            # Abliteration / "uncensored" fine-tunes — derivative artifacts of a
+            # base model (06-13 inline leak: OBLITERATED, Uncensored-Aggressive).
+            "obliterated", "abliterated", "uncensored",
             "_ftjob_", "-merged", ".onnx",
             "-distilled", "-distill", "_distilled", "_distill",
             "moved", "deprecated", "archived", "old", "backup",

@@ -152,3 +152,31 @@ def test_stale_release_gate():
     assert monitor.is_stale_release("2026-06-05", today="2026-06-11") is False
     assert monitor.is_stale_release(None, today="2026-06-11") is False  # unknown date: keep
     assert monitor.is_stale_release("garbage", today="2026-06-11") is False  # unparseable: keep
+
+
+# ── 2026-06-13 inline-preview leaks: QAT-mobile packaging, NVFP4, abliterations ──
+
+def test_qat_mobile_packaging_is_noise():
+    for name in ("google/gemma-4-E2B-it-qat-mobile-ct",
+                 "google/gemma-4-E4B-it-qat-mobile-transformers"):
+        assert monitor.is_noise_model(name, "google", [],
+                                      downloads=999999, likes=9999) is True, name
+
+
+def test_nvfp4_quant_is_noise():
+    assert monitor.is_noise_model(
+        "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4", "nvidia", [],
+        downloads=999999, likes=9999) is True
+
+
+def test_abliteration_and_uncensored_finetunes_are_noise():
+    for name in ("OBLITERATUS/Gemma-4-12B-OBLITERATED",
+                 "someorg/Llama-4-abliterated",
+                 "HauhauCS/Qwen3.6-35B-A3B-Uncensored-Aggressive"):
+        assert monitor.is_noise_model(name, name.split("/")[0], [],
+                                      downloads=999999, likes=9999) is True, name
+
+
+def test_base_instruct_release_not_caught_by_new_patterns():
+    # The real base model from a known org must still pass.
+    assert monitor.is_noise_model("google/gemma-4-12B-it", "google", []) is False

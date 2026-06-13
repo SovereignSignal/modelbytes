@@ -1305,6 +1305,11 @@ MAJOR_HF_ORGS = [
 
 
 ENRICH_HF_CARDS = os.environ.get("MODELBYTES_ENRICH_HF_CARDS", "1") == "1"
+# When the claude.ai curator is retired, the inline (deepseek/Ollama) path IS
+# the everyday digest, not a degraded fallback — so don't alert "published via
+# fallback / curator absent" every day. Real failures (QA block, send fail,
+# no-models, crash) still alert.
+INLINE_PRIMARY = os.environ.get("MODELBYTES_INLINE_PRIMARY") == "1"
 
 
 def _param_size_from_name(name: str) -> Optional[str]:
@@ -2449,12 +2454,15 @@ def main():
                            message_chars=len(message),
                            telegram_message_id=LAST_TELEGRAM_MESSAGE_ID,
                            slack_ok=slack_ok)
-        streak = fallback_streak()
-        send_ops_alert(f"Published via FALLBACK ({LAST_SUMMARY_MODE}) for {today} "
-                       f"— curated pending file was absent. "
-                       f"Fallback streak: {streak} day(s). "
-                       "Check the curator routine if this persists.")
-        ping_heartbeat(True, f"fallback ({LAST_SUMMARY_MODE}) posted for {today}")
+        if not INLINE_PRIMARY:
+            # Curator still expected → a fallback day is an exception worth flagging.
+            streak = fallback_streak()
+            send_ops_alert(f"Published via FALLBACK ({LAST_SUMMARY_MODE}) for {today} "
+                           f"— curated pending file was absent. "
+                           f"Fallback streak: {streak} day(s). "
+                           "Check the curator routine if this persists.")
+        ping_heartbeat(True, f"{'inline' if INLINE_PRIMARY else 'fallback'} "
+                             f"({LAST_SUMMARY_MODE}) posted for {today}")
         print("Digest sent")
 
     else:

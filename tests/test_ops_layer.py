@@ -174,3 +174,40 @@ def test_main_refuses_silent_seed_without_flag(monkeypatch, tmp_path):
     rc = monitor.main()
     assert rc == 1
     assert alerts and "seed" in alerts[0].lower()
+
+
+def test_inline_primary_suppresses_fallback_alert(monkeypatch, tmp_path):
+    # With the curator retired (INLINE_PRIMARY=1), a successful inline publish
+    # must NOT alert "published via fallback" — that's the normal daily path now.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(monitor, "INLINE_PRIMARY", True)
+    monkeypatch.setattr(sys, "argv", ["monitor.py"])
+    monkeypatch.setattr(monitor, "DATABASE_URL", "postgresql://x")
+    monkeypatch.setattr(monitor, "TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setattr(monitor, "TELEGRAM_CHANNEL_ID", "-100123")
+    monkeypatch.setattr(monitor, "try_post_pending_curated", lambda: False)
+    monkeypatch.setattr(monitor, "init_database", lambda: None)
+    monkeypatch.setattr(monitor, "load_seen_models", lambda: {"seed/x"})
+    monkeypatch.setattr(monitor, "save_seen_models", lambda s: None)
+    m = monitor.ModelRelease(name="meta-llama/Llama-4-70B", provider="Meta",
+                             source="huggingface-org", url="https://hf.co/meta-llama/Llama-4-70B",
+                             description="x", is_open_source=True,
+                             release_date=monitor.datetime.now(monitor.timezone.utc).strftime("%Y-%m-%d"))
+    monkeypatch.setattr(monitor, "fetch_openrouter_models", lambda: [m])
+    for f in ["fetch_ollama_models", "fetch_huggingface_trending",
+              "fetch_major_orgs", "fetch_hf_text_generation"]:
+        monkeypatch.setattr(monitor, f, lambda: [])
+    monkeypatch.setattr(monitor, "enrich_with_hf_cards", lambda models: None)
+    monkeypatch.setattr(monitor, "summarize_models",
+                        lambda models: "🤖 <b>ModelBytes Digest</b>\n<i>x</i>\n\n━━━ <b>OPEN FRONTIER</b> 🔓\n<b>Llama 4 70B</b> — <i>x</i> <a href=\"https://h\">→ S</a>\n\nTotal: 1 items tracked today")
+    monkeypatch.setattr(monitor, "send_telegram_post", lambda m: True)
+    monkeypatch.setattr(monitor, "send_slack_post", lambda m: True)
+    monkeypatch.setattr(monitor, "mark_posted_digest", lambda *a, **k: True)
+    monkeypatch.setattr(monitor, "ping_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(monitor, "record_publish_run", lambda *a, **k: True)
+    alerts = []
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda t: alerts.append(t) or True)
+
+    rc = monitor.main()
+    assert rc == 0
+    assert not any("FALLBACK" in a or "fallback" in a for a in alerts), alerts

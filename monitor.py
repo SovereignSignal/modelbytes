@@ -1815,9 +1815,11 @@ def summarize_models(models: List[ModelRelease]) -> str:
 
     prompt = f"""You are ModelBytes, an AI model tracker. Write a SHORT Telegram digest.
 
-FORMAT (tiers in this order, hide empty ones):
+FORMAT (begin with the Take line, then the tiers in this order, hide empty ones):
+<i>one opinionated sentence on what today's releases mean for a builder — lead with the pattern across the day's models, not a single project name; write the sentence only, with no label in front of it; omit this whole line if nothing ties the day together</i>
+
 ━━━ <b>OPEN FRONTIER</b> 🔓
-<b>Model Name</b> — <i>One sentence: the differentiator / value prop — why a builder should care.</i> Hard facts (params, context, license, pricing — only if provided). ⚡ or 📦 availability. <a href="URL">→ Source</a>
+<b>Clean Model Name</b> — <i>One sentence: the differentiator / value prop — why a builder should care.</i> Hard facts (params, context, license, pricing — only if provided). ⚡ or 📦 availability. <a href="URL">→ Source</a>
 
 ━━━ <b>CLOSED FRONTIER</b> 🔒
 (same entry format)
@@ -1829,7 +1831,7 @@ FORMAT (tiers in this order, hide empty ones):
 (same entry format — models whose headline is running on your own hardware)
 
 ENTRY GRAMMAR (every entry, no exceptions):
-1. <b>Name</b> — then an <i>italic differentiator sentence</i>: what makes this model different / why it exists. Not a spec recitation.
+1. <b>Clean display name</b> — drop the "org/" prefix and any leading "~", and write it the way people say it, not the raw repo id. E.g. "MiniMaxAI/MiniMax-M3" → "MiniMax M3"; "google/gemma-4-12B-it" → "Gemma 4 12B"; "~anthropic/claude-fable-latest" → "Claude Fable"; "open-thoughts/OpenThinkerAgent-32B" → "OpenThinkerAgent 32B". Keep the version/size; drop format suffixes like "-it"/"-Instruct". Then an <i>italic differentiator sentence</i>: what makes this model different / why it exists. Not a spec recitation.
 2. Hard facts from the data below.
 3. Availability tag: "⚡ API live · OpenRouter" (openrouter source), "📦 Open weights · HF" (huggingface), "📦 Ollama pull-ready" (ollama).
 4. <a href="URL">→ Source</a> using the canonical URL when given.

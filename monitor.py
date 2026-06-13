@@ -175,6 +175,28 @@ class ModelFact:
     total_parameters: str
     active_parameters: Optional[str]
     confidence: str = "high"
+    # Facts are a freshness window, not a life sentence: past expiry the
+    # normalizer/warnings stop firing, so an old regex can't mutate copy that
+    # legitimately mentions similar numbers in a new context. Defaults to
+    # release_date + 45 days when unset.
+    expires: Optional[str] = None
+
+
+FACT_DEFAULT_TTL_DAYS = 45
+
+
+def _fact_active(fact: "ModelFact", today: str = None) -> bool:
+    if not fact.expires:
+        # Reuse the one date-window implementation (handles timestamp-suffixed
+        # and unparseable dates identically) instead of a second copy.
+        return not is_stale_release(fact.release_date, today=today,
+                                    max_age_days=FACT_DEFAULT_TTL_DAYS)
+    ref = (datetime.strptime(today, "%Y-%m-%d").date() if today
+           else datetime.now(timezone.utc).date())
+    try:
+        return ref <= datetime.strptime(fact.expires, "%Y-%m-%d").date()
+    except ValueError:
+        return True
 
 
 KNOWN_MODEL_FACTS: Tuple[ModelFact, ...] = (
@@ -249,6 +271,7 @@ def init_database():
                 )
             """)
             _ensure_posted_digests_table(cur)
+            _ensure_publish_runs_table(cur)
         conn.commit()
     finally:
         conn.close()
@@ -329,6 +352,168 @@ def mark_posted_digest(date_str: str, source: str, digest_path: str, message: st
     except Exception as e:
         print(f"Could not mark digest posted for {date_str}: {e}", file=sys.stderr)
         return False
+
+
+# ── Ops layer: run records, admin alerts, heartbeat ─────────────────────────
+# Contract (design-pass 2026-06-12): never raises — a broken alert must never
+# break publishing — never logs secrets, and every run leaves a publish_runs
+# row when a DB is configured.
+
+ADMIN_CHAT_ID = os.environ.get("MODELBYTES_ADMIN_CHAT_ID", "")
+OPS_SLACK_CHANNEL_ID = os.environ.get("MODELBYTES_OPS_SLACK_CHANNEL_ID", "")
+HEARTBEAT_URL = os.environ.get("MODELBYTES_HEARTBEAT_URL", "").rstrip("/")
+ALLOW_SEED = os.environ.get("MODELBYTES_ALLOW_SEED") == "1"
+
+
+def _redact_secrets(text: str) -> str:
+    out = str(text)
+    if TELEGRAM_BOT_TOKEN:
+        out = out.replace(TELEGRAM_BOT_TOKEN, "<token>")
+    if DATABASE_URL:
+        out = out.replace(DATABASE_URL, "<database-url>")
+    if SLACK_BOT_TOKEN:
+        out = out.replace(SLACK_BOT_TOKEN, "<token>")
+    return out
+
+
+def send_ops_alert(text: str) -> bool:
+    """Tell the operator something went wrong (or degraded). Best-effort.
+
+    Routes to a private Telegram chat (MODELBYTES_ADMIN_CHAT_ID) when set,
+    else a Slack ops channel (MODELBYTES_OPS_SLACK_CHANNEL_ID). Returns False
+    when undeliverable; never raises.
+    """
+    body = f"🚨 ModelBytes ops: {_redact_secrets(text)}"[:3900]
+    # Each destination gets its own try block: a Telegram-API outage is exactly
+    # when the Slack fallback must still fire (review finding 2026-06-12).
+    if ADMIN_CHAT_ID and TELEGRAM_BOT_TOKEN:
+        try:
+            resp = requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={"chat_id": ADMIN_CHAT_ID, "text": body,
+                      "disable_web_page_preview": True},
+                timeout=10,
+            )
+            if resp.ok:
+                return True
+            print(_redact_secrets(f"Ops alert via Telegram failed: {resp.text[:200]}"),
+                  file=sys.stderr)
+        except Exception as e:
+            print(_redact_secrets(f"Ops alert via Telegram raised: {e}"), file=sys.stderr)
+    if OPS_SLACK_CHANNEL_ID and SLACK_BOT_TOKEN:
+        try:
+            resp = requests.post(
+                "https://slack.com/api/chat.postMessage",
+                headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
+                json={"channel": OPS_SLACK_CHANNEL_ID, "text": body,
+                      "unfurl_links": False},
+                timeout=10,
+            )
+            if resp.ok and resp.json().get("ok"):
+                return True
+        except Exception as e:
+            print(_redact_secrets(f"Ops alert via Slack raised: {e}"), file=sys.stderr)
+    if not (ADMIN_CHAT_ID or OPS_SLACK_CHANNEL_ID):
+        print(f"Ops alert (no destination configured): {_redact_secrets(text)}",
+              file=sys.stderr)
+    return False
+
+
+def ping_heartbeat(ok: bool, message: str = "") -> None:
+    """Dead-man's switch: ping MODELBYTES_HEARTBEAT_URL (e.g. healthchecks.io)
+    on every run; /fail on failures. The external service alerts when pings
+    stop entirely — the one failure class in-process alerts can't catch
+    (cron never fired, container never started). No-op without the env var;
+    never raises."""
+    if not HEARTBEAT_URL:
+        return
+    url = HEARTBEAT_URL if ok else f"{HEARTBEAT_URL}/fail"
+    try:
+        requests.post(url, data=_redact_secrets(message)[:1000].encode("utf-8"),
+                      timeout=10)
+    except Exception as e:
+        print(_redact_secrets(f"Heartbeat ping failed: {e}"), file=sys.stderr)
+
+
+def _ensure_publish_runs_table(cur):
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS publish_runs (
+            id SERIAL PRIMARY KEY,
+            run_at TIMESTAMPTZ DEFAULT NOW(),
+            post_date DATE NOT NULL,
+            mode VARCHAR(30) NOT NULL,
+            status VARCHAR(20) NOT NULL,
+            models_found INTEGER,
+            models_emitted INTEGER,
+            message_chars INTEGER,
+            telegram_message_id BIGINT,
+            slack_ok BOOLEAN,
+            error TEXT
+        )
+    """)
+
+
+_publish_runs_ensured = False
+
+
+def record_publish_run(post_date: str, mode: str, status: str,
+                       models_found: int = None, models_emitted: int = None,
+                       message_chars: int = None, telegram_message_id=None,
+                       slack_ok=None, error: str = None) -> bool:
+    """One row per run — posted, blocked, failed, skipped, no-models, seeded —
+    so 'why was yesterday weird' is a SQL query, not a log archaeology dig.
+    Best-effort; never raises."""
+    global _publish_runs_ensured
+    if not DATABASE_URL:
+        return False
+    try:
+        conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
+        try:
+            with conn.cursor() as cur:
+                if not _publish_runs_ensured:
+                    _ensure_publish_runs_table(cur)
+                    _publish_runs_ensured = True
+                cur.execute(
+                    """
+                    INSERT INTO publish_runs
+                        (post_date, mode, status, models_found, models_emitted,
+                         message_chars, telegram_message_id, slack_ok, error)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (post_date, mode, status, models_found, models_emitted,
+                     message_chars, telegram_message_id, slack_ok,
+                     _redact_secrets(error) if error else None),
+                )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    except Exception as e:
+        print(_redact_secrets(f"Could not record publish run: {e}"), file=sys.stderr)
+        return False
+
+
+def fallback_streak() -> int:
+    """Consecutive most-recent posted days whose source was not 'curated'.
+    Powers escalating degradation alerts. 0 on any failure."""
+    if not DATABASE_URL:
+        return 0
+    try:
+        conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT source FROM posted_digests ORDER BY post_date DESC LIMIT 14")
+                streak = 0
+                for (source,) in cur.fetchall():
+                    if source == "curated":
+                        break
+                    streak += 1
+                return streak
+        finally:
+            conn.close()
+    except Exception:
+        return 0
 
 
 def load_seen_models() -> Set[str]:
@@ -477,7 +662,7 @@ def _normalize_known_fact_claims(message: str) -> Tuple[str, List[str]]:
     """Fix high-confidence factual slips before a pending digest can publish."""
     corrections = []
     original = message
-    if _fact_matches_text(ZAYA_FACT, message):
+    if _fact_active(ZAYA_FACT) and _fact_matches_text(ZAYA_FACT, message):
         message = re.sub(
             r"\b8(?:\.0)?B\s+active\s+parameters\b",
             "8.4B total / 760M active parameters",
@@ -501,8 +686,229 @@ def _normalize_known_fact_claims(message: str) -> Tuple[str, List[str]]:
     return message, corrections
 
 
-def validate_digest_for_publish(message: str) -> Tuple[str, List[str], List[str]]:
-    """Return normalized message plus warnings/errors for pre-publish QA."""
+# Tags Telegram's HTML parser accepts (sending others 400s the message) vs the
+# narrower v3 editorial subset. Outside TELEGRAM_OK → error; inside TELEGRAM_OK
+# but outside v3 → warning. Two lists so the QA layer never rejects content the
+# send layer would deliver fine.
+_TELEGRAM_OK_TAGS = {"b", "strong", "i", "em", "u", "ins", "s", "strike", "del",
+                     "a", "code", "pre", "span", "blockquote", "tg-spoiler"}
+_V3_TAGS = {"b", "i", "a"}
+_V3_TIERS = ("OPEN FRONTIER", "CLOSED FRONTIER", "SPECIALIZED", "LOCAL", "WATCH")
+_AGGREGATOR_DOMAINS = (
+    "techtimes.com", "tomsguide.com", "ndtv.com", "benzinga.com", "msn.com",
+    "yahoo.com", "dailymail.co.uk", "businessinsider.com", "marketwatch.com",
+    "digitaltrends.com", "zdnet.com",
+)
+_QUANT_NAME_RE = re.compile(r"(?i)\b(gguf|awq|gptq|onnx|imatrix|exl2)\b|-bnb-")
+# An entry is a line-leading bold name — with a dash tail (curated/LLM grammar)
+# or bare (deterministic template puts specs on following lines). Tier headers
+# ("━━━ <b>…") and the 🤖 header line don't start with <b> so they don't match.
+_ENTRY_RE = re.compile(r"^(?:• )?<b>([^<]+)</b>\s*(?:[—-]|$)", re.MULTILINE)
+_HREF_RE = re.compile(r'<a href="([^"]*)"')
+_MONTHS = {m: i + 1 for i, m in enumerate(
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])}
+
+
+def _loose_release_dates(body: str) -> List[str]:
+    """Find release dates in either digest dialect: ISO ('Released: 2026-06-01',
+    deterministic template) or prose ('Released Apr 7', LLM grammar — which has
+    no year, so assume the most recent occurrence not in the future)."""
+    found = list(re.findall(r"Released:? (\d{4}-\d{2}-\d{2})", body))
+    today = datetime.now(timezone.utc).date()
+    for mon, day in re.findall(r"Released:? ([A-Z][a-z]{2})[a-z]* (\d{1,2})\b", body):
+        month = _MONTHS.get(mon)
+        if not month:
+            continue
+        try:
+            candidate = today.replace(month=month, day=int(day))
+        except ValueError:
+            continue
+        if (candidate - today).days > 35:
+            candidate = candidate.replace(year=candidate.year - 1)
+        found.append(candidate.strftime("%Y-%m-%d"))
+    return found
+
+
+class _TagAudit(HTMLParser):
+    """Count open/close of the v3 tag subset for balance; record any tag
+    outside it (the caller classifies those into warn-vs-error by whether
+    Telegram itself would accept them)."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.open_counts = {}
+        self.close_counts = {}
+        self.disallowed = set()
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _V3_TAGS:
+            self.open_counts[tag] = self.open_counts.get(tag, 0) + 1
+        else:
+            self.disallowed.add(tag)
+
+    def handle_endtag(self, tag):
+        if tag in _V3_TAGS:
+            self.close_counts[tag] = self.close_counts.get(tag, 0) + 1
+        else:
+            self.disallowed.add(tag)
+
+
+def _lint_digest_structure(body: str, mode: str) -> Tuple[List[str], List[str]]:
+    """Structural gate. ERROR = would harm the channel (Telegram 400s on bad
+    HTML, non-https links, fallback floods). WARNING = v3 format drift —
+    publishing an imperfect curated digest beats replacing it with the
+    fallback, so drift is surfaced to the operator, never censored."""
+    warnings, errors = [], []
+
+    audit = _TagAudit()
+    try:
+        audit.feed(body)
+    except Exception:
+        errors.append("unparseable HTML markup")
+        return warnings, errors
+    for tag in sorted(audit.disallowed):
+        if tag in _TELEGRAM_OK_TAGS:
+            warnings.append(f"tag <{tag}> is outside the v3 subset (b/i/a)")
+        else:
+            errors.append(f"tag <{tag}> would 400 at Telegram")
+    for tag in _V3_TAGS:
+        if audit.open_counts.get(tag, 0) != audit.close_counts.get(tag, 0):
+            errors.append(f"unbalanced <{tag}> tags (Telegram would reject the message)")
+
+    for href in _HREF_RE.findall(body):
+        if not href.startswith("https://"):
+            # Telegram renders http:// fine — not channel-harm, so it only
+            # blocks machine-assembled content; curated gets a warning.
+            (errors if mode == "fallback" else warnings).append(
+                f"non-https link: {href[:80]}")
+        if href.startswith(("http://", "https://")):
+            domain = href.split("/", 3)[2].lower()
+            if any(domain == d or domain.endswith("." + d) for d in _AGGREGATOR_DOMAINS):
+                warnings.append(f"aggregator-sourced link ({domain}) — cite the primary source")
+
+    entries = _ENTRY_RE.findall(body)
+    if "━━━" in body or mode == "curated":
+        if not any(t in body for t in _V3_TIERS) and entries:
+            warnings.append("no recognized v3 tier header")
+        for header in re.findall(r"━━━ <b>([^<]+)</b>", body):
+            if header.strip() not in _V3_TIERS:
+                warnings.append(f"unrecognized tier header: {header.strip()}")
+
+    # Entry grammar: each entry block should carry an italic differentiator
+    # and a link (v3 contract). Blocks are entry-start → blank line.
+    for block in re.split(r"\n\s*\n", body):
+        m = _ENTRY_RE.search(block)
+        if not m:
+            continue
+        name = m.group(1).strip()
+        if "<i>" not in block:
+            warnings.append(f"entry '{name}' missing the italic differentiator sentence")
+        if "<a href" not in block:
+            warnings.append(f"entry '{name}' has no source link")
+
+    footer_match = re.search(r"Total: (\d+) items? tracked today", body)
+    if (mode == "curated" and footer_match and entries
+            and int(footer_match.group(1)) != len(entries)):
+        warnings.append(f"footer says {footer_match.group(1)} items but "
+                        f"{len(entries)} entries found")
+
+    if entries and not _DATELINE_RE.search(body):
+        warnings.append("no parseable dateline — the deterministic date "
+                        "rewrite could not run")
+
+    # Flood/staleness/quant checks run in EVERY mode — these harms damage the
+    # channel identically regardless of author. Severity differs: errors for
+    # machine-assembled fallback content, warnings (→ ops alert) for curated,
+    # because replacing a flawed curated digest with the fallback is worse.
+    flood_sink = errors if mode == "fallback" else warnings
+    if len(entries) > DIGEST_LIMIT:
+        flood_sink.append(f"flood: {len(entries)} entries exceeds the "
+                          f"{DIGEST_LIMIT}-model cap")
+    for name in entries:
+        if _QUANT_NAME_RE.search(name):
+            flood_sink.append(f"quant/serving artifact leaked into digest: {name}")
+    for date_str in _loose_release_dates(body):
+        if is_stale_release(date_str):
+            flood_sink.append(f"stale release date in a 'new today' digest: {date_str}")
+
+    return warnings, errors
+
+
+_PARAM_CLAIM_RE = re.compile(
+    r"~?\s*([\d.]+)\s*([BMT])\s+(total|active)", re.IGNORECASE)
+# Tight markers only: loose substrings like 'was ' / 'updat' match ordinary
+# prose ('was trained on…') and would suppress real contradictions.
+_CORRECTION_MARKERS = ("correct", "previously reported", "previously stated",
+                       "revised", "updated from", "was wrong")
+
+
+def _extract_fact_claims(body: str) -> Tuple[dict, dict]:
+    """Return (entry name → {total/active: value}, entry name → its block)."""
+    claims, blocks = {}, {}
+    for block in re.split(r"\n\s*\n", body):
+        m = _ENTRY_RE.search(block)
+        if not m:
+            continue
+        name = m.group(1).strip()
+        blocks[name] = block
+        for value, unit, kind in _PARAM_CLAIM_RE.findall(block):
+            claims.setdefault(name, {})[kind.lower()] = f"{value}{unit.upper()}"
+    return claims, blocks
+
+
+def _check_fact_consistency(body: str, pending_dir: Path = None,
+                            today: str = None) -> List[str]:
+    """Flag entries whose param claims contradict the MOST RECENT prior figure
+    we published (last 14 files, today's own file excluded) without an explicit
+    correction marker. Would have caught MiniMax M3 going from 229.9B/9.8B
+    (Jun 9, 11) to ~428B/23B (Jun 12) silently.
+
+    Limitation (accepted): history comes from the image's pending/ dir, which
+    can lag master by up to a day; the supervisor's daily auto-commits keep
+    deploys frequent enough in practice."""
+    pending_dir = pending_dir or Path("pending")
+    if not pending_dir.is_dir():
+        return []
+    today = today or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today_claims, today_blocks = _extract_fact_claims(body)
+    if not today_claims:
+        return []
+    warnings = []
+    history = [p for p in sorted(pending_dir.glob("*.txt"), reverse=True)
+               if p.stem != today][:14]
+    resolved = set()  # (name, kind) pairs already judged against the most recent prior
+    for path in history:
+        try:
+            prior, _ = _extract_fact_claims(path.read_text())
+        except OSError:
+            continue
+        for name, today_vals in today_claims.items():
+            prior_vals = prior.get(name)
+            if not prior_vals:
+                continue
+            for kind, today_v in today_vals.items():
+                if (name, kind) in resolved:
+                    continue
+                prior_v = prior_vals.get(kind)
+                if not prior_v:
+                    continue
+                resolved.add((name, kind))
+                if prior_v != today_v:
+                    block = today_blocks.get(name, "").lower()
+                    if not any(mk in block for mk in _CORRECTION_MARKERS):
+                        warnings.append(
+                            f"fact drift for {name}: {kind} params {today_v} today "
+                            f"vs {prior_v} in {path.stem} — mark corrections explicitly")
+    return sorted(set(warnings))
+
+
+def validate_digest_for_publish(message: str, mode: str = "curated") -> Tuple[str, List[str], List[str]]:
+    """Return normalized message plus warnings/errors for pre-publish QA.
+
+    mode='curated' (default) | 'fallback' — the fallback gets stricter flood
+    tripwires because its content is machine-assembled.
+    """
     warnings = []
     errors = []
     normalized = (message or "").strip()
@@ -511,6 +917,7 @@ def validate_digest_for_publish(message: str) -> Tuple[str, List[str], List[str]
 
     if not normalized:
         errors.append("digest body is empty")
+        return normalized, warnings, errors
     if "ModelBytes Digest" not in normalized:
         warnings.append("digest header is missing")
     _lower = normalized.lower()
@@ -519,8 +926,13 @@ def validate_digest_for_publish(message: str) -> Tuple[str, List[str], List[str]
             and "scanned" not in _lower):
         warnings.append("tracked-model footer is missing")
 
+    lint_warnings, lint_errors = _lint_digest_structure(normalized, mode)
+    warnings.extend(lint_warnings)
+    errors.extend(lint_errors)
+    warnings.extend(_check_fact_consistency(normalized))
+
     for fact in KNOWN_MODEL_FACTS:
-        if not _fact_matches_text(fact, normalized):
+        if not _fact_active(fact) or not _fact_matches_text(fact, normalized):
             continue
         if fact.canonical_url not in normalized:
             warnings.append(f"{fact.canonical_name}: canonical source URL missing")
@@ -531,12 +943,15 @@ def validate_digest_for_publish(message: str) -> Tuple[str, List[str], List[str]
         if fact.active_parameters and fact.active_parameters.lower() not in normalized.lower():
             warnings.append(f"{fact.canonical_name}: active parameter count not stated")
 
-    if _fact_matches_text(ZAYA_FACT, normalized) and re.search(
-        r"\b8(?:\.0)?B\s+active\b",
-        normalized,
-        flags=re.IGNORECASE,
-    ):
-        errors.append("ZAYA1-8B still has an incorrect 8B-active-parameter claim")
+    if (_fact_matches_text(ZAYA_FACT, normalized)
+            and re.search(r"\b8(?:\.0)?B\s+active\b", normalized, flags=re.IGNORECASE)):
+        if _fact_active(ZAYA_FACT):
+            errors.append("ZAYA1-8B still has an incorrect 8B-active-parameter claim")
+        else:
+            # Expired facts stop blocking/rewriting, but a known-bad claim
+            # reappearing should never be silent.
+            warnings.append("ZAYA1-8B '8B active' claim matched after fact "
+                            "expiry — verify before next publish")
 
     return normalized, warnings, errors
 
@@ -1227,8 +1642,15 @@ def _count_surfaced_models(summary: str) -> int:
     return count
 
 
+# How the last summarize_models() call produced its digest: 'llm' or
+# 'template'. Lets the publisher record/alert which fallback tier ran.
+LAST_SUMMARY_MODE = "template"
+
+
 def summarize_models(models: List[ModelRelease]) -> str:
     """Use LLM for concise digest if key available."""
+    global LAST_SUMMARY_MODE
+    LAST_SUMMARY_MODE = "template"
     if not models:
         return "No new models today."
     models, validation_notes = prepare_models_for_digest(models)
@@ -1349,6 +1771,7 @@ Models:
         header = f"🤖 <b>ModelBytes Digest</b>\n<i>{datetime.now(timezone.utc).strftime('%A, %B %d, %Y')}</i>"
         # Honest footer: how many we actually surfaced vs how many we scanned.
         footer = f"📊 Surfaced {_count_surfaced_models(summary)} · scanned {len(models)} today"
+        LAST_SUMMARY_MODE = "llm"
         return f"{header}\n\n{summary}\n\n{footer}"
     except Exception as e:
         print(f"LLM failed: {e} — falling back to template")
@@ -1374,7 +1797,13 @@ def _truncate_for_telegram(message: str, limit: int = TELEGRAM_MAX_CHARS) -> str
     return message[:cut].rstrip() + marker
 
 
+# The message_id of the last successful channel post (t.me/ModelBytes/<id>) —
+# the one durable proof of publication Telegram gives; recorded in publish_runs.
+LAST_TELEGRAM_MESSAGE_ID = None
+
+
 def send_telegram_post(message: str) -> bool:
+    global LAST_TELEGRAM_MESSAGE_ID
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHANNEL_ID:
         print("Telegram not configured", file=sys.stderr)
         return False
@@ -1388,17 +1817,23 @@ def send_telegram_post(message: str) -> bool:
         "chat_id": TELEGRAM_CHANNEL_ID,
         "text": message,
         "parse_mode": "HTML",
-        "disable_web_page_preview": False,
+        # Unfurling picks whichever source link comes first and pastes a random
+        # vendor card under the digest — keep the channel clean.
+        "disable_web_page_preview": True,
     }
     try:
         print(f"Sending {len(message)} chars...", file=sys.stderr)
         resp = requests.post(url, json=payload, timeout=30)
         if not resp.ok:
-            print(f"Telegram error: {resp.text[:500]}", file=sys.stderr)
+            print(_redact_secrets(f"Telegram error: {resp.text[:500]}"), file=sys.stderr)
         resp.raise_for_status()
+        try:
+            LAST_TELEGRAM_MESSAGE_ID = resp.json().get("result", {}).get("message_id")
+        except Exception:
+            LAST_TELEGRAM_MESSAGE_ID = None
         return True
     except Exception as e:
-        print(f"Telegram send error: {e}", file=sys.stderr)
+        print(_redact_secrets(f"Telegram send error: {e}"), file=sys.stderr)
         return False
 
 
@@ -1515,26 +1950,89 @@ PENDING_RAW_BASE = os.environ.get(
 )
 
 
-def _fetch_pending_from_github(today: str) -> Optional[str]:
+# 10 minutes covers curator jitter (it lands 15:42-15:45 against a 16:00 cron)
+# without holding the container for half an hour on days the curator is dead.
+PENDING_GRACE_SECONDS = int(os.environ.get("MODELBYTES_PENDING_GRACE_SECONDS", "600"))
+PENDING_POLL_INTERVAL = int(os.environ.get("MODELBYTES_PENDING_POLL_SECONDS", "120"))
+
+
+def _fetch_pending_from_github(today: str, attempts: int = 3) -> Optional[str]:
     """Fetch today's curated pending file straight from GitHub raw.
 
     The Railway image only contains the pending file if a deploy happened
     AFTER the curator's ~15:45 UTC push — a race the 2026-06-11 publish lost
     (stale 14:19 image → bare template went out despite a good curated digest
-    sitting on master). Fetching from the repo at publish time removes the
-    deploy-timing dependency entirely. Returns None when absent/unreachable.
+    sitting on master). Master is therefore the source of truth and this fetch
+    runs FIRST; the baked-in local copy is only a fallback for GitHub outages.
+    Retries transient failures and cache-busts (raw.githubusercontent caches
+    both content and 404s for ~5 minutes). Returns None when absent/unreachable.
     """
     url = f"{PENDING_RAW_BASE}/{today}.txt"
-    try:
-        resp = requests.get(url, timeout=20)
-        if resp.status_code == 200 and resp.text.strip():
-            print(f"Fetched curated digest from GitHub raw ({url}).")
-            return resp.text
-        if resp.status_code != 404:
-            print(f"GitHub raw pending fetch: HTTP {resp.status_code}", file=sys.stderr)
-    except Exception as e:
-        print(f"GitHub raw pending fetch failed: {e}", file=sys.stderr)
+    for attempt in range(1, attempts + 1):
+        try:
+            # The unique query param is the cache-buster (raw.githubusercontent
+            # keys its CDN cache on the URL and caches 404s ~5 min).
+            resp = requests.get(url, timeout=20,
+                                params={"nocache": str(int(time.time()))},
+                                headers={"User-Agent": HTTP_USER_AGENT})
+            if resp.status_code == 200 and resp.text.strip():
+                print(f"Fetched curated digest from GitHub raw ({url}).")
+                return resp.text
+            if resp.status_code == 404:
+                return None
+            print(f"GitHub raw pending fetch: HTTP {resp.status_code} "
+                  f"(attempt {attempt}/{attempts})", file=sys.stderr)
+        except Exception as e:
+            print(_redact_secrets(f"GitHub raw pending fetch failed "
+                                  f"(attempt {attempt}/{attempts}): {e}"), file=sys.stderr)
+        if attempt < attempts:
+            time.sleep(2 * attempt)
     return None
+
+
+def _wait_for_pending(today: str) -> Optional[str]:
+    """Grace window: the curator usually lands ~15:42-15:45 but has slipped past
+    16:00 before (2026-06-08: 18:50). The container is already running, so
+    polling GitHub for a few minutes costs nothing and beats permanently losing
+    a late curated digest to the fallback (the ledger makes that irreversible).
+    Disable with MODELBYTES_PENDING_GRACE_SECONDS=0."""
+    if PENDING_GRACE_SECONDS <= 0:
+        return None
+    # Tell the operator at the START of the wait, not after it — a late curator
+    # is itself a signal worth seeing in real time.
+    send_ops_alert(f"Curated digest for {today} not on master at publish time — "
+                   f"entering {PENDING_GRACE_SECONDS}s grace window before "
+                   "falling back.")
+    deadline = time.monotonic() + PENDING_GRACE_SECONDS
+    while time.monotonic() < deadline:
+        wait = min(PENDING_POLL_INTERVAL, max(1, deadline - time.monotonic()))
+        print(f"No curated digest yet — waiting {int(wait)}s for the curator "
+              f"(grace window).")
+        time.sleep(wait)
+        # Single attempt per poll: the outer loop IS the retry; nesting the
+        # 3-attempt inner loop here would burn the window on a GitHub outage.
+        body = _fetch_pending_from_github(today, attempts=1)
+        if body:
+            return body
+    return None
+
+
+_DATELINE_RE = re.compile(r"<i>[A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}, \d{4}</i>")
+
+
+def _fix_dateline(body: str, today: str = None) -> str:
+    """Rewrite the digest's dateline to the actual UTC date. The curator wrote
+    the wrong weekday 2 of its first 3 v3 days ('Wednesday, June 11' for a
+    Thursday); the publisher knows the real date deterministically. If the
+    dateline format ever drifts so this can't match, the linter emits a
+    'no parseable dateline' warning rather than failing silently."""
+    ref = (datetime.strptime(today, "%Y-%m-%d") if today
+           else datetime.now(timezone.utc))
+    correct = f"<i>{ref.strftime('%A, %B')} {ref.day:02d}, {ref.year}</i>"
+    fixed, n = _DATELINE_RE.subn(correct, body, count=1)
+    if fixed != body:
+        print("Corrected digest dateline to actual UTC date.")
+    return fixed
 
 
 def try_post_pending_curated() -> bool:
@@ -1555,38 +2053,76 @@ def try_post_pending_curated() -> bool:
 
     pending_path = Path("pending") / f"{today}.txt"
 
-    if pending_path.exists():
-        body = pending_path.read_text().strip()
-        if not body:
-            print(f"Pending file {pending_path} is empty — falling back to pipeline.")
-            return False
-    else:
-        # Stale image (deploy race): the curator may have pushed after this
-        # image was built. Ask GitHub directly before giving up.
-        remote = _fetch_pending_from_github(today)
-        if remote is None:
-            return False
-        body = remote.strip()
-        if not body:
-            return False
+    # Master is the source of truth: GitHub raw FIRST (the curator pushes
+    # there and Railway images are stale by construction — auto-deploy does
+    # not fire on curator pushes). The baked-in local copy is the fallback
+    # for GitHub outages, and a grace window covers a late-running curator.
+    body = _fetch_pending_from_github(today)
+    if body is None and pending_path.exists():
+        local = pending_path.read_text().strip()
+        if local:
+            print(f"GitHub raw unavailable — using baked-in {pending_path}.")
+            body = local
+    if body is None:
+        body = _wait_for_pending(today)
+    if body is None:
+        return False
+    body = body.strip()  # both sources pre-check non-empty; strip is hygiene
+
+    body = _fix_dateline(body, today)
     body, qa_warnings, qa_errors = validate_digest_for_publish(body)
     for warning in qa_warnings:
         print(f"Digest QA warning ({pending_path}): {warning}", file=sys.stderr)
+    # Alert only on warning classes that mean content damage (fact drift,
+    # floods, leaks, post-expiry claims) — format-drift warnings alone would
+    # ping the operator daily and train them to ignore the channel.
+    alert_worthy = [w for w in qa_warnings
+                    if any(k in w for k in ("fact drift", "flood", "quant",
+                                            "stale release", "expiry"))]
+    if alert_worthy:
+        send_ops_alert("Curated digest QA (published anyway): "
+                       + "; ".join(alert_worthy[:6]))
     if qa_errors:
         print(
             f"Pending curated digest failed pre-publish QA: {'; '.join(qa_errors)}",
             file=sys.stderr,
         )
+        send_ops_alert(f"Curated digest for {today} BLOCKED by QA "
+                       f"({'; '.join(qa_errors[:4])}) — falling back to pipeline.")
+        record_publish_run(today, "curated", "blocked",
+                           message_chars=len(body), error="; ".join(qa_errors))
         return False
 
-    print(f"Pending curated digest found at {pending_path} ({len(body)} chars). Posting.")
+    print(f"Pending curated digest found for {today} ({len(body)} chars). Posting.")
     if not send_telegram_post(body):
         print("Telegram send of curated digest failed — falling back to pipeline.",
               file=sys.stderr)
+        send_ops_alert(f"Telegram send of curated digest for {today} FAILED — "
+                       "trying fallback pipeline.")
+        record_publish_run(today, "curated", "send-failed", message_chars=len(body),
+                           error="telegram send failed")
         return False
 
     mark_posted_digest(today, "curated", str(pending_path), body)
-    send_slack_post(body)  # mirror to Slack (no-op unless configured)
+    # Keep the local file in sync with what was actually published (the body
+    # usually came from GitHub raw, fresher than the baked-in copy) so anything
+    # reading pending/<today>.txt — including tomorrow's fact-consistency
+    # check — sees what readers saw.
+    try:
+        pending_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_path.write_text(body, encoding="utf-8")
+    except OSError as exc:
+        print(f"Could not record published digest to {pending_path}: {exc}",
+              file=sys.stderr)
+    slack_ok = send_slack_post(body)  # mirror to Slack (no-op unless configured)
+    if not slack_ok and SLACK_BOT_TOKEN and MODELBYTES_SLACK_CHANNEL_ID:
+        send_ops_alert(f"Slack mirror failed for {today} (Telegram posted fine).")
+    record_publish_run(today, "curated", "posted", message_chars=len(body),
+                       telegram_message_id=LAST_TELEGRAM_MESSAGE_ID,
+                       slack_ok=slack_ok,
+                       error=("warnings: " + "; ".join(qa_warnings[:8]))
+                             if qa_warnings else None)
+    ping_heartbeat(True, f"curated posted for {today}")
     print(f"Posted curated digest for {today}.")
     return True
 
@@ -1596,14 +2132,34 @@ def main():
     if preview_mode:
         sys.argv.remove("--preview")
 
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    live_mode = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID) and not preview_mode
+
+    if live_mode and not DATABASE_URL:
+        # Degraded but not fatal yet: the curated fast-path doesn't need the DB
+        # (ledger writes are best-effort no-ops). Alert and still try it —
+        # blocking a good curated digest over a lost env var would be worse.
+        send_ops_alert("DATABASE_URL missing in live mode — idempotency ledger "
+                       "and dedupe are OFF. Curated publish will still be "
+                       "attempted; the fallback pipeline cannot run safely.")
+
     # Fast-path: post a pre-curated digest from the curator routine if one exists.
     # Falls through to the deterministic pipeline if no pending file or send fails.
     if not preview_mode and try_post_pending_curated():
         return 0
 
+    # A lost DATABASE_URL must be loud, not a silent skipped day: without it,
+    # load_seen_models() returns empty → every fallback day re-detects "first
+    # run" and posts nothing, forever, with exit 0 (design-pass finding). The
+    # fallback pipeline genuinely needs the DB, so only it is gated.
+    if live_mode and not DATABASE_URL:
+        print("FATAL: DATABASE_URL is not set — the fallback pipeline cannot "
+              "dedupe and would silently skip every day.", file=sys.stderr)
+        ping_heartbeat(False, "DATABASE_URL missing, no curated digest")
+        return 1
+
     init_database()
     seen_models = load_seen_models()
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     is_first_run = len(seen_models) == 0
 
     print(f"Checking {today}... Tracking {len(seen_models)} models")
@@ -1637,11 +2193,28 @@ def main():
     print(f"Found {len(all_new)} new model(s)")
 
     if is_first_run and not preview_mode:
+        # An empty models table means a true first run OR wiped/migrated state.
+        # Seeding silently on wiped state would skip the day (and every future
+        # fallback day) with exit 0 — require an explicit opt-in.
+        if not ALLOW_SEED:
+            print("State looks reset (0 seen models) — refusing to silently "
+                  "seed. Set MODELBYTES_ALLOW_SEED=1 for a genuine first run.",
+                  file=sys.stderr)
+            send_ops_alert("Models table is EMPTY — looks like wiped/migrated "
+                           "state, not a quiet day. Refusing to seed silently; "
+                           "set MODELBYTES_ALLOW_SEED=1 if this is intentional.")
+            record_publish_run(today, "fallback", "blocked",
+                               models_found=len(all_new),
+                               error="empty models table without MODELBYTES_ALLOW_SEED")
+            ping_heartbeat(False, "empty state, seed not allowed")
+            return 1
         print("First run — seeding, no digest sent")
         # Seed all current models so they won't be reported as "new" next time
         for m in all_new:
             seen_models.add(m.name)
         save_seen_models(seen_models)
+        record_publish_run(today, "fallback", "seeded", models_found=len(all_new))
+        ping_heartbeat(True, "seeded")
         return 0
 
     # Models passed the fetcher-level is_noise_model checks already; the prior
@@ -1685,7 +2258,9 @@ def main():
                 seen_models.add(m.name)
 
         message = summarize_models(digest_models)
-        message, qa_warnings, qa_errors = validate_digest_for_publish(message)
+        fallback_mode = f"fallback-{LAST_SUMMARY_MODE}"
+        message, qa_warnings, qa_errors = validate_digest_for_publish(
+            message, mode="fallback")
         for warning in qa_warnings:
             print(f"Digest QA warning (fallback): {warning}", file=sys.stderr)
         if qa_errors:
@@ -1693,6 +2268,14 @@ def main():
                 f"Fallback digest failed pre-publish QA: {'; '.join(qa_errors)}",
                 file=sys.stderr,
             )
+            send_ops_alert(f"NO POST today ({today}): fallback digest blocked "
+                           f"by QA — {'; '.join(qa_errors[:4])}")
+            record_publish_run(today, fallback_mode, "blocked",
+                               models_found=len(all_new),
+                               models_emitted=len(digest_models),
+                               message_chars=len(message),
+                               error="; ".join(qa_errors))
+            ping_heartbeat(False, "fallback blocked by QA")
             return 1
 
         if preview_mode:
@@ -1703,6 +2286,15 @@ def main():
             return 0
 
         if not send_telegram_post(message):
+            send_ops_alert(f"NO POST today ({today}): Telegram send failed on "
+                           "the fallback path. Check token (died twice before) "
+                           "and Railway logs.")
+            record_publish_run(today, fallback_mode, "send-failed",
+                               models_found=len(all_new),
+                               models_emitted=len(digest_models),
+                               message_chars=len(message),
+                               error="telegram send failed")
+            ping_heartbeat(False, "fallback telegram send failed")
             return 1
         # Record what we published so the Slack review report (which reads
         # pending/<today>.txt) reflects the latest digest instead of a stale file.
@@ -1713,15 +2305,40 @@ def main():
         except OSError as exc:
             print(f"Could not record published digest to {pending_path}: {exc}", file=sys.stderr)
         mark_posted_digest(today, "fallback", str(pending_path), message)
-        send_slack_post(message)  # mirror to Slack (no-op unless configured)
+        slack_ok = send_slack_post(message)  # mirror to Slack (no-op unless configured)
+        record_publish_run(today, fallback_mode, "posted",
+                           models_found=len(all_new),
+                           models_emitted=len(digest_models),
+                           message_chars=len(message),
+                           telegram_message_id=LAST_TELEGRAM_MESSAGE_ID,
+                           slack_ok=slack_ok)
+        streak = fallback_streak()
+        send_ops_alert(f"Published via FALLBACK ({LAST_SUMMARY_MODE}) for {today} "
+                       f"— curated pending file was absent. "
+                       f"Fallback streak: {streak} day(s). "
+                       "Check the curator routine if this persists.")
+        ping_heartbeat(True, f"fallback ({LAST_SUMMARY_MODE}) posted for {today}")
         print("Digest sent")
 
     else:
         print("No new models")
+        send_ops_alert(f"No post today ({today}): no curated digest and no new "
+                       "models surfaced by the fallback. If sources look quiet "
+                       "several days running, check fetchers.")
+        record_publish_run(today, "fallback", "no-models", models_found=0)
+        ping_heartbeat(True, "no models")
 
     save_seen_models(seen_models)
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        _rc = main()
+    except Exception as _e:
+        # A crash anywhere must still reach the operator and the dead-man's
+        # switch — Railway only records the exit code.
+        send_ops_alert(f"Publisher CRASHED: {_e!r}")
+        ping_heartbeat(False, f"crash: {_e!r}")
+        raise
+    sys.exit(_rc)

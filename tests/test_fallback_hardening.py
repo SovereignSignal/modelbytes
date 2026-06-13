@@ -68,8 +68,8 @@ def test_section_entries_use_html_links_not_raw_urls():
 def test_count_surfaced_models_counts_entries_not_headers():
     body = (
         "<b>🔓 Premier Open</b>\n"
-        '<b>Model A</b> — Released Jun 1. Great. <a href="u">→ Src</a>\n'
-        '<b>Model B</b> — Released Jun 2. Good. <a href="u">→ Src</a>\n'
+        '<b>Model A</b> — Released Jun 1. Great. <a href="https://u.example">→ Src</a>\n'
+        '<b>Model B</b> — Released Jun 2. Good. <a href="https://u.example">→ Src</a>\n'
         "<b>🏠 Local Ready</b>\n"
         "• <b>Model C</b> — runs local <a href=\"u\">→ HF</a>\n"
     )
@@ -83,7 +83,7 @@ def test_llm_footer_reports_surfaced_and_scanned():
     fake.json.return_value = {
         "choices": [{"message": {"content": (
             "<b>🔓 Premier Open</b>\n"
-            '<b>Model 1</b> — Released Jun 1. The standout. <a href="u">→ Source</a>'
+            '<b>Model 1</b> — Released Jun 1. The standout. <a href="https://u.example">→ Source</a>'
         )}}]
     }
     fake.raise_for_status = lambda: None
@@ -111,7 +111,7 @@ def test_empty_llm_body_falls_back_to_template():
 def test_validate_accepts_the_new_surfaced_footer():
     body = (
         "🤖 <b>ModelBytes Digest</b>\n<i>Monday, June 08, 2026</i>\n\n"
-        '<b>🔓 Premier Open</b>\n<b>Model A</b> — Good. <a href="u">→ Source</a>\n\n'
+        '<b>🔓 Premier Open</b>\n<b>Model A</b> — Good. <a href="https://u.example">→ Source</a>\n\n'
         "📊 Surfaced 1 · scanned 5 today"
     )
     _, warnings, errors = monitor.validate_digest_for_publish(body)

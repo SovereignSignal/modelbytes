@@ -44,7 +44,7 @@ def test_significant_overflow_stays_unseen(monkeypatch, tmp_path):
     monkeypatch.setattr(monitor, "save_seen_models", lambda models: saved.append(set(models)))
     monkeypatch.setattr(monitor, "send_telegram_post", lambda message: True)
     monkeypatch.setattr(monitor, "summarize_models", lambda models: "digest body")
-    monkeypatch.setattr(monitor, "validate_digest_for_publish", lambda m: (m, [], []))
+    monkeypatch.setattr(monitor, "validate_digest_for_publish", lambda m, mode="curated": (m, [], []))
     monkeypatch.setattr(monitor, "mark_posted_digest", lambda *a, **k: True)
     (tmp_path / "pending").mkdir()
     monkeypatch.chdir(tmp_path)

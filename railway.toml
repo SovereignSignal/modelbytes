@@ -5,7 +5,12 @@ dockerfilePath = "Dockerfile"
 [deploy]
 startCommand = "python monitor.py"
 cronSchedule = "0 16 * * *"
+# Capped: every exit-1 path now sends an ops alert + heartbeat /fail, so
+# unbounded ON_FAILURE restarts would re-fire alerts all day on deterministic
+# failures (missing env var, QA block). Two retries still cover transient
+# crashes.
 restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 2
 
 [env]
 TELEGRAM_BOT_TOKEN = { required = true }

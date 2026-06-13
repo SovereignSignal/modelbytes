@@ -76,3 +76,22 @@ Scheduled claude.ai routine, daily 17:00 UTC: fetch `https://t.me/s/ModelBytes`,
 ## Runtime note
 
 As of 2026-06-10, modelbytes runs **only on Railway** (service `modelbytes`, cron 16:00 UTC, auto-deploy-on-push from master). The previous self-managed VM deployment is fully retired — timers confirmed disabled + inactive today.
+
+## Post-review follow-ups (2026-06-12 design pass, deferred)
+
+From the multi-agent design review + diff review; deliberately not done in the
+hardening pass to keep the publish-critical change reviewable:
+
+- **Format single-source**: tiers/entry-grammar/footer are encoded in both
+  `docs/curator-prompt.md` and `monitor.py`'s linter — extract a shared
+  `digest_format.py` so drift breaks a test, not production.
+- **Data-driven fact corrections**: replace the bespoke ZAYA regex with a
+  `bad_claim_pattern` field on `ModelFact`, rendered from its stored params.
+- **Fact-consistency history altitude**: read prior digests from the
+  `posted_digests` table (what readers actually saw) instead of the image's
+  possibly-stale `pending/` dir.
+- **ORG_REGISTRY consolidation** (audit A12): one data module deriving the
+  seven org/family lists, supervisor pointed at it only.
+- **DB helper consolidation**: 7 near-identical psycopg2 blocks → one
+  contextmanager with `connect_timeout`.
+- **main() exit-path helper**: collapse the alert+record+heartbeat triples.

@@ -75,7 +75,11 @@ TIER MEANINGS (fixed order above; hide empty tiers):
 - LOCAL: models whose headline is "runs on your hardware" (small open weights,
   Ollama-ready).
 - WATCH: announced / preview / weights-pending — not yet generally usable.
-  Include the expected date. These are tomorrow's graduations.
+  Include the expected date. These are tomorrow's graduations. A WATCH item
+  appears ONCE when announced — do NOT re-list an unchanged WATCH entry on
+  later days. Re-list only when its state changes (shipped → it graduates;
+  expected date slipped → one brief note) and drop it silently if it expires
+  unshipped.
 One model = one tier, the most DISTINCTIVE one. (A 5B open coder → SPECIALIZED
 or LOCAL, not both. A frontier MoE with live API and weights pending → OPEN
 FRONTIER with the pending note inline, not a second WATCH entry.)
@@ -98,6 +102,10 @@ RULES:
   never a bare "→ Source".
 - Only state facts you verified from the source. Never invent params, licenses,
   benchmarks, or dates. Label vendor-run benchmarks as such.
+- NEVER silently change a hard fact you previously published (params, context,
+  price, license — check the last 14 days of pending/*.txt). If a prior figure
+  was wrong or has been superseded, mark it in the entry: "(corrects our
+  Jun 9 figure)". The publisher flags unmarked contradictions.
 - No hype verbs (explores, unpacks, showcases, dives into…).
 - End with exactly: "Total: <N> items tracked today" where N = entries you wrote.
 - Keep the whole message under 3500 characters.

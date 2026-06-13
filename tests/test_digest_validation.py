@@ -2,8 +2,19 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import monitor
+
+
+@pytest.fixture(autouse=True)
+def _zaya_fact_in_window(monkeypatch):
+    """Facts now expire (release + 45d). These tests exercise the correction
+    MECHANISM, not the calendar — pin the fact active so the suite doesn't
+    rot when ZAYA's window closes (expiry itself is covered in
+    test_content_gates.py::test_expired_fact_no_longer_rewrites_copy)."""
+    monkeypatch.setattr(monitor, "_fact_active", lambda fact, today=None: True)
 
 
 def test_validate_digest_corrects_zaya_active_parameter_claim():

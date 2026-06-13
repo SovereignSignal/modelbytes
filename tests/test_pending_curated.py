@@ -139,14 +139,16 @@ def test_pending_falls_through_when_github_404(tmp_path, monkeypatch):
     assert monitor.try_post_pending_curated() is False
 
 
-def test_local_pending_wins_over_github(tmp_path, monkeypatch):
+def test_github_raw_wins_over_stale_local(tmp_path, monkeypatch):
+    """Design-pass inversion: master is the source of truth. Railway images are
+    stale by construction (auto-deploy doesn't fire on curator pushes), so the
+    raw fetch runs FIRST and a baked-in older copy must not shadow it."""
     monkeypatch.chdir(tmp_path)
     today = monitor.datetime.now(monitor.timezone.utc).strftime("%Y-%m-%d")
-    _write_pending(tmp_path, today, "🤖 ModelBytes Digest local copy")
+    _write_pending(tmp_path, today, "🤖 ModelBytes Digest stale baked-in copy")
 
-    calls = []
     monkeypatch.setattr(monitor, "_fetch_pending_from_github",
-                        lambda today: calls.append(today) or "remote")
+                        lambda today: "🤖 ModelBytes Digest fresh from master")
     sent = []
     monkeypatch.setattr(monitor, "send_telegram_post",
                         lambda msg: sent.append(msg) or True)
@@ -154,5 +156,26 @@ def test_local_pending_wins_over_github(tmp_path, monkeypatch):
     monkeypatch.setattr(monitor, "mark_posted_digest", lambda *args: True)
 
     assert monitor.try_post_pending_curated() is True
-    assert calls == []  # no network call when the image already has the file
-    assert "local copy" in sent[0]
+    assert "fresh from master" in sent[0]
+
+
+def test_local_copy_used_when_github_unreachable(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    today = monitor.datetime.now(monitor.timezone.utc).strftime("%Y-%m-%d")
+    _write_pending(tmp_path, today, "🤖 ModelBytes Digest baked-in copy")
+
+    monkeypatch.setattr(monitor, "_fetch_pending_from_github", lambda today: None)
+    sent = []
+    monkeypatch.setattr(monitor, "send_telegram_post",
+                        lambda msg: sent.append(msg) or True)
+    monkeypatch.setattr(monitor, "has_posted_digest", lambda date_str: False)
+    monkeypatch.setattr(monitor, "mark_posted_digest", lambda *args: True)
+
+    assert monitor.try_post_pending_curated() is True
+    assert "baked-in copy" in sent[0]
+
+
+def test_dateline_rewritten_to_actual_utc_date():
+    body = "🤖 <b>ModelBytes Digest</b>\n<i>Wednesday, June 11, 2026</i>\n\nx"
+    fixed = monitor._fix_dateline(body, today="2026-06-11")
+    assert "<i>Thursday, June 11, 2026</i>" in fixed  # Jun 11 2026 IS a Thursday

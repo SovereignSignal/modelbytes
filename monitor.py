@@ -114,6 +114,7 @@ PROVIDER_NAMES = {
     "ollama": "Ollama",
     "philschmid": "Philipp Schmid",
     "sentence-transformers": "Sentence Transformers",
+    "bosonai": "Boson AI",
 }
 
 # Known significant orgs — never noise-filter these
@@ -131,7 +132,7 @@ KNOWN_ORGS = {
     "circlestone-labs", "hcompany", "moonshotai", "bytedance-seed", "bytedance-research",
     "amazon", "perplexity-ai", "inclusionai",
     "tencentarc", "resembleai", "adskailab", "open-thoughts",
-    "lgai-exaone",
+    "lgai-exaone", "bosonai",
 }
 
 
@@ -1301,6 +1302,7 @@ MAJOR_HF_ORGS = [
     "circlestone-labs", "Hcompany", "Supertone",
     "TencentARC", "ResembleAI", "ADSKAILab", "open-thoughts",
     "CohereLabs", "LGAI-EXAONE",
+    "bosonai",
 ]
 
 
@@ -1617,7 +1619,7 @@ def categorize_model(model: ModelRelease) -> str:
     reasoning = ["reasoning", "r1", "o1", "o3"]
     coding = ["codestral", "coder", "code-", "claude-3.5", "devstral", "grok-build"]
     image_gen = ["dall-e", "flux", "stable-diffusion", "midjourney", "wan2", "pixal", "grok-imagine"]
-    audio = ["lyria", "supertone", "supertonic", "dramabox"]
+    audio = ["lyria", "supertone", "supertonic", "dramabox", "higgs-audio"]
 
     if any(p in name for p in premier) or provider in ["meta", "mistral ai", "alibaba"]:
         if "closed" not in traits and model.is_open_source is not False:

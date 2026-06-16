@@ -199,7 +199,7 @@ def test_inline_primary_suppresses_fallback_alert(monkeypatch, tmp_path):
         monkeypatch.setattr(monitor, f, lambda: [])
     monkeypatch.setattr(monitor, "enrich_with_hf_cards", lambda models: None)
     monkeypatch.setattr(monitor, "summarize_models",
-                        lambda models: "🤖 <b>ModelBytes Digest</b>\n<i>x</i>\n\n━━━ <b>OPEN FRONTIER</b> 🔓\n<b>Llama 4 70B</b> — <i>x</i> <a href=\"https://h\">→ S</a>\n\nTotal: 1 items tracked today")
+                        lambda models, *a, **k: "🤖 <b>ModelBytes Digest</b>\n<i>x</i>\n\n━━━ <b>OPEN FRONTIER</b> 🔓\n<b>Llama 4 70B</b> — <i>x</i> <a href=\"https://h\">→ S</a>\n\nTotal: 1 items tracked today")
     monkeypatch.setattr(monitor, "send_telegram_post", lambda m: True)
     monkeypatch.setattr(monitor, "send_slack_post", lambda m: True)
     monkeypatch.setattr(monitor, "mark_posted_digest", lambda *a, **k: True)

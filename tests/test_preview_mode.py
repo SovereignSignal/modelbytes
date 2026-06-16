@@ -33,7 +33,7 @@ def test_preview_mode_renders_on_empty_database(monkeypatch, capsys):
     sent = []
     monkeypatch.setattr(monitor, "save_seen_models", lambda models: saved.append(models))
     monkeypatch.setattr(monitor, "send_telegram_post", lambda message: sent.append(message))
-    monkeypatch.setattr(monitor, "summarize_models", lambda models: "preview digest")
+    monkeypatch.setattr(monitor, "summarize_models", lambda models, *a, **k: "preview digest")
 
     assert monitor.main() == 0
     out = capsys.readouterr().out

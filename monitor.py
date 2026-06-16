@@ -1311,6 +1311,13 @@ MAJOR_HF_ORGS = [
 
 
 ENRICH_HF_CARDS = os.environ.get("MODELBYTES_ENRICH_HF_CARDS", "1") == "1"
+# Parallel.ai web discovery — lets the inline path find genuinely-new releases
+# the static fetchers miss (the dedup table drains to 0-new after a few days).
+# Web research + cited sources, fed to the writer model. No Claude.
+PARALLEL_API_KEY = os.environ.get("MODELBYTES_PARALLEL_API_KEY", "")
+DISCOVERY_ENABLED = os.environ.get(
+    "MODELBYTES_DISCOVERY", "1" if PARALLEL_API_KEY else "0") == "1"
+PARALLEL_SEARCH_URL = "https://api.parallel.ai/v1/search"
 # When the claude.ai curator is retired, the inline (deepseek/Ollama) path IS
 # the everyday digest, not a degraded fallback — so don't alert "published via
 # fallback / curator absent" every day. Real failures (QA block, send fail,
@@ -1777,6 +1784,89 @@ LAST_SUMMARY_MODE = "template"
 LAST_LLM_MODEL = None
 
 
+def _recent_digest_names(today: str = None, days: int = 10,
+                         pending_dir: Path = None) -> List[str]:
+    """Bold entry names from the last `days` pending digests (today excluded),
+    so the writer doesn't repeat a model we already covered — the curator's
+    dedup mechanism, replicated for the inline path."""
+    pending_dir = pending_dir or Path("pending")
+    if not pending_dir.is_dir():
+        return []
+    today = today or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    files = [p for p in sorted(pending_dir.glob("*.txt"), reverse=True)
+             if p.stem != today][:days]
+    seen, out = set(), []
+    for p in files:
+        try:
+            text = p.read_text()
+        except OSError:
+            continue
+        for name in _ENTRY_RE.findall(text):
+            name = name.strip()
+            if name.lower() not in seen:
+                seen.add(name.lower())
+                out.append(name)
+    return out
+
+
+def discover_recent_releases(today: str = None, max_age_days: int = 14,
+                             timeout: int = 60) -> str:
+    """Query Parallel.ai for genuinely-new model releases → a compact, cited
+    web-research block for the writer model. Returns '' when disabled or on any
+    failure (the pipeline falls back to fetcher-only). Never raises."""
+    if not (DISCOVERY_ENABLED and PARALLEL_API_KEY):
+        return ""
+    ref = (datetime.strptime(today, "%Y-%m-%d").date() if today
+           else datetime.now(timezone.utc).date())
+    month = ref.strftime("%B %Y")
+    body = {
+        "objective": (
+            f"Find AI models newly released or updated within {max_age_days} days "
+            f"of {ref.isoformat()}: open-weight and API models across text, reasoning, "
+            "coding, multimodal, and audio. Prefer primary sources (vendor blogs, "
+            "model cards, release notes) stating the release date and specs."),
+        "search_queries": [
+            f"new AI model release {month}",
+            f"new open-weight LLM released {month}",
+            "AI model launch announcement this week",
+        ],
+    }
+    try:
+        resp = requests.post(PARALLEL_SEARCH_URL, json=body,
+                             headers={"x-api-key": PARALLEL_API_KEY,
+                                      "Content-Type": "application/json"},
+                             timeout=timeout)
+        resp.raise_for_status()
+        results = resp.json().get("results", []) or []
+    except Exception as e:
+        print(_redact_secrets(f"Parallel discovery failed: {e}"), file=sys.stderr)
+        return ""
+
+    kept = []
+    for r in results:
+        pd = (r.get("publish_date") or "").strip()
+        if pd:
+            try:
+                age = (ref - datetime.strptime(pd[:10], "%Y-%m-%d").date()).days
+                if age > max_age_days or age < -2:
+                    continue  # too old, or implausibly future
+            except ValueError:
+                pass  # unparseable → keep, let the writer judge
+        url = (r.get("url") or "").strip()
+        title = (r.get("title") or "").strip()
+        excerpt = " ".join((r.get("excerpts") or [])[:2]).strip()
+        if not url or not (title or excerpt):
+            continue
+        kept.append(f"- {title} ({pd or 'undated'}) — {url}\n  "
+                    f"{_smart_truncate(excerpt, 280)}")
+        if len(kept) >= 10:
+            break
+    if not kept:
+        return ""
+    print(f"Parallel discovery: {len(kept)} recent web source(s).", file=sys.stderr)
+    return "\n".join(kept)
+
+
 def _call_llm(model: str, prompt: str) -> Optional[str]:
     """One chat-completion call against the configured OpenAI-compatible endpoint.
     Returns the stripped content, or None on any failure or empty body — the
@@ -1801,12 +1891,19 @@ def _call_llm(model: str, prompt: str) -> Optional[str]:
         return None
 
 
-def summarize_models(models: List[ModelRelease]) -> str:
-    """Use LLM for concise digest if key available."""
+def summarize_models(models: List[ModelRelease], web_context: str = "",
+                     recent_names: List[str] = None) -> str:
+    """Use LLM for concise digest if key available.
+
+    web_context: cited Parallel.ai web research on recent releases (the inline
+    path's freshness engine). recent_names: models already covered in recent
+    digests, so the writer doesn't repeat them.
+    """
     global LAST_SUMMARY_MODE, LAST_LLM_MODEL
     LAST_SUMMARY_MODE = "template"
     LAST_LLM_MODEL = None
-    if not models:
+    recent_names = recent_names or []
+    if not models and not web_context:
         return "No new models today."
     models, validation_notes = prepare_models_for_digest(models)
     for note in validation_notes:
@@ -1852,6 +1949,20 @@ def summarize_models(models: List[ModelRelease]) -> str:
             s += f"\nObserved URL: {m.url}"
         info.append(s)
 
+    web_block = ""
+    if web_context:
+        web_block = (
+            "\nFRESH WEB RESEARCH (cited, recent) — surface genuinely-new models the "
+            "catalog missed; write entries from this using the given source URL as the "
+            "<a href>. Only models clearly released/updated in the last ~10 days; name "
+            "the primary source and never invent specs not stated here:\n"
+            f"{web_context}\n")
+    avoid_block = ""
+    if recent_names:
+        avoid_block = ("\nALREADY COVERED in recent digests — do NOT repeat unless there "
+                       "is a NEW development (then say what changed):\n"
+                       + ", ".join(recent_names[:60]) + "\n")
+
     prompt = f"""You are ModelBytes, an AI model tracker. Write a SHORT Telegram digest.
 
 FORMAT (begin with the Take line, then the tiers in this order, hide empty ones):
@@ -1890,9 +2001,10 @@ RULES:
 - MAX 2800 chars
 - Do NOT write a totals/count line; it is appended automatically.
 - Technical and direct, no hype
-
-Models:
-{chr(10).join(info)}"""
+- Prefer genuinely-NEW models (released/updated in the last ~10 days). The web research below is your freshness source; the fetched catalog may be mostly already-seen.
+{avoid_block}{web_block}
+Candidate models from our fetchers (may be sparse or already-covered — the web research above is primary for freshness):
+{chr(10).join(info) if info else "(none from fetchers today — build the digest from the web research above)"}"""
 
     if not LLM_API_KEY:
         print("No LLM key — falling back to template digest")
@@ -2373,7 +2485,14 @@ def main():
     # orgs with diverging display names (tencentarc/"Tencent ARC", allenai/"AI2")
     # fall into the unknown-org engagement gate and get filtered as noise.
     # Removing the broken pass; the fetcher-level filter is sufficient. (audit A11)
-    if all_new:
+    #
+    # Web discovery (Parallel.ai) is the inline freshness engine: it runs even
+    # when the fetchers find 0 new models (the dedup-drained dark-channel case),
+    # so the channel stays fresh without the claude.ai curator.
+    web_context = discover_recent_releases(today)
+    recent_names = _recent_digest_names(today)
+
+    if all_new or web_context:
         def _author(m):
             return m.name.split("/")[0].lower() if "/" in m.name else ""
 
@@ -2413,7 +2532,7 @@ def main():
         if ENRICH_HF_CARDS:
             enrich_with_hf_cards(digest_models)
 
-        message = summarize_models(digest_models)
+        message = summarize_models(digest_models, web_context, recent_names)
         fallback_mode = f"fallback-{LAST_SUMMARY_MODE}"
         message, qa_warnings, qa_errors = validate_digest_for_publish(
             message, mode="fallback")

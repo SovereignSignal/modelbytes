@@ -212,7 +212,7 @@ def test_preview_with_qa_error_sends_no_ops_alert(monkeypatch, tmp_path, capsys)
                              description="x", is_open_source=True)
     monkeypatch.setattr(monitor, "fetch_openrouter_models", lambda: [m])
     monkeypatch.setattr(monitor, "summarize_models",
-                        lambda models: "<b>Bad</b> — <i>x</i> <script>alert</script>")
+                        lambda models, *a, **k: "<b>Bad</b> — <i>x</i> <script>alert</script>")
     alerts, runs = [], []
     monkeypatch.setattr(monitor, "send_ops_alert", lambda t: alerts.append(t) or True)
     monkeypatch.setattr(monitor, "record_publish_run", lambda *a, **k: runs.append(a) or True)

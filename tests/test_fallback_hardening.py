@@ -83,7 +83,8 @@ def test_llm_footer_reports_surfaced_and_scanned():
     fake.json.return_value = {
         "choices": [{"message": {"content": (
             "<b>🔓 Premier Open</b>\n"
-            '<b>Model 1</b> — Released Jun 1. The standout. <a href="https://u.example">→ Source</a>'
+            # link must be a provided candidate URL (link-verification strips constructed ones)
+            '<b>Model 1</b> — Released Jun 1. The standout. <a href="https://huggingface.co/acme/Model-1">→ Source</a>'
         )}}]
     }
     fake.raise_for_status = lambda: None

@@ -100,3 +100,52 @@ def test_web_context_and_avoid_reach_the_prompt(monkeypatch):
 
 def test_summarize_returns_nothing_when_no_models_and_no_web():
     assert monitor.summarize_models([], web_context="") == "No new models today."
+
+
+# ── URL hardening: published links must be ones we actually provided ──
+
+def test_collect_provided_urls():
+    m = monitor.ModelRelease(name="a/b", provider="p", source="huggingface",
+                             url="https://huggingface.co/a/b", description="x",
+                             canonical_url="https://vendor.ai/b")
+    web = "- Title (2026-06-16) — https://blog.example/post\n  excerpt"
+    urls = monitor._collect_provided_urls([m], web)
+    assert "https://huggingface.co/a/b" in urls
+    assert "https://vendor.ai/b" in urls
+    assert "https://blog.example/post" in urls
+
+
+def test_strip_drops_constructed_link_keeps_provided():
+    allowed = {"https://blog.example/x2"}
+    summary = (
+        "<i>take</i>\n\n"
+        "━━━ <b>OPEN FRONTIER</b> 🔓\n"
+        '<b>Real Model</b> — <i>d</i> 70B. <a href="https://blog.example/x2">→ Source</a>\n'
+        '<b>Hallucinated</b> — <i>d</i>. <a href="https://huggingface.co/made/up">→ Source</a>\n')
+    cleaned, dropped = monitor._strip_unverified_links(summary, allowed)
+    assert dropped == 1
+    assert "Real Model" in cleaned
+    assert "Hallucinated" not in cleaned and "made/up" not in cleaned
+
+
+def test_strip_drops_orphaned_tier_header():
+    # If the only entry under a tier is dropped, the tier header goes too.
+    allowed = {"https://ok.example/a"}
+    summary = (
+        "━━━ <b>OPEN FRONTIER</b> 🔓\n"
+        '<b>Good</b> — <i>d</i>. <a href="https://ok.example/a">→ S</a>\n'
+        "━━━ <b>SPECIALIZED</b> 🎯\n"
+        '<b>Bad</b> — <i>d</i>. <a href="https://bad.example/z">→ S</a>\n')
+    cleaned, dropped = monitor._strip_unverified_links(summary, allowed)
+    assert dropped == 1
+    assert "OPEN FRONTIER" in cleaned
+    assert "SPECIALIZED" not in cleaned  # orphaned header removed
+
+
+def test_strip_keeps_all_when_all_provided():
+    allowed = {"https://a.example/1", "https://b.example/2"}
+    summary = ('<b>A</b> — <i>d</i>. <a href="https://a.example/1">→ S</a>\n'
+               '<b>B</b> — <i>d</i>. <a href="https://b.example/2/">→ S</a>')
+    cleaned, dropped = monitor._strip_unverified_links(summary, allowed)
+    assert dropped == 0
+    assert "A" in cleaned and "B" in cleaned

@@ -1825,10 +1825,16 @@ def discover_recent_releases(today: str = None, max_age_days: int = 14,
             f"of {ref.isoformat()}: open-weight and API models across text, reasoning, "
             "coding, multimodal, and audio. Prefer primary sources (vendor blogs, "
             "model cards, release notes) stating the release date and specs."),
+        # Diverse angles → broader recall across tiers (frontier/open/coding/
+        # multimodal/audio/local), not just one obvious release.
         "search_queries": [
             f"new AI model release {month}",
             f"new open-weight LLM released {month}",
+            f"new multimodal model released {month}",
+            f"new coding model release {month}",
+            f"new audio or speech model released {month}",
             "AI model launch announcement this week",
+            "Hugging Face newly released model this week",
         ],
     }
     try:
@@ -1865,6 +1871,51 @@ def discover_recent_releases(today: str = None, max_age_days: int = 14,
         return ""
     print(f"Parallel discovery: {len(kept)} recent web source(s).", file=sys.stderr)
     return "\n".join(kept)
+
+
+def _collect_provided_urls(models, web_context: str) -> set:
+    """Every URL we actually handed the writer — candidate model URLs + the
+    source URLs from the Parallel web research. A digest link outside this set
+    was constructed by the model and must not be published."""
+    urls = set()
+    for m in models or []:
+        for u in (getattr(m, "url", None), getattr(m, "canonical_url", None)):
+            if u:
+                urls.add(u.rstrip("/"))
+    for u in re.findall(r"https?://[^\s)\]]+", web_context or ""):
+        urls.add(u.rstrip("/").rstrip(".,"))
+    return urls
+
+
+def _strip_unverified_links(summary: str, allowed_urls: set) -> Tuple[str, int]:
+    """Drop any one-line entry whose <a href> wasn't a URL we provided (the
+    writer must cite a real source, never construct one — the curator verified
+    URLs by fetching; this enforces it deterministically). Then drop tier
+    headers left with no entries. Returns (cleaned, dropped_count)."""
+    allowed = {u.rstrip("/") for u in allowed_urls}
+    kept, dropped = [], 0
+    for line in summary.split("\n"):
+        hrefs = re.findall(r'<a href="([^"]+)"', line)
+        if hrefs and not all(h.rstrip("/") in allowed for h in hrefs):
+            dropped += 1
+            continue
+        kept.append(line)
+    lines, out = kept, []
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("━━━"):
+            has_entry = False
+            for nxt in lines[i + 1:]:
+                ls = nxt.lstrip()
+                if ls.startswith("━━━"):
+                    break
+                if ls.startswith("<b>") or ls.startswith("•"):
+                    has_entry = True
+                    break
+            if not has_entry:
+                continue
+        out.append(line)
+    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+    return cleaned, dropped
 
 
 def _call_llm(model: str, prompt: str) -> Optional[str]:
@@ -1952,10 +2003,16 @@ def summarize_models(models: List[ModelRelease], web_context: str = "",
     web_block = ""
     if web_context:
         web_block = (
-            "\nFRESH WEB RESEARCH (cited, recent) — surface genuinely-new models the "
-            "catalog missed; write entries from this using the given source URL as the "
-            "<a href>. Only models clearly released/updated in the last ~10 days; name "
-            "the primary source and never invent specs not stated here:\n"
+            "\nFRESH WEB RESEARCH (cited, recent) — THIS is your primary freshness "
+            "source. Identify EVERY distinct genuinely-new model named across these "
+            "sources (aim for breadth — frontier, open-weight, coding, multimodal, "
+            "audio, local — typically 4-8 if the sources support it), one entry each, "
+            "only models clearly released/updated in the last ~10 days.\n"
+            "LINKS: each entry's <a href> MUST be a source URL copied CHARACTER-FOR-"
+            "CHARACTER from the lines below. NEVER construct, complete, or guess a URL "
+            "(e.g. do not invent a huggingface.co/<org>/<name> link) — if you have no "
+            "provided URL for a model, omit that model. Never state a spec not in these "
+            "sources.\n"
             f"{web_context}\n")
     avoid_block = ""
     if recent_names:
@@ -2032,6 +2089,17 @@ Candidate models from our fetchers (may be sparse or already-covered — the web
     summary = re.sub(r"(?im)^\s*📊?\s*surfaced\b.*\bscanned\b.*today\s*$", "", summary).rstrip()
     if not summary:
         print("LLM body was only a footer — falling back to template")
+        return build_digest_message(models)
+    # Hard guarantee: every published link is a URL we actually provided. Drops
+    # entries whose <a href> the writer constructed/guessed (e.g. a plausible
+    # but unverified huggingface.co/... link) rather than copying a source URL.
+    summary, dropped = _strip_unverified_links(
+        summary, _collect_provided_urls(models, web_context))
+    if dropped:
+        print(f"Dropped {dropped} entr(y/ies) with unverified/constructed links.",
+              file=sys.stderr)
+    if not summary.strip() or not re.search(r"<b>[^<]+</b>\s*[—-]", summary):
+        print("No entries survived link verification — falling back to template")
         return build_digest_message(models)
     header = f"🤖 <b>ModelBytes Digest</b>\n<i>{datetime.now(timezone.utc).strftime('%A, %B %d, %Y')}</i>"
     # Honest footer: how many we actually surfaced vs how many we scanned.

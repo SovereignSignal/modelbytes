@@ -223,3 +223,57 @@ def test_preview_with_qa_error_sends_no_ops_alert(monkeypatch, tmp_path, capsys)
     assert rc == 0
     assert alerts == [], f"preview sent ops alerts: {alerts}"
     assert runs == [], f"preview wrote publish_runs: {runs}"
+
+
+# ── LLM model fallback chain (2026-06-16: Ollama catalog churn resilience) ──
+
+def test_llm_falls_through_to_secondary_model(monkeypatch):
+    # Primary returns empty (model vanished/degraded) → secondary model is tried
+    # and its output is used, rather than dropping to the bare template.
+    monkeypatch.setattr(monitor, "LLM_API_KEY", "k")
+    monkeypatch.setattr(monitor, "LLM_MODEL", "primary-model")
+    monkeypatch.setattr(monitor, "LLM_MODEL_FALLBACK", "backup-model")
+
+    def fake_post(url, json, headers, timeout):
+        model = json["model"]
+        fake = MagicMock(); fake.raise_for_status = lambda: None
+        if model == "primary-model":
+            fake.json.return_value = {"choices": [{"message": {"content": ""}}]}
+        else:
+            fake.json.return_value = {"choices": [{"message": {"content":
+                "<b>X</b> — <i>y</i> <a href=\"u\">→ S</a>"}}]}
+        return fake
+    monkeypatch.setattr(monitor.requests, "post", fake_post)
+
+    msg = monitor.summarize_models([_model("acme/X")])
+    assert "ModelBytes Digest" in msg
+    assert monitor.LAST_LLM_MODEL == "backup-model"
+
+
+def test_llm_template_when_all_models_fail(monkeypatch):
+    monkeypatch.setattr(monitor, "LLM_API_KEY", "k")
+    monkeypatch.setattr(monitor, "LLM_MODEL", "primary-model")
+    monkeypatch.setattr(monitor, "LLM_MODEL_FALLBACK", "backup-model")
+    def boom(url, json, headers, timeout):
+        raise RuntimeError("model not found")
+    monkeypatch.setattr(monitor.requests, "post", boom)
+    msg = monitor.summarize_models([_model("acme/X")])
+    assert "items tracked today" in msg  # deterministic template
+    assert monitor.LAST_LLM_MODEL is None
+
+
+def test_primary_used_when_it_works(monkeypatch):
+    monkeypatch.setattr(monitor, "LLM_API_KEY", "k")
+    monkeypatch.setattr(monitor, "LLM_MODEL", "primary-model")
+    monkeypatch.setattr(monitor, "LLM_MODEL_FALLBACK", "backup-model")
+    calls = []
+    def fake_post(url, json, headers, timeout):
+        calls.append(json["model"])
+        fake = MagicMock(); fake.raise_for_status = lambda: None
+        fake.json.return_value = {"choices": [{"message": {"content":
+            "<b>X</b> — <i>y</i> <a href=\"u\">→ S</a>"}}]}
+        return fake
+    monkeypatch.setattr(monitor.requests, "post", fake_post)
+    monitor.summarize_models([_model("acme/X")])
+    assert calls == ["primary-model"]  # backup never called when primary works
+    assert monitor.LAST_LLM_MODEL == "primary-model"

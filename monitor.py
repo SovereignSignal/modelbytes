@@ -46,6 +46,9 @@ LLM_API_KEY = os.environ.get("MODELBYTES_LLM_KEY",
     os.environ.get("OPENAI_API_KEY",
     os.environ.get("OPENROUTER_API_KEY", "")))
 LLM_MODEL = os.environ.get("MODELBYTES_LLM_MODEL", "gpt-4o-mini")
+# Secondary model tried when the primary is unavailable/empty (Ollama Cloud's
+# catalog churns — a vanished model must not dark the channel). Same endpoint+key.
+LLM_MODEL_FALLBACK = os.environ.get("MODELBYTES_LLM_MODEL_FALLBACK", "")
 LLM_BASE_URL = os.environ.get("MODELBYTES_LLM_URL", "https://api.openai.com/v1")
 # Daily cron, no latency pressure. A frontier reasoning model (deepseek-v4-pro)
 # writing a full 15-model digest needs well over the old 60s.
@@ -1769,12 +1772,40 @@ def _count_surfaced_models(summary: str) -> int:
 # How the last summarize_models() call produced its digest: 'llm' or
 # 'template'. Lets the publisher record/alert which fallback tier ran.
 LAST_SUMMARY_MODE = "template"
+# The model that actually produced the last digest (None if template). Lets the
+# publisher alert when the primary was unavailable and a fallback model was used.
+LAST_LLM_MODEL = None
+
+
+def _call_llm(model: str, prompt: str) -> Optional[str]:
+    """One chat-completion call against the configured OpenAI-compatible endpoint.
+    Returns the stripped content, or None on any failure or empty body — the
+    caller decides whether to try the next model or the template."""
+    try:
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            # Headroom for reasoning models that spend tokens on hidden reasoning
+            # before emitting the digest body (3000 produced empty bodies twice).
+            "max_tokens": 8000,
+            "temperature": 0.3,
+        }
+        headers = {"Authorization": f"Bearer {LLM_API_KEY}",
+                   "Content-Type": "application/json"}
+        resp = requests.post(f"{LLM_BASE_URL}/chat/completions",
+                             json=payload, headers=headers, timeout=LLM_TIMEOUT)
+        resp.raise_for_status()
+        return (resp.json()["choices"][0]["message"]["content"] or "").strip() or None
+    except Exception as e:
+        print(_redact_secrets(f"LLM '{model}' call failed: {e}"), file=sys.stderr)
+        return None
 
 
 def summarize_models(models: List[ModelRelease]) -> str:
     """Use LLM for concise digest if key available."""
-    global LAST_SUMMARY_MODE
+    global LAST_SUMMARY_MODE, LAST_LLM_MODEL
     LAST_SUMMARY_MODE = "template"
+    LAST_LLM_MODEL = None
     if not models:
         return "No new models today."
     models, validation_notes = prepare_models_for_digest(models)
@@ -1867,47 +1898,34 @@ Models:
         print("No LLM key — falling back to template digest")
         return build_digest_message(models)
 
-    try:
-        payload = {
-            "model": LLM_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            # Headroom for reasoning models (e.g. GLM-5.1) that spend tokens on
-            # hidden reasoning before emitting the digest body. 3000 produced
-            # empty bodies twice (2026-06-08, 2026-06-11) — reasoning consumed
-            # the whole budget before any content tokens.
-            "max_tokens": 8000,
-            "temperature": 0.3,
-        }
-        headers = {
-            "Authorization": f"Bearer {LLM_API_KEY}",
-            "Content-Type": "application/json",
-        }
-        print(f"Calling LLM ({LLM_MODEL})...")
-        # A daily cron has no latency pressure; a frontier reasoning model
-        # (deepseek-v4-pro) writing a full 15-model digest needs more than 60s.
-        # Configurable via MODELBYTES_LLM_TIMEOUT.
-        resp = requests.post(f"{LLM_BASE_URL}/chat/completions",
-                             json=payload, headers=headers, timeout=LLM_TIMEOUT)
-        resp.raise_for_status()
-        summary = resp.json()["choices"][0]["message"]["content"].strip()
-        # The model is unreliable at filling the count (it echoes the literal
-        # "X"); strip any footer it emitted and append a deterministic one.
-        summary = re.sub(r"(?im)^\s*(?:total:\s*)?[\dx]+\s+(?:models|items) tracked today\s*$", "", summary).rstrip()
-        summary = re.sub(r"(?im)^\s*📊?\s*surfaced\b.*\bscanned\b.*today\s*$", "", summary).rstrip()
-        # Reasoning models (e.g. GLM) can spend their whole budget on hidden
-        # reasoning and return an empty content field — don't ship a headerless
-        # blank; fall back to the deterministic template instead.
-        if not summary:
-            print("LLM returned an empty digest body — falling back to template")
-            return build_digest_message(models)
-        header = f"🤖 <b>ModelBytes Digest</b>\n<i>{datetime.now(timezone.utc).strftime('%A, %B %d, %Y')}</i>"
-        # Honest footer: how many we actually surfaced vs how many we scanned.
-        footer = f"📊 Surfaced {_count_surfaced_models(summary)} · scanned {len(models)} today"
-        LAST_SUMMARY_MODE = "llm"
-        return f"{header}\n\n{summary}\n\n{footer}"
-    except Exception as e:
-        print(f"LLM failed: {e} — falling back to template")
+    # Try the primary model, then the fallback — so one model vanishing from
+    # Ollama Cloud degrades to another model, not to the bare template.
+    candidates = [LLM_MODEL] + [m for m in (LLM_MODEL_FALLBACK,) if m and m != LLM_MODEL]
+    summary = None
+    for model in candidates:
+        print(f"Calling LLM ({model})...")
+        out = _call_llm(model, prompt)
+        if out:
+            summary = out
+            LAST_LLM_MODEL = model
+            break
+        print(f"LLM '{model}' produced nothing — trying next candidate.", file=sys.stderr)
+    if not summary:
+        print("All LLM candidates failed — falling back to template")
         return build_digest_message(models)
+
+    # The model is unreliable at filling the count (it echoes the literal
+    # "X"); strip any footer it emitted and append a deterministic one.
+    summary = re.sub(r"(?im)^\s*(?:total:\s*)?[\dx]+\s+(?:models|items) tracked today\s*$", "", summary).rstrip()
+    summary = re.sub(r"(?im)^\s*📊?\s*surfaced\b.*\bscanned\b.*today\s*$", "", summary).rstrip()
+    if not summary:
+        print("LLM body was only a footer — falling back to template")
+        return build_digest_message(models)
+    header = f"🤖 <b>ModelBytes Digest</b>\n<i>{datetime.now(timezone.utc).strftime('%A, %B %d, %Y')}</i>"
+    # Honest footer: how many we actually surfaced vs how many we scanned.
+    footer = f"📊 Surfaced {_count_surfaced_models(summary)} · scanned {len(models)} today"
+    LAST_SUMMARY_MODE = "llm"
+    return f"{header}\n\n{summary}\n\n{footer}"
 
 
 TELEGRAM_MAX_CHARS = 4096
@@ -2457,6 +2475,13 @@ def main():
                            message_chars=len(message),
                            telegram_message_id=LAST_TELEGRAM_MESSAGE_ID,
                            slack_ok=slack_ok)
+        # Model-availability signal (fires regardless of INLINE_PRIMARY): if the
+        # primary LLM was unavailable and we published with the fallback model,
+        # the operator should know so they can update MODELBYTES_LLM_MODEL.
+        if LAST_LLM_MODEL and LAST_LLM_MODEL != LLM_MODEL:
+            send_ops_alert(f"Primary LLM '{LLM_MODEL}' unavailable for {today} — "
+                           f"published with fallback model '{LAST_LLM_MODEL}'. "
+                           "Check Ollama Cloud availability / update the primary.")
         if not INLINE_PRIMARY:
             # Curator still expected → a fallback day is an exception worth flagging.
             streak = fallback_streak()

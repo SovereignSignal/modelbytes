@@ -1,0 +1,12 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Tuesday, June 16, 2026</i>
+
+<i>China's largest open-weight MoE shipped as a direct policy response to US export controls — weights this week, MIT-licensed, no benchmarks — while xAI's mid-June coding model is reportedly live with hard facts still pending.</i>
+
+━━━ <b>OPEN FRONTIER</b> 🔓
+<b>GLM 5.2</b> (Zhipu/Z.AI, Jun 13) — <i>Zhipu's explicit answer to US AI export restrictions: a 744B MoE flagship with a 1M-token context (5× GLM-5.1's 200K limit), rolled out immediately across all subscription tiers, with MIT weights and a standalone API arriving this week.</i> 744B total / 40B active (MoE), 1M context, 131K max output; two thinking modes (High, Max); no benchmarks published at launch (GLM-5 predecessor: 77.8% SWE-bench Verified, vendor-run). 📦 Open weights pending, MIT · THUDM/HuggingFace (week of Jun 16); ⚡ API: Z.ai GLM Coding Plan ($18–$80/mo). <a href="https://aiweekly.co/node/2946">→ AI Weekly</a>
+
+━━━ <b>WATCH</b> 👀
+<b>Grok V9-Medium</b> (xAI, was WATCH Jun 10) — <i>June 16 third-party coverage reports the model has arrived, tied to a reported SpaceX/Cursor training-data deal; xAI has not published an API slug, pricing, or benchmarks as of digest time.</i> 1.5T total params; trained on Cursor developer workflow data. ⚡ Expected: xAI API (api.x.ai), confirming this week. <a href="https://www.techtimes.com/articles/318495/20260616/grok-v9-medium-arrives-spacex-seals-cursor-developers-face-model-choice-risk.htm">→ TechTimes</a>
+
+Total: 2 items tracked today

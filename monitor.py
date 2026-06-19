@@ -2536,8 +2536,13 @@ def main():
             record_publish_run(today, "fallback", "blocked",
                                models_found=len(all_new),
                                error="empty models table without MODELBYTES_ALLOW_SEED")
+            # Deterministic block: a retry will hit the identical missing-env
+            # state and re-alert. Exit 0 so Railway doesn't mark the job
+            # Crashed and re-run it 3× (re-firing this alert each time). The
+            # blocked publish_run row + the ops alert are the complete record;
+            # ping_heartbeat(/fail) still flags it for attention.
             ping_heartbeat(False, "empty state, seed not allowed")
-            return 1
+            return 0
         print("First run — seeding, no digest sent")
         # Seed all current models so they won't be reported as "new" next time
         for m in all_new:
@@ -2632,8 +2637,17 @@ def main():
                                models_emitted=len(digest_models),
                                message_chars=len(message),
                                error="; ".join(qa_errors))
+            # A QA block is a correct, FINAL decision (e.g. refusing to post a
+            # 17-day-old model as 'new today'). The content won't change on
+            # retry — the fetcher will surface the same model, the gate will
+            # trip the same way — so exit 0, not 1. Exit 1 made Railway mark
+            # the job Crashed and re-run it 3×, re-firing this exact alert each
+            # time (the incident on 2026-06-19). The blocked publish_run row +
+            # the ops alert are the complete record; ping_heartbeat(/fail) is
+            # the correct 'needs attention' signal and does not trigger a
+            # Railway crash-restart.
             ping_heartbeat(False, "fallback blocked by QA")
-            return 1
+            return 0
 
         if not send_telegram_post(message):
             send_ops_alert(f"NO POST today ({today}): Telegram send failed on "

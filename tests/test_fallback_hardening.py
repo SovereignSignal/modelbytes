@@ -278,3 +278,74 @@ def test_primary_used_when_it_works(monkeypatch):
     monitor.summarize_models([_model("acme/X")])
     assert calls == ["primary-model"]  # backup never called when primary works
     assert monitor.LAST_LLM_MODEL == "primary-model"
+
+
+# ── Exit code on deterministic blocks (2026-06-19 incident) ────────────────
+
+def test_qa_blocked_fallback_exits_zero_not_one(monkeypatch, tmp_path):
+    # 2026-06-19 incident: a fallback digest tripped the stale-release gate,
+    # main() returned 1, and Railway marked the job Crashed and re-ran it 3×
+    # (re-firing the same ops alert each time, per the ON_FAILURE policy). A
+    # QA block is a correct FINAL decision — the same fetch will trip the same
+    # gate on retry — so it must exit 0. The ops alert + the 'blocked'
+    # publish_run row + the heartbeat /fail are the complete record.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["monitor.py"])  # live (non-preview)
+    monkeypatch.setattr(monitor, "TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setattr(monitor, "TELEGRAM_CHANNEL_ID", "c")
+    monkeypatch.setattr(monitor, "DATABASE_URL", "postgres://x")
+    monkeypatch.setattr(monitor, "try_post_pending_curated", lambda: False)
+    monkeypatch.setattr(monitor, "init_database", lambda: None)
+    monkeypatch.setattr(monitor, "load_seen_models", lambda: {"seed/x"})
+    monkeypatch.setattr(monitor, "save_seen_models", lambda s: None)
+    for f in ["fetch_ollama_models", "fetch_huggingface_trending",
+              "fetch_major_orgs", "fetch_hf_text_generation"]:
+        monkeypatch.setattr(monitor, f, lambda: [])
+    m = _model("acme/Stale-Model")
+    monkeypatch.setattr(monitor, "fetch_openrouter_models", lambda: [m])
+    # Force a QA error via a malformed (<script>) summary body.
+    monkeypatch.setattr(monitor, "summarize_models",
+                        lambda models, *a, **k: "<b>Bad</b> <script>alert(1)</script>")
+    monkeypatch.setattr(monitor, "discover_recent_releases", lambda *a, **k: "")
+    monkeypatch.setattr(monitor, "_recent_digest_names", lambda *a, **k: [])
+    monkeypatch.setattr(monitor, "enrich_with_hf_cards", lambda models: None)
+    alerts, runs, heartbeats = [], [], []
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda t: alerts.append(t) or True)
+    monkeypatch.setattr(monitor, "record_publish_run", lambda *a, **k: runs.append(a) or True)
+    monkeypatch.setattr(monitor, "ping_heartbeat", lambda *a, **k: heartbeats.append(a))
+    monkeypatch.setattr(monitor, "send_telegram_post",
+                        lambda m: (_ for _ in ()).throw(AssertionError("QA block must not send")))
+
+    rc = monitor.main()
+    assert rc == 0, f"QA block must exit 0 (not crash Railway); got {rc}"
+    assert alerts, "QA block must still send the ops alert"
+    assert runs, "QA block must still record a blocked publish_run"
+    assert heartbeats and heartbeats[0][0] is False, "QA block must heartbeat /fail"
+
+
+def test_empty_state_refused_seed_exits_zero(monkeypatch, tmp_path):
+    # Same logic for the empty-models-table refused-seed path: deterministic,
+    # already alerted, retry won't help. Exit 0 to avoid the Railway crash-loop.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["monitor.py"])
+    monkeypatch.setattr(monitor, "TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setattr(monitor, "TELEGRAM_CHANNEL_ID", "c")
+    monkeypatch.setattr(monitor, "DATABASE_URL", "postgres://x")
+    monkeypatch.setattr(monitor, "ALLOW_SEED", False)
+    monkeypatch.setattr(monitor, "try_post_pending_curated", lambda: False)
+    monkeypatch.setattr(monitor, "init_database", lambda: None)
+    monkeypatch.setattr(monitor, "load_seen_models", lambda: set())  # empty → refused
+    monkeypatch.setattr(monitor, "save_seen_models", lambda s: None)
+    for f in ["fetch_ollama_models", "fetch_huggingface_trending",
+              "fetch_major_orgs", "fetch_hf_text_generation"]:
+        monkeypatch.setattr(monitor, f, lambda: [])
+    monkeypatch.setattr(monitor, "fetch_openrouter_models", lambda: [])
+    alerts, runs = [], []
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda t: alerts.append(t) or True)
+    monkeypatch.setattr(monitor, "record_publish_run", lambda *a, **k: runs.append(a) or True)
+    monkeypatch.setattr(monitor, "ping_heartbeat", lambda *a, **k: None)
+
+    rc = monitor.main()
+    assert rc == 0, f"refused-seed must exit 0; got {rc}"
+    assert alerts, "refused-seed must still alert"
+    assert runs, "refused-seed must still record a blocked publish_run"

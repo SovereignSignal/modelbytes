@@ -172,7 +172,11 @@ def test_main_refuses_silent_seed_without_flag(monkeypatch, tmp_path):
     monkeypatch.setattr(monitor, "ping_heartbeat", lambda *a, **k: None)
     monkeypatch.setattr(monitor, "record_publish_run", lambda *a, **k: True)
     rc = monitor.main()
-    assert rc == 1
+    # Exit 0, not 1: a refused-seed is deterministic (retry hits the same
+    # missing-flag state), and exit 1 made Railway mark the job Crashed and
+    # re-run it under ON_FAILURE, re-firing this alert 3× (2026-06-19).
+    # The alert + publish_run row + heartbeat /fail are the complete record.
+    assert rc == 0
     assert alerts and "seed" in alerts[0].lower()
 
 

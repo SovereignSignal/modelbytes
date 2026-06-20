@@ -15,6 +15,13 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
+from ss_publish import (
+    Publisher,
+    TelegramResult,
+    telegram_html_to_mrkdwn as _ss_telegram_html_to_mrkdwn,
+    truncate_for_telegram as _ss_truncate_for_telegram,
+)
+
 import psycopg2
 import requests
 
@@ -373,8 +380,28 @@ OPS_SLACK_CHANNEL_ID = os.environ.get("MODELBYTES_OPS_SLACK_CHANNEL_ID", "")
 HEARTBEAT_URL = os.environ.get("MODELBYTES_HEARTBEAT_URL", "").rstrip("/")
 ALLOW_SEED = os.environ.get("MODELBYTES_ALLOW_SEED") == "1"
 
+# The shared publish core (ss_publish, vendored at ./ss_publish). One Publisher
+# constructed from ModelBytes' env vars; the send/mirror/ops functions below
+# delegate to it. Config-driven so the core stays testable and this channel
+# keeps its own env-var names, ops banner, and placeholder mapping.
+_publisher = Publisher(
+    telegram_token=TELEGRAM_BOT_TOKEN,
+    telegram_channel_id=TELEGRAM_CHANNEL_ID,
+    slack_token=SLACK_BOT_TOKEN,
+    slack_channel_id=MODELBYTES_SLACK_CHANNEL_ID,
+    ops_telegram_chat_id=ADMIN_CHAT_ID,
+    ops_slack_channel_id=OPS_SLACK_CHANNEL_ID,
+    disable_preview=True,  # ModelBytes: keep the digest channel clean (no link cards)
+    ops_banner="🚨 ModelBytes ops:",
+    secret_values=tuple(s for s in (TELEGRAM_BOT_TOKEN, SLACK_BOT_TOKEN, DATABASE_URL) if s),
+)
+
 
 def _redact_secrets(text: str) -> str:
+    # ModelBytes-specific placeholder mapping (<token>, <database-url>) — kept
+    # as-is rather than delegating to the shared redact_secrets (which uses a
+    # single <redacted> placeholder). The distinct placeholders are part of
+    # this channel's ops readability and several tests assert on them.
     out = str(text)
     if TELEGRAM_BOT_TOKEN:
         out = out.replace(TELEGRAM_BOT_TOKEN, "<token>")
@@ -391,41 +418,13 @@ def send_ops_alert(text: str) -> bool:
     Routes to a private Telegram chat (MODELBYTES_ADMIN_CHAT_ID) when set,
     else a Slack ops channel (MODELBYTES_OPS_SLACK_CHANNEL_ID). Returns False
     when undeliverable; never raises.
+
+    Delegates the Telegram-then-Slack routing to the shared publish core
+    (ss_publish), which isolates each path so a Telegram outage is exactly
+    when the Slack fallback fires. Redaction happens inside the core via the
+    secret_values passed at construction.
     """
-    body = f"🚨 ModelBytes ops: {_redact_secrets(text)}"[:3900]
-    # Each destination gets its own try block: a Telegram-API outage is exactly
-    # when the Slack fallback must still fire (review finding 2026-06-12).
-    if ADMIN_CHAT_ID and TELEGRAM_BOT_TOKEN:
-        try:
-            resp = requests.post(
-                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                json={"chat_id": ADMIN_CHAT_ID, "text": body,
-                      "disable_web_page_preview": True},
-                timeout=10,
-            )
-            if resp.ok:
-                return True
-            print(_redact_secrets(f"Ops alert via Telegram failed: {resp.text[:200]}"),
-                  file=sys.stderr)
-        except Exception as e:
-            print(_redact_secrets(f"Ops alert via Telegram raised: {e}"), file=sys.stderr)
-    if OPS_SLACK_CHANNEL_ID and SLACK_BOT_TOKEN:
-        try:
-            resp = requests.post(
-                "https://slack.com/api/chat.postMessage",
-                headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
-                json={"channel": OPS_SLACK_CHANNEL_ID, "text": body,
-                      "unfurl_links": False},
-                timeout=10,
-            )
-            if resp.ok and resp.json().get("ok"):
-                return True
-        except Exception as e:
-            print(_redact_secrets(f"Ops alert via Slack raised: {e}"), file=sys.stderr)
-    if not (ADMIN_CHAT_ID or OPS_SLACK_CHANNEL_ID):
-        print(f"Ops alert (no destination configured): {_redact_secrets(text)}",
-              file=sys.stderr)
-    return False
+    return _publisher.send_ops_alert(text)
 
 
 def ping_heartbeat(ok: bool, message: str = "") -> None:
@@ -2113,18 +2112,10 @@ DIGEST_LIMIT = 15  # max models included in one daily digest
 
 
 def _truncate_for_telegram(message: str, limit: int = TELEGRAM_MAX_CHARS) -> str:
-    """Telegram rejects sendMessage over 4096 chars (UTF-16 code units, but
-    char-count is a safe lower bound). If over limit, truncate at the last
-    newline before the limit and append a truncation marker. Without this,
-    oversized messages 400-fail and never reach the channel."""
-    if len(message) <= limit:
-        return message
-    marker = "\n\n…[truncated]"
-    headroom = limit - len(marker)
-    cut = message.rfind("\n", 0, headroom)
-    if cut < headroom * 0.7:  # no good newline boundary; fall back to char cut
-        cut = headroom
-    return message[:cut].rstrip() + marker
+    """Truncate at the last newline before Telegram's 4096-char limit, with a
+    truncation marker. Delegates to the shared publish core (identical logic);
+    kept as a module function so existing callers and tests are unchanged."""
+    return _ss_truncate_for_telegram(message, limit)
 
 
 # The message_id of the last successful channel post (t.me/ModelBytes/<id>) —
@@ -2133,105 +2124,34 @@ LAST_TELEGRAM_MESSAGE_ID = None
 
 
 def send_telegram_post(message: str) -> bool:
-    global LAST_TELEGRAM_MESSAGE_ID
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHANNEL_ID:
-        print("Telegram not configured", file=sys.stderr)
-        return False
-    if len(message) > TELEGRAM_MAX_CHARS:
-        original_len = len(message)
-        message = _truncate_for_telegram(message)
-        print(f"Telegram message was {original_len} chars (over {TELEGRAM_MAX_CHARS}); "
-              f"truncated to {len(message)} chars.", file=sys.stderr)
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHANNEL_ID,
-        "text": message,
-        "parse_mode": "HTML",
-        # Unfurling picks whichever source link comes first and pastes a random
-        # vendor card under the digest — keep the channel clean.
-        "disable_web_page_preview": True,
-    }
-    try:
-        print(f"Sending {len(message)} chars...", file=sys.stderr)
-        resp = requests.post(url, json=payload, timeout=30)
-        if not resp.ok:
-            print(_redact_secrets(f"Telegram error: {resp.text[:500]}"), file=sys.stderr)
-        resp.raise_for_status()
-        try:
-            LAST_TELEGRAM_MESSAGE_ID = resp.json().get("result", {}).get("message_id")
-        except Exception:
-            LAST_TELEGRAM_MESSAGE_ID = None
-        return True
-    except Exception as e:
-        print(_redact_secrets(f"Telegram send error: {e}"), file=sys.stderr)
-        return False
+    """Send one message to the @ModelBytes channel. Returns True on success.
 
-
-class _SlackMrkdwnConverter(HTMLParser):
-    """Convert the small Telegram-HTML subset we emit (<b>, <i>, <a href>,
-    <code>) into Slack mrkdwn: *bold*, _italic_, <url|label>, preserving line
-    breaks. Mirrors the content-engine converter so Slack rendering is identical.
+    Delegates the HTTP mechanics (truncate, retry 429/5xx honoring Retry-After,
+    fail-soft) to the shared publish core. Preserves the module-level
+    LAST_TELEGRAM_MESSAGE_ID side-effect that callers (publish_runs audit)
+    read after a successful send.
     """
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.parts: List[str] = []
-        self._in_link = False
-        self._href = ""
-        self._link_text: List[str] = []
-
-    @staticmethod
-    def _esc(text: str) -> str:
-        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-    def handle_starttag(self, tag, attrs):
-        if tag in ("b", "strong"):
-            self.parts.append("*")
-        elif tag in ("i", "em"):
-            self.parts.append("_")
-        elif tag in ("code", "pre"):
-            self.parts.append("`")
-        elif tag == "br":
-            self.parts.append("\n")
-        elif tag == "a":
-            self._in_link = True
-            self._href = dict(attrs).get("href", "") or ""
-            self._link_text = []
-
-    def handle_endtag(self, tag):
-        if tag in ("b", "strong"):
-            self.parts.append("*")
-        elif tag in ("i", "em"):
-            self.parts.append("_")
-        elif tag in ("code", "pre"):
-            self.parts.append("`")
-        elif tag == "a":
-            label = "".join(self._link_text).strip()
-            href = self._href.strip()
-            if href and label:
-                self.parts.append(f"<{href}|{self._esc(label).replace('|', '/')}>")
-            elif href:
-                self.parts.append(f"<{href}>")
-            else:
-                self.parts.append(self._esc(label))
-            self._in_link = False
-            self._href = ""
-            self._link_text = []
-
-    def handle_data(self, data):
-        if self._in_link:
-            self._link_text.append(data)
-        else:
-            self.parts.append(self._esc(data))
-
-    def result(self) -> str:
-        return "".join(self.parts)
+    global LAST_TELEGRAM_MESSAGE_ID
+    result = _publisher.send_telegram(message)
+    if result.ok:
+        LAST_TELEGRAM_MESSAGE_ID = result.message_id
+        print(f"Sent ({len(message)} chars).", file=sys.stderr)
+    else:
+        LAST_TELEGRAM_MESSAGE_ID = None
+        # Redact via the publisher's known secret_values (which may differ from
+        # the module globals in tests) so a token in an error URL never leaks.
+        from ss_publish import redact_secrets
+        print(redact_secrets(f"Telegram send error: {result.error}",
+                             _publisher.secret_values), file=sys.stderr)
+    return result.ok
 
 
 def _telegram_html_to_slack_mrkdwn(value: str) -> str:
-    parser = _SlackMrkdwnConverter()
-    parser.feed(value)
-    text = parser.result()
+    # Delegate the HTML→mrkdwn parse to the shared core (identical token handling:
+    # b/strong→*, i/em→_, code/pre→`, a href→<url|label>, br→\n), then apply
+    # ModelBytes' post-processing (per-line rstrip, collapse 3+ newlines, strip)
+    # that the golden corpus expects.
+    text = _ss_telegram_html_to_mrkdwn(value)
     text = "\n".join(line.rstrip() for line in text.splitlines())
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 

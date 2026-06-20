@@ -25,12 +25,13 @@ def test_ops_alert_noop_without_destinations(monkeypatch):
 
 
 def test_ops_alert_routes_to_telegram_admin(monkeypatch):
-    monkeypatch.setattr(monitor, "ADMIN_CHAT_ID", "12345")
-    monkeypatch.setattr(monitor, "OPS_SLACK_CHANNEL_ID", "")
-    monkeypatch.setattr(monitor, "TELEGRAM_BOT_TOKEN", "tok")
+    # send_ops_alert delegates to the shared _publisher; configure it directly.
+    monkeypatch.setattr(monitor._publisher, "ops_telegram_chat_id", "12345")
+    monkeypatch.setattr(monitor._publisher, "ops_slack_channel_id", "")
+    monkeypatch.setattr(monitor._publisher, "telegram_token", "tok")
     sent = []
     fake = MagicMock(); fake.ok = True
-    monkeypatch.setattr(monitor.requests, "post",
+    monkeypatch.setattr(monitor._publisher, "_post",
                         lambda url, **k: sent.append((url, k)) or fake)
     assert monitor.send_ops_alert("something broke") is True
     url, kwargs = sent[0]
@@ -40,12 +41,13 @@ def test_ops_alert_routes_to_telegram_admin(monkeypatch):
 
 
 def test_ops_alert_falls_back_to_slack(monkeypatch):
-    monkeypatch.setattr(monitor, "ADMIN_CHAT_ID", "")
-    monkeypatch.setattr(monitor, "OPS_SLACK_CHANNEL_ID", "C0OPS")
-    monkeypatch.setattr(monitor, "SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setattr(monitor._publisher, "ops_telegram_chat_id", "")
+    monkeypatch.setattr(monitor._publisher, "ops_slack_channel_id", "C0OPS")
+    monkeypatch.setattr(monitor._publisher, "slack_token", "xoxb-test")
+    monkeypatch.setattr(monitor._publisher, "telegram_token", "")  # no TG path
     sent = []
     fake = MagicMock(); fake.ok = True; fake.json.return_value = {"ok": True}
-    monkeypatch.setattr(monitor.requests, "post",
+    monkeypatch.setattr(monitor._publisher, "_post",
                         lambda url, **k: sent.append((url, k)) or fake)
     assert monitor.send_ops_alert("oops") is True
     url, kwargs = sent[0]
@@ -54,11 +56,11 @@ def test_ops_alert_falls_back_to_slack(monkeypatch):
 
 
 def test_ops_alert_never_raises(monkeypatch):
-    monkeypatch.setattr(monitor, "ADMIN_CHAT_ID", "12345")
-    monkeypatch.setattr(monitor, "TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setattr(monitor._publisher, "ops_telegram_chat_id", "12345")
+    monkeypatch.setattr(monitor._publisher, "telegram_token", "tok")
     def boom(*a, **k):
         raise RuntimeError("network down")
-    monkeypatch.setattr(monitor.requests, "post", boom)
+    monkeypatch.setattr(monitor._publisher, "_post", boom)
     assert monitor.send_ops_alert("x") is False  # swallowed, not raised
 
 
@@ -73,11 +75,12 @@ def test_redact_secrets_strips_bot_token(monkeypatch):
 
 
 def test_telegram_send_error_is_redacted(monkeypatch, capsys):
-    monkeypatch.setattr(monitor, "TELEGRAM_BOT_TOKEN", "12345:AAsecretsecret")
-    monkeypatch.setattr(monitor, "TELEGRAM_CHANNEL_ID", "-100123")
+    monkeypatch.setattr(monitor._publisher, "telegram_token", "12345:AAsecretsecret")
+    monkeypatch.setattr(monitor._publisher, "telegram_channel_id", "-100123")
+    monkeypatch.setattr(monitor._publisher, "secret_values", ("12345:AAsecretsecret",))
     def boom(url, **k):
         raise RuntimeError(f"failed for {url}")
-    monkeypatch.setattr(monitor.requests, "post", boom)
+    monkeypatch.setattr(monitor._publisher, "_post", boom)
     assert monitor.send_telegram_post("hi") is False
     assert "AAsecretsecret" not in capsys.readouterr().err
 
@@ -124,15 +127,15 @@ def test_fallback_streak_zero_without_db(monkeypatch):
 # ── telegram message_id capture + no unfurl ──
 
 def test_send_telegram_captures_message_id_and_disables_preview(monkeypatch):
-    monkeypatch.setattr(monitor, "TELEGRAM_BOT_TOKEN", "tok")
-    monkeypatch.setattr(monitor, "TELEGRAM_CHANNEL_ID", "-100123")
-    fake = MagicMock(); fake.ok = True
+    monkeypatch.setattr(monitor._publisher, "telegram_token", "tok")
+    monkeypatch.setattr(monitor._publisher, "telegram_channel_id", "-100123")
+    fake = MagicMock(); fake.status_code = 200; fake.ok = True
     fake.json.return_value = {"ok": True, "result": {"message_id": 222}}
     captured = {}
     def post(url, **k):
         captured.update(k)
         return fake
-    monkeypatch.setattr(monitor.requests, "post", post)
+    monkeypatch.setattr(monitor._publisher, "_post", post)
     assert monitor.send_telegram_post("hello") is True
     assert monitor.LAST_TELEGRAM_MESSAGE_ID == 222
     assert captured["json"]["disable_web_page_preview"] is True

@@ -784,6 +784,18 @@ def _lint_digest_structure(body: str, mode: str) -> Tuple[List[str], List[str]]:
         if audit.open_counts.get(tag, 0) != audit.close_counts.get(tag, 0):
             errors.append(f"unbalanced <{tag}> tags (Telegram would reject the message)")
 
+    # Stray '<' in prose — e.g. 'under <100B params' or '5 < 10'. Python's
+    # html.parser doesn't treat a bare '<' as a tag, so the balance check above
+    # misses it; Telegram's strict parser returns 'Unclosed start tag at byte
+    # offset N' and 400s (incident 2026-06-21). Any '<' that isn't part of a
+    # known open/close tag is channel-harm.
+    _ok_tag = re.compile(
+        r"</?(?:" + "|".join(sorted(_TELEGRAM_OK_TAGS)) + r")\b[^>]*>",
+        re.IGNORECASE,
+    )
+    if "<" in _ok_tag.sub("", body):
+        errors.append("stray '<' in prose (Telegram would reject: unclosed start tag)")
+
     for href in _HREF_RE.findall(body):
         if not href.startswith("https://"):
             # Telegram renders http:// fine — not channel-harm, so it only

@@ -1975,6 +1975,181 @@ def _call_llm(model: str, prompt: str) -> Optional[str]:
         return None
 
 
+# Variant-suffix patterns that signal a FINE-TUNE / SFT / data variant of the
+# same base — these collapse. Empty list would mean "everything collapses."
+# Updated whenever a new variant-tag pattern shows up in the wild.
+_CAPABILITY_TIERS = {
+    "instruct", "it", "chat", "base", "raw", "foundation",
+    "sft", "rlhf", "dpo",  # post-training stages — real capability signal
+}
+_COLLAPSE_THRESHOLD = 3  # Decision 1 (Sov, 2026-06-22 spec): ≥3 to collapse
+
+
+def _variant_suffix(model_name: str, size: Optional[str]) -> Optional[str]:
+    """The trailing variant tag of a model name, IF it's a collapsible one.
+
+    'allenai/qwen35-9b-termigen' → 'termigen'  (collapse)
+    'x/Llama-4-8B-Math'          → 'Math'       (collapse)
+    'x/Foo-8b'                   → None         (no suffix — its own family)
+    'meta-llama/Llama-4-70B-Instruct' → None    (capability tier — protected)
+    'allenai/tmax-27b'           → None         (no suffix)
+
+    Returns None for capability-tier suffixes (instruct/base/it/chat/sft/…)
+    so a real instruct-vs-base pair at the same size stays separate.
+    """
+    seg = model_name.split("/")[-1]
+    low = seg.lower()
+    # Find the size token's position; the variant suffix is whatever trails it.
+    if not size:
+        return None
+    # match the size token case-insensitively (e.g. '9b', '70B', '8B')
+    size_pat = re.compile(re.escape(size).replace("B", r"[bB]").replace("M", r"[mM]"))
+    m = size_pat.search(low)
+    if not m:
+        return None
+    tail = seg[m.end():].lstrip("-_")
+    if not tail:
+        return None
+    # The whole trailing chunk after the size is the variant label. If its
+    # first token is a capability tier, this is NOT a collapsible variant.
+    first = tail.split("-", 1)[0].lower()
+    if first in _CAPABILITY_TIERS:
+        return None
+    return tail
+
+
+def collapse_variants(models: List["ModelRelease"]) -> List["ModelRelease"]:
+    """Collapse N≥3 same-(org, base, size) variants into one family entry.
+
+    Inline-path-only safety net (Decision 4). When an org drops a batch of
+    variants at the same size (SFT variants, dataset-named fine-tunes), the
+    dedup set treats each repo as distinct and the daily cap gets burned by one
+    org's batch (2026-06-22: 6 qwen35-9b-* forks filled the digest). This groups
+    by (org, family_core, size); a group of ≥3 collapses to one ModelRelease
+    whose description names the family + count + the variant suffixes.
+
+    Rules (Sov sign-off, 2026-06-22 Notion spec):
+    - threshold ≥3 (Decision 1)
+    - a variant that is_significant_release escapes to its own entry (3)
+    - instruct/base/it/chat/sft/rlhf/dpo suffixes DON'T collapse (5)
+    - the collapsed entry is a plain ModelRelease (no new type) so the LLM
+      prompt and the template renderer consume it unchanged
+    """
+    if len(models) < _COLLAPSE_THRESHOLD:
+        return list(models)
+
+    def _family_key(m: "ModelRelease"):
+        author = m.name.split("/")[0].lower() if "/" in m.name else ""
+        seg = m.name.split("/")[-1]
+        size = _param_size_from_name(m.name)
+        suffix = _variant_suffix(m.name, size)
+        # No suffix → singleton family key (won't collide with suffixed peers).
+        # Strip the suffix off the segment to get the family core.
+        core = seg
+        if suffix and size:
+            size_pat = re.compile(re.escape(size).replace("B", r"[bB]").replace("M", r"[mM]"))
+            mm = size_pat.search(seg)
+            if mm:
+                core = seg[:mm.end()]  # e.g. 'qwen35-9b', 'Llama-4-8B'
+        return (author, core.lower(), size or "?")
+
+    # Pull ESCAPE variants out first — a variant with standout engagement
+    # relative to its siblings surfaces on its own (Decision 3). is_significant_
+    # release alone is too broad (it returns True for every known-family name
+    # with no engagement floor, which would collapse nothing for qwen/llama).
+    # The intent of 'significant variant escapes' is 'one that's actually taking
+    # off' — so gate on being an engagement outlier within the batch, not on
+    # family name. A high absolute floor also qualifies (a genuinely viral
+    # release). Re-evaluated per-collapse, not globally.
+    def _author(m):
+        return m.name.split("/")[0].lower() if "/" in m.name else ""
+
+    def _is_escape(m: "ModelRelease", peers: List["ModelRelease"]) -> bool:
+        dl = m.downloads or 0
+        # Absolute floor: a genuinely viral variant escapes on its own.
+        if dl >= 100000 or (m.likes or 0) >= 1000:
+            return True
+        # Relative: an outlier vs its siblings (>=5× the peer median downloads).
+        peer_dl = sorted(p.downloads or 0 for p in peers if p is not m)
+        if peer_dl:
+            median = peer_dl[len(peer_dl) // 2]
+            return dl >= max(median * 5, median + 1000)
+        return False
+
+    # First pass: assign every model to a family group.
+    groups: Dict[tuple, List["ModelRelease"]] = {}
+    order: List[tuple] = []
+    for m in models:
+        k = _family_key(m)
+        if k not in groups:
+            groups[k] = []
+            order.append(k)
+        groups[k].append(m)
+
+    # Second pass: within each group, pull escape variants out to their own
+    # entries; the rest collapse if ≥ threshold remain.
+    escape_singletons: List["ModelRelease"] = []
+    collapsible_groups: Dict[tuple, List["ModelRelease"]] = {}
+    for k in order:
+        group = groups[k]
+        if len(group) < _COLLAPSE_THRESHOLD:
+            continue  # too small to collapse anyway — handled below
+        escapes = [m for m in group if _is_escape(m, group)]
+        remainder = [m for m in group if m not in escapes]
+        escape_singletons.extend(escapes)
+        if len(remainder) >= _COLLAPSE_THRESHOLD:
+            collapsible_groups[k] = remainder
+        else:
+            # Escapes dropped the group below threshold — keep the remainder
+            # as singletons too (don't collapse a pair).
+            escape_singletons.extend(remainder)
+
+    out: List["ModelRelease"] = []
+    for k in order:
+        group = collapsible_groups.get(k)
+        if group is None:
+            continue
+        rep = group[0]
+        suffixes = [_variant_suffix(g.name, _param_size_from_name(g.name)) or g.name
+                    for g in group]
+        suffixes_str = ", ".join(suffixes[:8]) + ("…" if len(suffixes) > 8 else "")
+        size = _param_size_from_name(rep.name) or ""
+        author = rep.name.split("/")[0] if "/" in rep.name else ""
+        seg = rep.name.split("/")[-1]
+        family_core = seg
+        if size:
+            size_pat = re.compile(re.escape(size).replace("B", r"[bB]").replace("M", r"[mM]"))
+            mm = size_pat.search(seg)
+            if mm:
+                family_core = seg[:mm.end()]
+        family_name = f"{author}/{family_core}" if author else family_core
+        summary = (f"Family release — {len(group)} specialized variants of the "
+                   f"{family_core} family ({size or 'unknown size'}): {suffixes_str}. "
+                   f"Released as a batch.")
+        collapsed = ModelRelease(
+            name=family_name,
+            provider=rep.provider,
+            source=rep.source,
+            url=rep.url,
+            description=summary,
+            total_parameters=size or rep.total_parameters,
+            is_open_source=rep.is_open_source,
+            license=rep.license,
+            release_date=rep.release_date,
+        )
+        out.append(collapsed)
+
+    # Singletons + pairs (groups below threshold) pass through unchanged.
+    for k in order:
+        if k in collapsible_groups:
+            continue
+        if k in groups and len(groups[k]) < _COLLAPSE_THRESHOLD:
+            out.extend(groups[k])
+
+    out.extend(escape_singletons)
+    return out
+
+
 def summarize_models(models: List[ModelRelease], web_context: str = "",
                      recent_names: List[str] = None) -> str:
     """Use LLM for concise digest if key available.
@@ -2537,12 +2712,27 @@ def main():
         )
         digest_models = ranked[:DIGEST_LIMIT]
         held = ranked[DIGEST_LIMIT:]
+        # Mark the pre-collapse set seen FIRST: collapsed-away variants must be
+        # recorded as seen or they re-surface next run (the family entry's name
+        # is the base, not the individual variants). Done before collapse so
+        # the original variant names are captured.
+        pre_collapse = list(digest_models)
+        # Collapse (inline path only, 2026-06-22 spec): group same-(org, base,
+        # size) variants and collapse N≥3 into one family entry so one org's
+        # batch doesn't burn the daily cap or spam the channel. Sits after
+        # ranking (keeps the top variants) and before summarize (the collapsed
+        # entry is a plain ModelRelease the renderer consumes).
+        digest_models = collapse_variants(digest_models)
         print(
             f"Posting top {len(digest_models)} of {len(all_new)} new model(s)"
             + (f"; {len(held)} held for a later run" if held else "")
         )
 
-        # Mark posted models as seen so they don't re-appear.
+        # Mark posted models seen so they don't re-appear. Use the pre-collapse
+        # names (the individual variants) PLUS the collapsed family entry names
+        # so neither the variants nor the family-base re-surfaces.
+        for m in pre_collapse:
+            seen_models.add(m.name)
         for m in digest_models:
             seen_models.add(m.name)
         # For the overflow, mark ONLY confirmed-insignificant models as seen so

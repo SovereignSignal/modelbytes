@@ -1038,6 +1038,17 @@ def _format_context(ctx: Optional[int]) -> str:
 def is_noise_model(model_id: str, author: str, tags: list,
                    downloads: int = 0, likes: int = 0) -> bool:
     """Filter out noise. Returns True = skip this model."""
+    # Defensive coercion: HF/fetchers occasionally hand back a string (or None)
+    # for engagement counts. A TypeError here would crash the fallback publish
+    # path, so coerce to int (missing/unparseable → 0) before any comparison.
+    try:
+        downloads = int(downloads or 0)
+    except (TypeError, ValueError):
+        downloads = 0
+    try:
+        likes = int(likes or 0)
+    except (TypeError, ValueError):
+        likes = 0
     model_lower = model_id.lower()
     author_lower = (author or "").lower()
     tags_lower = [t.lower() for t in tags]
@@ -1340,12 +1351,21 @@ INLINE_PRIMARY = os.environ.get("MODELBYTES_INLINE_PRIMARY") == "1"
 
 def _param_size_from_name(name: str) -> Optional[str]:
     """The size token a model advertises in its own name ('…-32B', '…-A4B',
-    '…-70M'). The canonical headline size — more trustworthy than HF
+    '…-70m'). The canonical headline size — more trustworthy than HF
     safetensors.total, which is often a partial/sharded/adapter upload. Returns
-    the LARGEST token (total, not the MoE active count) or None."""
+    the LARGEST token (total, not the MoE active count) or None.
+
+    Case-insensitive on the unit (real HF IDs are almost always lowercase,
+    e.g. 'tmax-27b', 'qwen35-9b'; 2026-06-22 incident: a case-sensitive match
+    missed those, marked params 'unknown', and the LLM hallucinated specs).
+    The unit must be at a boundary (hyphen, start, or end) so a 'b'/'m' inside
+    a word ('lab', 'web', 'something') can't false-match."""
     seg = name.split("/")[-1]
     best = None
-    for num, unit in re.findall(r"(\d+(?:\.\d+)?)\s*([BM])\b", seg):
+    # Match <digits>[.<digits>] (b|m) where the unit is at a token boundary:
+    # preceded by start-of-string or a non-letter (hyphen/space), and followed
+    # by end-of-string or a non-letter. Case-insensitive.
+    for num, unit in re.findall(r"(?:(?<=[-\s_])|(?<=^))(\d+(?:\.\d+)?)\s*([bBmM])(?![a-zA-Z])", seg):
         val = float(num) * (1e9 if unit.upper() == "B" else 1e6)
         if best is None or val > best[0]:
             best = (val, f"{num}{unit.upper()}")

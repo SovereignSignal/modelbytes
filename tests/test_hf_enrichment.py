@@ -122,6 +122,37 @@ def test_param_size_from_name():
     assert monitor._param_size_from_name("MiniMaxAI/MiniMax-M3") is None  # no size token
 
 
+def test_param_size_from_name_lowercase():
+    # 2026-06-22 incident: real HF IDs are almost always lowercase ('tmax-27b',
+    # 'qwen35-9b'), but the parser only matched UPPERCASE B/M — so it returned
+    # None for nearly every real model, the system marked params 'unknown',
+    # and the LLM hallucinated specs ('27B' model shown as '3 M params').
+    assert monitor._param_size_from_name("allenai/tmax-27b") == "27B"
+    assert monitor._param_size_from_name("allenai/tmax-8b") == "8B"
+    assert monitor._param_size_from_name("allenai/tmax-2b") == "2B"
+    assert monitor._param_size_from_name("allenai/qwen35-9b-termigen") == "9B"
+    assert monitor._param_size_from_name("qwen/qwen3-7b-instruct") == "7B"
+    # mixed case still works, uppercase still works, largest token wins
+    assert monitor._param_size_from_name("x/Foo-1B-70B") == "70B"
+    assert monitor._param_size_from_name("x/Mini-760m") == "760M"
+    # a trailing 'b' inside a word must not false-match (e.g. 'web', 'lab')
+    assert monitor._param_size_from_name("x/derivelab") is None
+    assert monitor._param_size_from_name("x/something-web") is None
+
+
+def test_is_noise_model_coerces_string_engagement():
+    # is_noise_model does `likes < 100` directly; a fetcher passing a string
+    # (e.g. HF returning "123" once) would crash the fallback path with
+    # TypeError, taking the whole publish down. Coerce to int defensively.
+    # Known org (allenai) bypasses the engagement gate, so use an unknown org
+    # to exercise the branch that reads likes/downloads.
+    assert monitor.is_noise_model("someorg/whatever-9b", "someorg", [],
+                                  downloads="5000", likes="50") in (True, False)
+    # and None must not crash either (treated as 0)
+    assert monitor.is_noise_model("someorg/whatever-9b", "someorg", [],
+                                  downloads=None, likes=None) in (True, False)
+
+
 def test_name_size_beats_partial_safetensors(monkeypatch):
     # 32B in the name, but safetensors reports a 676K adapter → name must win.
     monkeypatch.setattr(monitor, "_http_get", lambda url, name, **kw: _resp({

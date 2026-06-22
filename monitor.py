@@ -1301,6 +1301,7 @@ MAJOR_HF_ORGS = [
     "z-ai", "zai-org", "arcee-ai", "openbmb", "minimaxai",
     "NousResearch", "tiiuae", "01-ai", "baai", "xiaomi",
     "moonshotai", "bytedance-seed", "bytedance-research", "inclusionai", "ibm",
+    "MiniMaxAI",
     "allenai", "amazon", "perplexity-ai", "stabilityai",
     "HiDream-ai", "SulphurAI", "Zyphra",
     "circlestone-labs", "Hcompany", "Supertone",

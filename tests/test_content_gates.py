@@ -51,6 +51,24 @@ def test_unbalanced_bold_is_an_error():
     assert any("unbalanced" in e.lower() for e in errors)
 
 
+def test_stray_lt_in_prose_is_an_error():
+    # 2026-06-21 incident: the LLM emitted a literal '<' in prose
+    # (e.g. 'under <100B params' / '5 < 10'). Python's html.parser doesn't see
+    # a tag there, so the balance check passed — but Telegram's strict parser
+    # returned 'Unclosed start tag at byte offset N' and 400'd, which sent the
+    # publisher down the send-failed path and left the service Crashed. Any '<'
+    # that isn't part of a known tag must be treated as channel-harm.
+    for stray in [
+        GOOD.replace("70B total", "under <100B params"),
+        GOOD.replace("70B total", "5 < 10 tokens"),
+        "Plain text with a stray < and more text after it.",
+        "Models under <100B params and >50B active.",
+    ]:
+        _, _, errors = _validate(stray, mode="fallback")
+        assert errors, f"stray '<' must be rejected; body was: {stray!r}"
+        assert any("stray" in e.lower() for e in errors), errors
+
+
 def test_non_https_link_severity_by_mode():
     # Telegram renders http:// fine, so it's not channel-harm: machine-assembled
     # fallback content gets blocked, curated content gets a warning (blocking a

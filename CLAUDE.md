@@ -89,9 +89,10 @@ a figure published in the last 14 days) and a deterministic dateline rewrite.
    `python3 -m pytest tests/ -q` must stay green. `tests/conftest.py` blanks all
    network/alert/DB side-effects so the suite is safe even with prod env vars.
 4. **Shared publish core.** Telegram send / Slack mirror / ops-alert routing
-   live in the vendored `ss_publish/` package (shared with clawbytes). Edit the
-   canonical copy at `repos/ss-publish/` and copy into both repos — the
-   `test_ss_publish_sync.py` guard fails if they drift.
+   live in the self-contained `ss_publish/` package (also vendored in clawbytes).
+   This repo owns its copy; there is no separate ss-publish repo (retired
+   2026-06-23). If you change shared behavior, mirror the edit into clawbytes's
+   `ss_publish/` by hand.
 5. **The inline writer can hallucinate.** The content gate
    (`validate_digest_for_publish`) is the safety net: it rejects stray `<` in
    prose, unbalanced tags, floods, and stale dates before they reach Telegram.
@@ -102,8 +103,8 @@ a figure published in the last 14 days) and a deterministic dateline rewrite.
 ## Key files
 
 - `monitor.py` — the entire publisher (single file, ~2,700 lines).
-- `ss_publish/` — vendored shared publish core (Telegram/Slack/ops); see the
-  sync guard `tests/test_ss_publish_sync.py`.
+- `ss_publish/` — self-contained shared publish core (Telegram/Slack/ops), also
+  vendored in clawbytes; mirror any cross-repo edits by hand.
 - `docs/architecture.md` — full design (read the "How we got here" note on the
   retired curator layer); `docs/operations.md` — runbooks;
   `docs/structured-data.md` — the Postgres tables.

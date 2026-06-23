@@ -10,32 +10,47 @@ today, organized into identity tiers and written to be self-explanatory.
 > (`-100XXXXXXXXXX`, `C0XXXXXXXXX`, `<railway-project-id>`). History has been
 > scrubbed once; keep it clean.
 
-## Architecture — three layers, best-effort degradation
+## Architecture — inline-primary, one system, best-effort degradation
 
-1. **Curator** (`docs/curator-prompt.md`) — a scheduled claude.ai routine
-   (sonnet, daily 15:30 UTC, HuggingFace connector + web search). Researches
-   the day's model news, writes a Telegram-HTML digest to
-   `pending/<YYYY-MM-DD>.txt`, and commits it to `master`. This is the quality
-   path. The routine prompt is the source of truth for **format v3** (see
-   `docs/superpowers/specs/2026-06-10-builder-digest-format-v3-design.md`).
+**One publisher:** `monitor.py`, a daily **16:00 UTC** Railway cron. There is
+**no claude.ai / Claude Code dependency** in the publish path. Editorial taste
+is produced **inline** by an OpenAI-compatible writer model (production:
+`MODELBYTES_LLM_MODEL` = `deepseek-v4-pro` on Ollama Cloud, with
+`MODELBYTES_LLM_MODEL_FALLBACK` = `gpt-oss:120b`) grounded by **Parallel.ai web
+research** (`MODELBYTES_PARALLEL_API_KEY`). This is the everyday path, not a
+degraded fallback — set `MODELBYTES_INLINE_PRIMARY=1` (it is, in prod) so the
+publisher treats an inline day as normal and does not alert "curator absent".
 
-2. **Publisher** — `monitor.py`, runs on **Railway** as a daily 16:00 UTC cron.
-   - Reads the curated digest **from GitHub raw first** (master is the source of
-     truth; the Railway image is stale by construction because auto-deploy does
-     not fire on curator pushes), then the baked-in local copy, then a ~10-min
-     grace window for a late curator.
-   - Validates (`validate_digest_for_publish`), fixes the dateline, posts to
-     Telegram + Slack, records a `posted_digests` row (idempotency) and a
-     `publish_runs` row (audit).
-   - If no curated digest exists: the **deterministic fallback** runs — fetch
-     OpenRouter/Ollama/HF, `is_noise_model`/`is_significant_release`/
-     `categorize_model`, dedupe vs the `models` table, then `summarize_models()`
-     (GLM via Tenspire) or the bare `build_digest_message()` template.
+The daily run, in `main()`:
+1. Resolve the day's model set: fetch OpenRouter / Ollama / HuggingFace
+   (trending + major orgs + top text-gen), `is_noise_model` /
+   `is_significant_release` / `is_stale_release` filters, dedupe vs the Postgres
+   `models` table.
+2. `discover_recent_releases()` — Parallel.ai cited web research; the freshness
+   engine that keeps the channel alive even when the registries are quiet.
+3. `collapse_variants()` — group same-(org, base, size) variants; N≥3 collapse
+   to one family entry so one org's batch can't spam the digest.
+4. `enrich_with_hf_cards()` — pull real params/license/context/benchmarks from
+   HF model cards so the writer works from specs, not training knowledge.
+5. `summarize_models()` — the writer model emits format-v3 Telegram HTML.
+6. `validate_digest_for_publish(body, mode='fallback')` content gates → post to
+   Telegram + Slack mirror → record `posted_digests` (idempotency) and a
+   `publish_runs` row (audit) → `ping_heartbeat()`.
 
-3. **Governance routines** (claude.ai cron) — supervisor (14:00 UTC,
-   auto-commits org/tier-list additions when `.supervisor-bootstrapped` exists),
-   pr-curator (hourly), daily-health (17:00 UTC, **currently disabled** — see
-   below).
+> **Historical: the claude.ai curator layer is RETIRED** (2026-06). Earlier
+> docs and audit plans describe a three-routine claude.ai layer (curator /
+> supervisor / daily-health) writing `pending/<TODAY>.txt`. That design was
+> replaced by the inline writer above. `pending/*.txt` is now only a write-back
+> cache of what was published (for the cross-day fact-consistency check), and
+> `docs/curator-prompt.md` + `.supervisor-bootstrapped` + the
+> `modelbytes-curator-routines.md` memory are **stale artifacts**, not live
+> config. Do not "restore the curator" — it is intentionally gone. See
+> `docs/architecture.md` § "How we got here".
+
+The publisher still **reads `pending/<TODAY>.txt` if one is present** (GitHub
+raw first, then baked-in, then a grace window) — so a hand-written or
+> externally-produced digest still wins. But nothing produces that file in the
+> normal flow anymore; the inline path is the default.
 
 ## Ops / observability layer (added 2026-06-12)
 
@@ -65,32 +80,42 @@ a figure published in the last 14 days) and a deterministic dateline rewrite.
 1. **Railway only.** The old self-managed VM (`claw-content-engine`) is retired.
    Never reach for it or the EDIN-VPN tunnel for modelbytes — all ops go through
    Railway (CLI / `railway run`). See `docs/operations.md`.
-2. **TDD.** `monitor.py` has a real suite (`tests/`, ~98 tests incl. golden
+2. **No claude.ai / Claude Code dependency.** The publish path is inline
+   (writer model + Parallel.ai). Do not reintroduce a claude.ai routine,
+   RemoteTrigger, or Anthropic API call into the publish flow. `INLINE_PRIMARY=1`
+   is the production setting.
+3. **TDD.** `monitor.py` has a real suite (`tests/`, ~188 tests incl. golden
    tests on the live `pending/*.txt` corpus). Write the failing test first;
    `python3 -m pytest tests/ -q` must stay green. `tests/conftest.py` blanks all
    network/alert/DB side-effects so the suite is safe even with prod env vars.
-3. **Curator vs fallback parity.** Both authors share one taxonomy
-   (`categorize_model` → open_frontier/closed_frontier/specialized/local/other;
-   WATCH is curator-only). When changing the format, change the prompt *and* the
-   linter (they are not yet a single source — a known follow-up).
-4. **The supervisor edits production lists autonomously.** Keep its blast radius
-   small; treat org-list additions as decisions needing corroborating signals.
+4. **Shared publish core.** Telegram send / Slack mirror / ops-alert routing
+   live in the vendored `ss_publish/` package (shared with clawbytes). Edit the
+   canonical copy at `repos/ss-publish/` and copy into both repos — the
+   `test_ss_publish_sync.py` guard fails if they drift.
+5. **The inline writer can hallucinate.** The content gate
+   (`validate_digest_for_publish`) is the safety net: it rejects stray `<` in
+   prose, unbalanced tags, floods, and stale dates before they reach Telegram.
+   When changing what specs the writer sees (`enrich_with_hf_cards`,
+   `_param_size_from_name`), add a gate test — the writer will invent specs when
+   fed `unknown`.
 
 ## Key files
 
-- `monitor.py` — the entire publisher (single file, ~2200 lines).
-- `docs/curator-prompt.md` — the live curator routine prompt (keep in sync).
-- `docs/architecture.md` — full design; `docs/operations.md` — runbooks;
+- `monitor.py` — the entire publisher (single file, ~2,700 lines).
+- `ss_publish/` — vendored shared publish core (Telegram/Slack/ops); see the
+  sync guard `tests/test_ss_publish_sync.py`.
+- `docs/architecture.md` — full design (read the "How we got here" note on the
+  retired curator layer); `docs/operations.md` — runbooks;
   `docs/structured-data.md` — the Postgres tables.
 - `docs/superpowers/specs/` — design specs (format v3 + the 2026-06-12 review
   follow-ups).
-- `pending/<date>.txt` — the curated digest handoff files (also the dedup/
-  graduation memory the curator re-reads).
+- `pending/<date>.txt` — write-back cache of what was published (feeds the
+  cross-day fact-consistency check). No longer a curator handoff.
+- `docs/curator-prompt.md`, `.supervisor-bootstrapped` — **stale artifacts**
+  from the retired claude.ai layer; kept for history, not live config.
 
 ## Conventions
 
 - Commit messages end with the `Co-Authored-By: Claude` trailer.
-- Routine prompts are managed via the `schedule` skill / RemoteTrigger; the
-  canonical prompt copy lives in `docs/curator-prompt.md`.
 - Operational truths that aren't derivable from the code live in Claude's
   auto-memory (the `current-state-*` note is the Read-First).

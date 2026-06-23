@@ -2,21 +2,37 @@
 
 Day-to-day operational tasks for ModelBytes. For the design behind these mechanics, see [`architecture.md`](./architecture.md).
 
+> **⚠️ ARCHITECTURE NOTE (2026-06): the claude.ai routine layer is RETIRED.**
+> The publish path is **inline-primary** (writer model + Parallel.ai research,
+> no Claude Code dependency). Several sections of this runbook describe
+> operating the now-retired routines and are marked **`[RETIRED]`** below.
+> They are kept for historical context only — the routines do not exist and
+> the runbooks do not apply:
+> - Pausing / Re-enabling the supervisor's autonomy (`[RETIRED]`)
+> - Manually triggering a routine (`[RETIRED]`)
+> - When the curator misses (no `pending/<TODAY>.txt` was pushed) (`[RETIRED]` —
+>   the inline path IS the everyday path now; a missing `pending/` file is normal)
+> - The daily-health watchdog (`[RETIRED]`)
+> - Decommissioning a routine (`[RETIRED]`)
+>
+> The **live** runbooks are: Observing the system, Ops alerts, Reading the
+> `publish_runs` audit, Rotating the Telegram bot token, The LLM fallback
+> chain, Manually triggering a Telegram post, When source fetches are flaky.
+
 ## Observing the system
 
 | What | Where |
 |---|---|
 | Channel output | https://t.me/ModelBytes (or `https://t.me/s/ModelBytes` for HTML-scrapable history) |
-| Routine outputs | https://claude.ai/code/routines |
 | GitHub issues / PRs | https://github.com/SovereignSignal/modelbytes |
 | Structured state | Postgres tables (`models`, `posted_digests`, `publish_runs`; see `docs/structured-data.md`) |
 | Per-run audit | `publish_runs` table — one row per `monitor.py` run (see "Reading the publish_runs audit" below) |
 | Ops alerts | Telegram DM to the admin chat, falling back to the ops Slack channel (see "Ops alerts" below) |
 | Railway service state | Railway dashboard → `modelbytes` project → `modelbytes` service |
 
-A clean day looks like: 1 post at 16:00 UTC in the channel, today's UTC date present in `posted_digests`, a `posted`-status row in `publish_runs`, no ops alert in the admin chat, and no new GitHub issues with the `health-incident` or `supervisor-drift` labels.
+A clean day looks like: 1 post at 16:00 UTC in the channel, today's UTC date present in `posted_digests`, a `posted`-status row in `publish_runs`, no ops alert in the admin chat.
 
-> The `daily-health` watchdog routine is **currently disabled** (it false-FAILed because `t.me/s/ModelBytes` 403-blocks datacenter IPs). Health signal now comes from the in-process ops alert layer plus the `publish_runs` audit — see "Ops alerts" and the daily-health section below.
+> Health signal comes from the in-process ops alert layer plus the `publish_runs` audit (see "Ops alerts" below). The old `daily-health` claude.ai routine is retired.
 
 ## Pre-publish factual QA
 
@@ -92,7 +108,7 @@ WHERE mode = 'fallback'
 ORDER BY run_at DESC LIMIT 10;
 ```
 
-## Pausing the supervisor's autonomy
+## [RETIRED] Pausing the supervisor's autonomy
 
 If the supervisor starts proposing bad additions (or proactively, before a risky period like an upcoming release window), revoke its auto-commit authority:
 
@@ -106,7 +122,7 @@ git push origin master
 
 On its next 14:00 UTC run, the supervisor will see the marker is gone, return to propose-only mode, and open a fresh proposal issue instead of auto-committing. Re-enable later with the bootstrap commit pattern (see below).
 
-## Re-enabling the supervisor's autonomy
+## [RETIRED] Re-enabling the supervisor's autonomy
 
 After reviewing a propose-only issue (the supervisor opens these when it's not bootstrapped):
 
@@ -217,7 +233,7 @@ railway run python3 monitor.py
 
 If the curator routine has already produced today's pending file, this will post the curated digest. If today's UTC date already exists in the `posted_digests` table, the run exits without posting again. If no pending file exists, the deterministic pipeline runs and posts whatever it generates.
 
-## Manually triggering a routine
+## [RETIRED] Manually triggering a routine
 
 Routines can be triggered ad-hoc from claude.ai. From this Claude session you can also use the `RemoteTrigger` tool:
 
@@ -231,7 +247,7 @@ is currently **disabled**). Find the current IDs at https://claude.ai/code/routi
 via `RemoteTrigger(action="list")`, or in the operator's
 `modelbytes-curator-routines` notes.
 
-## When the curator misses (no `pending/<TODAY>.txt` was pushed)
+## [RETIRED] When the curator misses (no `pending/<TODAY>.txt` was pushed)
 
 Railway will fall through to the deterministic pipeline at 16:00 UTC. The channel still gets a post — normally LLM-summarized from the shared Railway fallback variables, or template-only if the LLM env vars are unavailable. To investigate:
 
@@ -257,7 +273,7 @@ MODELBYTES_USER_AGENT="ModelBytes/1.0 (+https://github.com/SovereignSignal/model
 
 If one source is failing but the others are healthy, the fetcher logs the error and returns an empty list for that source. The daily post should still proceed from the remaining sources.
 
-## The daily-health watchdog (currently disabled)
+## [RETIRED] The daily-health watchdog
 
 The `daily-health` routine (17:00 UTC) is **disabled**. It scraped `t.me/s/ModelBytes` to confirm the day's post landed, but that endpoint **403-blocks datacenter IPs**, so the check false-FAILed every day from a cloud runner. A receipt-based replacement (confirm the post from the captured `telegram_message_id` / `publish_runs` row rather than by scraping the public web view) is **designed but tabled**.
 
@@ -290,7 +306,7 @@ git push origin master
 
 If you intentionally need to repost a date, remove the matching row from `posted_digests` first. Treat that as a production operation: verify the channel state before and after.
 
-## Decommissioning a routine
+## [RETIRED] Decommissioning a routine
 
 To delete a routine: visit https://claude.ai/code/routines, find the routine, delete it. Then update `[[modelbytes-curator-routines]]` to move the entry into a `## Retired` section with the date and reason.
 

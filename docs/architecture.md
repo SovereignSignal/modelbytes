@@ -8,67 +8,85 @@ A daily curated digest of notable AI model news, posted to the public Telegram c
 
 ## Two systems, one repo
 
-**Deterministic core** — `monitor.py` in the repo root. The publisher. At post time it resolves the curated digest (GitHub raw first, then the baked-in image copy, then a grace window — see below) and publishes it; only if no curated digest exists does it run the heuristic fallback pipeline (`is_noise_model` / `is_significant_release` / `categorize_model`, dedupe against Postgres). This is the safety net — it must keep posting even when the Claude layer is unavailable.
+**Inline-primary publisher** — `monitor.py` in the repo root, a daily 16:00 UTC Railway cron. There is **no claude.ai / Claude Code dependency**. The editorial digest is produced inline: fetch OpenRouter/Ollama/HuggingFace → filter (`is_noise_model` / `is_significant_release` / `is_stale_release`) → dedupe vs Postgres → `collapse_variants()` (group same-family variants) → `enrich_with_hf_cards()` (real specs from model cards) → `discover_recent_releases()` (Parallel.ai cited web research) → `summarize_models()` (writer model emits format-v3 HTML) → `validate_digest_for_publish()` content gate → post Telegram + Slack mirror → record `posted_digests` + `publish_runs` + heartbeat.
 
-**Claude layer** — a set of scheduled routines on Claude.ai (no Anthropic API costs; uses the existing subscription via the Anthropic-hosted CCR environment) that handle editorial taste, growth, and health checks:
+The writer model (`MODELBYTES_LLM_MODEL`, prod = `deepseek-v4-pro` on Ollama Cloud) with `MODELBYTES_LLM_MODEL_FALLBACK` (`gpt-oss:120b`) is OpenAI-compatible and runs on owned/low-cost inference — not Anthropic. `MODELBYTES_INLINE_PRIMARY=1` (prod) tells the publisher an inline day is the **normal** path, not a degraded fallback, so it does not alert "curator absent".
 
-| Routine | Cadence | Role |
-|---|---|---|
-| `modelbytes-curator-routine` | Daily 15:30 UTC | Generates the day's editorial digest with taste. Writes `pending/<TODAY>.txt` to master. Replaces the previous OpenAI gpt-4o-mini summarization step. |
-| `modelbytes-supervisor-routine` | Daily 14:00 UTC | Audits production state + grows the system organically. Auto-commits list additions (KNOWN_ORGS, PROVIDER_NAMES, etc.) when bootstrapped; opens PRs for logic changes; opens issues for ambiguous calls. |
-| `modelbytes-daily-health` | Daily 17:00 UTC | **Currently DISABLED.** It fetched `t.me/s/ModelBytes` to confirm the day's post landed, but that endpoint 403-blocks datacenter IPs so it false-FAILed daily. A receipt-based replacement (the publisher already records `publish_runs` rows it could read) is designed but tabled. Until then, run-level monitoring is the ops layer below, not this routine. |
-| `modelbytes-pr-curator` | Hourly | Auto-reviews any open PR that lacks a `🤖 Curator review:` comment. |
+> **How we got here (curator retired, 2026-06).** Earlier versions of this
+> doc and the audit-history plans describe a three-routine claude.ai layer —
+> `modelbytes-curator-routine` (wrote `pending/<TODAY>.txt`),
+> `modelbytes-supervisor-routine`, `modelbytes-daily-health`,
+> `modelbytes-pr-curator`. **That entire layer is retired.** It was replaced
+> by the inline writer + Parallel.ai research above, deliberately removing
+> the claude.ai / RemoteTrigger dependency. The retired sections are kept
+> below for historical context (and because the audit plans reference them);
+> they are **not live**. Do not "restore the curator" — it is intentionally
+> gone. `pending/*.txt` is now only a write-back cache of what was published
+> (read by the cross-day fact-consistency check), not a curator handoff.
 
-Routine IDs and URLs live in the auto-memory file `modelbytes-curator-routines.md`. Manage them at https://claude.ai/code/routines.
+---
 
 ## The daily loop (autonomous, no human in the path)
 
 ```
-14:00 UTC   modelbytes-supervisor-routine
-            ├── audit recent posts, fetched data, GitHub issues
-            ├── identify growth candidates (orgs/families) + drift indicators
-            ├── if .supervisor-bootstrapped on master: auto-commit top 3 list additions
-            └── record structured supervisor outcome
-
-15:30 UTC   modelbytes-curator-routine
-            ├── fetch sources (OpenRouter / Ollama / HuggingFace)
-            ├── run is_noise_model + categorize_model filters
-            ├── apply editorial pass (drop weak items, write blurbs, lead "Take" sentence)
-            ├── format as Telegram HTML
-            └── commit pending/<TODAY>.txt to master via gh
-
-16:00 UTC   Railway cron
-            ├── monitor.py runs
+16:00 UTC   Railway cron — monitor.py runs
             ├── ensure posted_digests exists for duplicate-post protection
             ├── if posted_digests already has today: exit 0
-            ├── try_post_pending_curated() resolves the curated digest:
-            │     1. GitHub raw  pending/<TODAY>.txt  (master = source of truth)
-            │     2. baked-in local copy              (GitHub-outage fallback)
-            │     3. _wait_for_pending()              (grace window for a late curator)
-            ├── _fix_dateline() → validate_digest_for_publish() content gates
-            ├── if curated digest resolved + not blocked: post Telegram (+ message_id)
-            │     + Slack mirror, record posted_digests + publish_runs, ping heartbeat, exit 0
-            └── if missing/blocked/send-failed: fall through to deterministic fallback pipeline
-
-17:00 UTC   modelbytes-daily-health  — DISABLED (false-FAILs on datacenter-IP 403s);
-            run health now lives in the publish_runs ledger + ops alerts, not this routine.
-
-Hourly      modelbytes-pr-curator
-            └── review any open PR without a curator review comment
+            ├── try_post_pending_curated(): resolve any pending/<TODAY>.txt
+            │     (GitHub raw → baked-in → grace window). Normally ABSENT now —
+            │     the inline path below is the default. Present only if a digest
+            │     was hand-written or produced externally.
+            ├── if no pending digest: run the INLINE pipeline:
+            │     1. fetch OpenRouter / Ollama / HF (trending + orgs + top text-gen)
+            │     2. is_noise_model / is_significant_release / is_stale_release
+            │     3. dedupe vs the `models` table (load_seen_models / save_seen_models)
+            │     4. discover_recent_releases()  — Parallel.ai cited web research
+            │     5. collapse_variants()         — group same-(org,base,size) variants
+            │     6. enrich_with_hf_cards()      — real params/license/context/benchmarks
+            │     7. summarize_models()          — writer model → format-v3 Telegram HTML
+            │     8. validate_digest_for_publish(mode='fallback') content gate
+            ├── post Telegram (+ message_id) + Slack mirror
+            ├── record posted_digests + publish_runs, ping heartbeat, write pending/<TODAY>.txt
+            └── exit 0 (deterministic blocks like a QA gate trip also exit 0 — see
+                 the 2026-06-19 crash-loop fix; only real failures / send-fails exit 1)
 ```
 
-## File handoff: `pending/<TODAY>.txt`
+`INLINE_PRIMARY=1` (prod) means an inline day is expected — the publisher does
+**not** alert "published via fallback / curator absent". Real failures still
+alert: QA block, send-fail, no-models, crash, lost `DATABASE_URL`, content-damage
+warnings, and the writer falling back to `MODELBYTES_LLM_MODEL_FALLBACK`.
 
-The curator routine and the Railway publisher don't talk directly. They communicate via a file in the repo:
+---
 
-- Curator writes `pending/YYYY-MM-DD.txt` (UTC date) containing Telegram-ready HTML — `<b>`, `<i>`, `<a href>` only.
-- Railway's `monitor.py::try_post_pending_curated()` first checks Postgres `posted_digests`. If today's date is already marked posted, it exits without sending anything.
-- **Resolution order (master is the source of truth):** the publisher fetches the curated digest **from GitHub raw first** — the curator pushes to master and the Railway image is stale by construction, because auto-deploy does not fire on curator pushes. If GitHub raw is unavailable it uses the **baked-in local copy** (the GitHub-outage fallback), and if neither is present it opens a **grace window**, `_wait_for_pending()` polling up to `MODELBYTES_PENDING_GRACE_SECONDS` (default 600s = 10 min, poll interval `MODELBYTES_PENDING_POLL_SECONDS`) for a late-running curator.
-- Once a non-empty body is resolved, `_fix_dateline()` deterministically rewrites the dateline to the actual UTC weekday (the curator wrote the wrong weekday on 2 of 3 early days), `validate_digest_for_publish()` runs the content gates (below), and the publisher posts it verbatim, captures the Telegram `message_id`, mirrors to Slack, and records both `posted_digests` and a `publish_runs` audit row. The published body is also written back to the local `pending/<TODAY>.txt` so tomorrow's cross-day fact check sees exactly what readers saw.
-- Before any curated or fallback digest is posted, `validate_digest_for_publish(body, mode)` enforces a content-gate contract (not a light QA pass — see [Content gates](#content-gates) below). A QA **block** on the curated path sends an ops alert, records a `blocked` run, and falls through to the fallback rather than going dark.
-- If no curated digest is resolved (curator failed or didn't run), `monitor.py` falls back to its deterministic pipeline (fetch → filter → categorize → dedupe vs `models` → `summarize_models()` → post). A successful fallback post also records today's date in `posted_digests` and a `publish_runs` row.
+## File handoff: `pending/<TODAY>.txt` (now a write-back cache)
 
-**Why this pattern**: claude.ai routines fire on cron, not on-demand. Inline Anthropic API calls from Railway would cost money. File handoff via the repo gets us "Claude-curated content in production" using only the Claude.ai subscription quota — at the cost of a 30-minute time gap (curator runs at 15:30, post is at 16:00).
+The inline publisher writes `pending/<TODAY>.txt` after a successful post so the
+cross-day fact-consistency check sees exactly what readers saw. `try_post_pending_curated()`
+still resolves this file if present (GitHub raw → baked-in → grace window) — so
+a hand-written or externally-produced digest still wins — but **nothing in the
+normal flow produces it before publish anymore**. The inline path is the default.
+
+Once a body is resolved (inline or pending), `_fix_dateline()` rewrites the
+dateline to the actual UTC weekday, `validate_digest_for_publish()` runs the
+content gates (below), the publisher posts it, captures the Telegram
+`message_id`, mirrors to Slack, and records both `posted_digests` and a
+`publish_runs` audit row.
+
+Before any digest is posted, `validate_digest_for_publish(body, mode)` enforces
+a content-gate contract (see [Content gates](#content-gates) below). A QA
+**block** sends an ops alert, records a `blocked` run, and **exits 0** (a QA
+block is a correct final decision — the 2026-06-19 incident made Railway mark
+the job Crashed when it returned 1 and re-ran it 3× under ON_FAILURE).
+
+---
+
+# HISTORICAL — the retired claude.ai layer (not live; kept for context)
+
+The sections below describe the pre-inline architecture. They are preserved
+because the audit-history plans in `docs/superpowers/plans/` reference them,
+but **none of this runs in production anymore**. The routines do not exist,
+`docs/curator-prompt.md` is a stale artifact, and `.supervisor-bootstrapped` is
+meaningless. Read this only to understand the history, not to operate the system.
 
 **Duplicate protection**: `posted_digests` is the source of truth for whether a UTC date has already posted. This means same-day Railway redeploys, manual re-runs, and stale pending files do not post twice once the first successful send has been recorded. If Postgres is temporarily unavailable, the curated fast-path still tries to post so the channel does not go dark, but the log will say the idempotency ledger could not be checked or written.
 

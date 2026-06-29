@@ -125,6 +125,7 @@ PROVIDER_NAMES = {
     "philschmid": "Philipp Schmid",
     "sentence-transformers": "Sentence Transformers",
     "bosonai": "Boson AI",
+    "sapientinc": "Sapient Intelligence",
 }
 
 # Known significant orgs — never noise-filter these
@@ -142,7 +143,7 @@ KNOWN_ORGS = {
     "circlestone-labs", "hcompany", "moonshotai", "bytedance-seed", "bytedance-research",
     "amazon", "perplexity-ai", "inclusionai",
     "tencentarc", "resembleai", "adskailab", "open-thoughts",
-    "lgai-exaone", "bosonai",
+    "lgai-exaone", "bosonai", "sapientinc",
 }
 
 
@@ -1330,7 +1331,7 @@ MAJOR_HF_ORGS = [
     "circlestone-labs", "Hcompany", "Supertone",
     "TencentARC", "ResembleAI", "ADSKAILab", "open-thoughts",
     "CohereLabs", "LGAI-EXAONE",
-    "bosonai",
+    "bosonai", "sapientinc",
 ]
 
 

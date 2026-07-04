@@ -499,3 +499,86 @@ def test_trimmed_stale_entry_sends_nonblocking_ops_note(monkeypatch, tmp_path):
     assert sent, "the trimmed-but-valid digest must still publish (not go dark)"
     assert any("stale" in a.lower() for a in alerts), \
         f"expected a non-blocking stale-trim ops note; got {alerts}"
+
+
+# ── 2026-07-04 backfill incident: the empty "No new models today." sentinel must
+#    never be POSTED. It is produced when 0 fetched models survive AND every
+#    web-discovered entry is stripped by link/stale verification; the fallback
+#    branch used to send it verbatim, dumping a bare sentinel on the public
+#    channel. It must be treated exactly like a no-models day: no post, alert. ──
+
+def test_empty_sentinel_digest_is_not_posted(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["monitor.py"])  # live (non-preview)
+    monkeypatch.setattr(monitor, "TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setattr(monitor, "TELEGRAM_CHANNEL_ID", "c")
+    monkeypatch.setattr(monitor, "DATABASE_URL", "postgres://x")
+    monkeypatch.setattr(monitor, "try_post_pending_curated", lambda: False)
+    monkeypatch.setattr(monitor, "init_database", lambda: None)
+    monkeypatch.setattr(monitor, "load_seen_models", lambda: {"seed/x"})
+    monkeypatch.setattr(monitor, "save_seen_models", lambda s: None)
+    for f in ["fetch_ollama_models", "fetch_huggingface_trending",
+              "fetch_major_orgs", "fetch_hf_text_generation"]:
+        monkeypatch.setattr(monitor, f, lambda: [])
+    # 0 new from fetchers, but web discovery is present → enters the posting
+    # branch (all_new empty, web_context truthy).
+    monkeypatch.setattr(monitor, "fetch_openrouter_models", lambda: [])
+    monkeypatch.setattr(monitor, "discover_recent_releases",
+                        lambda *a, **k: "- src (2026-07-04) — https://x/1")
+    monkeypatch.setattr(monitor, "_recent_digest_names", lambda *a, **k: [])
+    monkeypatch.setattr(monitor, "enrich_with_hf_cards", lambda models: None)
+    # ...but the writer degrades to the bare sentinel (all entries stripped).
+    monkeypatch.setattr(monitor, "summarize_models",
+                        lambda *a, **k: "No new models today.")
+
+    alerts, runs, sent = [], [], []
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda t: alerts.append(t) or True)
+    monkeypatch.setattr(monitor, "record_publish_run",
+                        lambda *a, **k: runs.append((a, k)) or True)
+    monkeypatch.setattr(monitor, "ping_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(monitor, "send_slack_post", lambda m: False)
+    monkeypatch.setattr(monitor, "send_telegram_post",
+                        lambda m: sent.append(m) or True)
+
+    rc = monitor.main()
+    assert rc == 0
+    assert not sent, f"the bare sentinel must NOT be posted; got sent={sent}"
+    assert any("no-models" in a for (a, k) in runs), \
+        f"expected a no-models publish_run; got {runs}"
+    assert alerts, "a no-post day must alert the operator"
+
+
+def test_empty_sentinel_preview_is_side_effect_free(monkeypatch, tmp_path):
+    # Same degradation under --preview must send/alert/record nothing.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["monitor.py", "--preview"])
+    monkeypatch.setattr(monitor, "TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setattr(monitor, "TELEGRAM_CHANNEL_ID", "c")
+    monkeypatch.setattr(monitor, "DATABASE_URL", "postgres://x")
+    monkeypatch.setattr(monitor, "try_post_pending_curated",
+                        lambda: (_ for _ in ()).throw(AssertionError("preview must skip curated path")))
+    monkeypatch.setattr(monitor, "init_database", lambda: None)
+    monkeypatch.setattr(monitor, "load_seen_models", lambda: {"seed/x"})
+    for f in ["fetch_ollama_models", "fetch_huggingface_trending",
+              "fetch_major_orgs", "fetch_hf_text_generation"]:
+        monkeypatch.setattr(monitor, f, lambda: [])
+    monkeypatch.setattr(monitor, "fetch_openrouter_models", lambda: [])
+    monkeypatch.setattr(monitor, "discover_recent_releases",
+                        lambda *a, **k: "- src (2026-07-04) — https://x/1")
+    monkeypatch.setattr(monitor, "_recent_digest_names", lambda *a, **k: [])
+    monkeypatch.setattr(monitor, "enrich_with_hf_cards", lambda models: None)
+    monkeypatch.setattr(monitor, "summarize_models", lambda *a, **k: "No new models today.")
+
+    sent, alerts, runs = [], [], []
+    monkeypatch.setattr(monitor, "send_telegram_post",
+                        lambda m: sent.append(m) or True)
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda t: alerts.append(t) or True)
+    monkeypatch.setattr(monitor, "record_publish_run", lambda *a, **k: runs.append(a) or True)
+    monkeypatch.setattr(monitor, "save_seen_models",
+                        lambda s: (_ for _ in ()).throw(AssertionError("preview must not write state")))
+    monkeypatch.setattr(monitor, "ping_heartbeat", lambda *a, **k: None)
+
+    rc = monitor.main()
+    assert rc == 0
+    assert not sent and not alerts and not runs, \
+        f"preview must be side-effect-free; sent={sent} alerts={alerts} runs={runs}"

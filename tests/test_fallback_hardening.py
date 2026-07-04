@@ -1,6 +1,7 @@
 """Hardening for the fallback digest path: filter fine-tune variant spam (C),
 guarantee content links (D), and an honest surfaced/scanned footer (E)."""
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -78,13 +79,17 @@ def test_count_surfaced_models_counts_entries_not_headers():
 
 def test_llm_footer_reports_surfaced_and_scanned():
     # Pass 3 models but the LLM surfaces only 1 → footer must say 1 · 3.
+    # Use a fresh (today) release date, not a fixed "Jun 1": this body flows
+    # through summarize_models, whose per-entry stale-date scrub would (rightly)
+    # drop a stale-dated entry — which is not what this footer test is about.
+    fresh = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     models = [_model(f"acme/Model-{i}") for i in range(1, 4)]
     fake = MagicMock()
     fake.json.return_value = {
         "choices": [{"message": {"content": (
             "<b>🔓 Premier Open</b>\n"
             # link must be a provided candidate URL (link-verification strips constructed ones)
-            '<b>Model 1</b> — Released Jun 1. The standout. <a href="https://huggingface.co/acme/Model-1">→ Source</a>'
+            f'<b>Model 1</b> — Released {fresh}. The standout. <a href="https://huggingface.co/acme/Model-1">→ Source</a>'
         )}}]
     }
     fake.raise_for_status = lambda: None
@@ -349,3 +354,148 @@ def test_empty_state_refused_seed_exits_zero(monkeypatch, tmp_path):
     assert rc == 0, f"refused-seed must exit 0; got {rc}"
     assert alerts, "refused-seed must still alert"
     assert runs, "refused-seed must still record a blocked publish_run"
+
+
+# ── 2026-07-04 incident: one stale-dated entry must not take the whole digest
+#    dark. The writer can emit a release date older than the freshness window
+#    (from an undated web source or its own knowledge); previously the
+#    whole-body gate turned that single line into a channel-wide ERROR and NO
+#    POST went out. Now a per-entry scrub — the counterpart to the existing
+#    unverified-link scrub — drops just the stale entry and ships the rest. The
+#    whole-body gate stays as the backstop. ─────────────────────────────────
+
+def test_strip_stale_entries_drops_stale_keeps_fresh():
+    # Same one-line-per-entry shape the link scrub operates on. ISO dialect
+    # ("Released: 2026-06-01") is the template form; the incident date was
+    # 33 days old against a 2026-07-04 run.
+    summary = (
+        "━━━ <b>OPEN FRONTIER</b> 🔓\n"
+        '<b>Fresh Model</b> — <i>new arch</i>. Released 2026-07-02. <a href="https://ok.example/a">→ S</a>\n'
+        '<b>Stale Model</b> — <i>backfill</i>. Released: 2026-06-01. <a href="https://ok.example/b">→ S</a>\n')
+    cleaned, dropped = monitor._strip_stale_entries(summary, today="2026-07-04")
+    assert dropped == 1
+    assert "Fresh Model" in cleaned
+    assert "Stale Model" not in cleaned and "2026-06-01" not in cleaned
+
+
+def test_strip_stale_entries_prunes_orphaned_tier():
+    # If a tier's only entry is stale, the now-empty tier header goes too —
+    # exactly as the unverified-link scrub prunes orphaned headers.
+    summary = (
+        "━━━ <b>OPEN FRONTIER</b> 🔓\n"
+        '<b>Fresh</b> — <i>d</i>. Released 2026-07-02. <a href="https://ok.example/a">→ S</a>\n'
+        "━━━ <b>SPECIALIZED</b> 🎯\n"
+        '<b>Old</b> — <i>d</i>. Released: 2026-06-01. <a href="https://ok.example/b">→ S</a>\n')
+    cleaned, dropped = monitor._strip_stale_entries(summary, today="2026-07-04")
+    assert dropped == 1
+    assert "OPEN FRONTIER" in cleaned
+    assert "SPECIALIZED" not in cleaned  # orphaned header removed
+
+
+def test_strip_stale_entries_keeps_dateless_and_fresh():
+    # No date, or a fresh date, is left untouched — absence of a date is not
+    # evidence of staleness (mirrors is_stale_release's own contract).
+    summary = (
+        '<b>A</b> — <i>d</i>. Released 2026-07-01. <a href="https://a/1">→ S</a>\n'
+        '<b>B</b> — <i>d</i>. No date at all here. <a href="https://b/2">→ S</a>')
+    cleaned, dropped = monitor._strip_stale_entries(summary, today="2026-07-04")
+    assert dropped == 0
+    assert "A" in cleaned and "B" in cleaned
+
+
+def test_strip_stale_entries_catches_prose_date():
+    # The writer's own grammar is prose without a year ("Released Jun 1"). The
+    # scrub reuses the gate's loose parser, pinned to the same reference date,
+    # so it catches the prose form too, deterministically.
+    summary = ('<b>Old</b> — <i>d</i>. Released Jun 1. <a href="https://x/1">→ S</a>\n'
+               '<b>New</b> — <i>d</i>. Released Jul 2. <a href="https://x/2">→ S</a>')
+    cleaned, dropped = monitor._strip_stale_entries(summary, today="2026-07-04")
+    assert dropped == 1
+    assert "Old" not in cleaned and "New" in cleaned
+
+
+def test_stale_entry_trimmed_end_to_end_not_whole_digest(monkeypatch):
+    # End-to-end: the writer emits one fresh + one stale entry. The published
+    # body must drop ONLY the stale entry, keep the fresh one, and pass the
+    # fallback content gate (no stale-release ERROR) — i.e. the channel ships
+    # instead of going dark. LAST_STALE_DROPPED records the trim for the
+    # non-blocking ops note main() sends.
+    fresh = datetime.now(timezone.utc).strftime("%Y-%m-%d")  # always in-window
+    body = (
+        "<i>a real day for open weights</i>\n\n"
+        "━━━ <b>OPEN FRONTIER</b> 🔓\n"
+        f'<b>Fresh One</b> — <i>new arch</i>. Released {fresh}. <a href="https://ok.example/fresh">→ Source</a>\n'
+        '<b>Stale One</b> — <i>backfill</i>. Released: 2025-01-01. <a href="https://ok.example/stale">→ Source</a>\n'
+    )
+    monkeypatch.setattr(monitor, "LLM_API_KEY", "k")
+    monkeypatch.setattr(monitor, "LLM_MODEL", "primary-model")
+    monkeypatch.setattr(monitor, "LLM_MODEL_FALLBACK", None)
+
+    def fake_post(url, json, headers, timeout):
+        fake = MagicMock()
+        fake.raise_for_status = lambda: None
+        fake.json.return_value = {"choices": [{"message": {"content": body}}]}
+        return fake
+    monkeypatch.setattr(monitor.requests, "post", fake_post)
+
+    # URLs enter the allowed set via web_context, so the link scrub keeps both
+    # entries and the stale scrub is unambiguously what drops the stale one.
+    web = ("- Fresh One — https://ok.example/fresh\n"
+           "- Stale One — https://ok.example/stale")
+    msg = monitor.summarize_models([], web_context=web)
+
+    assert "Fresh One" in msg
+    assert "Stale One" not in msg and "2025-01-01" not in msg
+    assert monitor.LAST_STALE_DROPPED == 1
+    _, _warnings, errors = monitor.validate_digest_for_publish(msg, mode="fallback")
+    assert not any("stale" in e.lower() for e in errors), errors
+
+
+def test_trimmed_stale_entry_sends_nonblocking_ops_note(monkeypatch, tmp_path):
+    # Follow-through on the 2026-07-04 fix: when the scrub trims a stale entry
+    # but the digest still publishes, main() sends a NON-blocking ops note so
+    # the operator knows the writer leaked a stale date — the post still ships.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["monitor.py"])  # live (non-preview)
+    monkeypatch.setattr(monitor, "TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setattr(monitor, "TELEGRAM_CHANNEL_ID", "c")
+    monkeypatch.setattr(monitor, "DATABASE_URL", "postgres://x")
+    monkeypatch.setattr(monitor, "try_post_pending_curated", lambda: False)
+    monkeypatch.setattr(monitor, "init_database", lambda: None)
+    monkeypatch.setattr(monitor, "load_seen_models", lambda: {"seed/x"})
+    monkeypatch.setattr(monitor, "save_seen_models", lambda s: None)
+    for f in ["fetch_ollama_models", "fetch_huggingface_trending",
+              "fetch_major_orgs", "fetch_hf_text_generation"]:
+        monkeypatch.setattr(monitor, f, lambda: [])
+    monkeypatch.setattr(monitor, "fetch_openrouter_models",
+                        lambda: [_model("acme/Fresh-One")])
+    monkeypatch.setattr(monitor, "discover_recent_releases", lambda *a, **k: "")
+    monkeypatch.setattr(monitor, "_recent_digest_names", lambda *a, **k: [])
+    monkeypatch.setattr(monitor, "enrich_with_hf_cards", lambda models: None)
+
+    clean = (
+        "🤖 <b>ModelBytes Digest</b>\n<i>Saturday, July 04, 2026</i>\n\n"
+        "━━━ <b>OPEN FRONTIER</b> 🔓\n"
+        '<b>Fresh One</b> — <i>new arch</i>. 70B params. 📦 Open weights · HF '
+        '<a href="https://ok.example/fresh">→ Source</a>\n\n'
+        "📊 Surfaced 1 · scanned 1 today"
+    )
+
+    def fake_summarize(models, *a, **k):
+        monitor.LAST_STALE_DROPPED = 1  # scrub trimmed one entry this run
+        return clean
+    monkeypatch.setattr(monitor, "summarize_models", fake_summarize)
+
+    alerts, sent = [], []
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda t: alerts.append(t) or True)
+    monkeypatch.setattr(monitor, "record_publish_run", lambda *a, **k: True)
+    monkeypatch.setattr(monitor, "ping_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(monitor, "mark_posted_digest", lambda *a, **k: None)
+    monkeypatch.setattr(monitor, "send_slack_post", lambda m: False)
+    monkeypatch.setattr(monitor, "send_telegram_post", lambda m: sent.append(m) or True)
+
+    rc = monitor.main()
+    assert rc == 0
+    assert sent, "the trimmed-but-valid digest must still publish (not go dark)"
+    assert any("stale" in a.lower() for a in alerts), \
+        f"expected a non-blocking stale-trim ops note; got {alerts}"

@@ -719,21 +719,26 @@ _MONTHS = {m: i + 1 for i, m in enumerate(
      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])}
 
 
-def _loose_release_dates(body: str) -> List[str]:
+def _loose_release_dates(body: str, today: str = None) -> List[str]:
     """Find release dates in either digest dialect: ISO ('Released: 2026-06-01',
     deterministic template) or prose ('Released Apr 7', LLM grammar — which has
-    no year, so assume the most recent occurrence not in the future)."""
+    no year, so assume the most recent occurrence not in the future).
+
+    `today` pins the reference date for the yearless prose form so a caller
+    (the per-entry stale scrub) can agree with is_stale_release by construction;
+    the whole-body gate passes None and uses the real UTC date."""
     found = list(re.findall(r"Released:? (\d{4}-\d{2}-\d{2})", body))
-    today = datetime.now(timezone.utc).date()
+    ref = (datetime.strptime(today, "%Y-%m-%d").date() if today
+           else datetime.now(timezone.utc).date())
     for mon, day in re.findall(r"Released:? ([A-Z][a-z]{2})[a-z]* (\d{1,2})\b", body):
         month = _MONTHS.get(mon)
         if not month:
             continue
         try:
-            candidate = today.replace(month=month, day=int(day))
+            candidate = ref.replace(month=month, day=int(day))
         except ValueError:
             continue
-        if (candidate - today).days > 35:
+        if (candidate - ref).days > 35:
             candidate = candidate.replace(year=candidate.year - 1)
         found.append(candidate.strftime("%Y-%m-%d"))
     return found
@@ -1816,6 +1821,10 @@ LAST_SUMMARY_MODE = "template"
 # The model that actually produced the last digest (None if template). Lets the
 # publisher alert when the primary was unavailable and a fallback model was used.
 LAST_LLM_MODEL = None
+# How many entries the last summarize_models() call trimmed for carrying a stale
+# release date. Lets main() send a non-blocking ops note that the writer leaked
+# a stale date and an entry was dropped (2026-07-04 incident).
+LAST_STALE_DROPPED = 0
 
 
 def _recent_digest_names(today: str = None, days: int = 10,
@@ -1934,7 +1943,15 @@ def _strip_unverified_links(summary: str, allowed_urls: set) -> Tuple[str, int]:
             dropped += 1
             continue
         kept.append(line)
-    lines, out = kept, []
+    return _prune_orphaned_tiers(kept), dropped
+
+
+def _prune_orphaned_tiers(lines: List[str]) -> str:
+    """After entries have been dropped line-by-line, remove any tier header left
+    with no entries under it, then collapse the blank lines. Shared by the
+    unverified-link scrub and the stale-date scrub so both degrade a digest the
+    same way."""
+    out = []
     for i, line in enumerate(lines):
         if line.lstrip().startswith("━━━"):
             has_entry = False
@@ -1948,8 +1965,28 @@ def _strip_unverified_links(summary: str, allowed_urls: set) -> Tuple[str, int]:
             if not has_entry:
                 continue
         out.append(line)
-    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
-    return cleaned, dropped
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+
+
+def _strip_stale_entries(summary: str, today: str = None) -> Tuple[str, int]:
+    """Drop any single entry line carrying a release date too old to be "new
+    today", then prune orphaned tier headers. This is the per-entry counterpart
+    to the whole-body stale-release gate: it reuses the SAME parser
+    (_loose_release_dates) and the SAME predicate (is_stale_release), pinned to
+    one reference date, so a stale date the gate would block is removed at entry
+    granularity first. One hallucinated date (from an undated web source or the
+    writer's own knowledge) therefore trims a single entry instead of taking the
+    whole digest dark (the 2026-07-04 incident). The gate stays as the backstop
+    for a stale date that lands outside an entry line. Returns (cleaned, count).
+    """
+    kept, dropped = [], 0
+    for line in summary.split("\n"):
+        if any(is_stale_release(d, today=today)
+               for d in _loose_release_dates(line, today=today)):
+            dropped += 1
+            continue
+        kept.append(line)
+    return _prune_orphaned_tiers(kept), dropped
 
 
 def _call_llm(model: str, prompt: str) -> Optional[str]:
@@ -2159,9 +2196,10 @@ def summarize_models(models: List[ModelRelease], web_context: str = "",
     path's freshness engine). recent_names: models already covered in recent
     digests, so the writer doesn't repeat them.
     """
-    global LAST_SUMMARY_MODE, LAST_LLM_MODEL
+    global LAST_SUMMARY_MODE, LAST_LLM_MODEL, LAST_STALE_DROPPED
     LAST_SUMMARY_MODE = "template"
     LAST_LLM_MODEL = None
+    LAST_STALE_DROPPED = 0
     recent_names = recent_names or []
     if not models and not web_context:
         return "No new models today."
@@ -2307,8 +2345,19 @@ Candidate models from our fetchers (may be sparse or already-covered — the web
     if dropped:
         print(f"Dropped {dropped} entr(y/ies) with unverified/constructed links.",
               file=sys.stderr)
+    # Stale-date scrub: the writer can emit a release date older than the
+    # freshness window (from an undated web source or its own knowledge). Drop
+    # just those entries — the per-entry counterpart to the link scrub — so one
+    # stale line trims a single entry instead of tripping the whole-body gate
+    # and taking the digest dark (the 2026-07-04 incident). The gate remains the
+    # backstop for a stale date outside an entry line.
+    summary, stale_dropped = _strip_stale_entries(summary)
+    LAST_STALE_DROPPED = stale_dropped
+    if stale_dropped:
+        print(f"Dropped {stale_dropped} entr(y/ies) with a stale release date.",
+              file=sys.stderr)
     if not summary.strip() or not re.search(r"<b>[^<]+</b>\s*[—-]", summary):
-        print("No entries survived link verification — falling back to template")
+        print("No entries survived link/staleness verification — falling back to template")
         return build_digest_message(models)
     header = f"🤖 <b>ModelBytes Digest</b>\n<i>{datetime.now(timezone.utc).strftime('%A, %B %d, %Y')}</i>"
     # Honest footer: how many we actually surfaced vs how many we scanned.
@@ -2828,6 +2877,17 @@ def main():
             send_ops_alert(f"Primary LLM '{LLM_MODEL}' unavailable for {today} — "
                            f"published with fallback model '{LAST_LLM_MODEL}'. "
                            "Check Ollama Cloud availability / update the primary.")
+        # Content-drift signal (non-blocking): the writer leaked a stale release
+        # date and the per-entry scrub trimmed it, so the digest shipped without
+        # tripping the whole-body gate (the 2026-07-04 dark-channel incident).
+        # Worth knowing — a recurring trim points at a bad web source or model
+        # drift — but never a reason to block the post.
+        if LAST_STALE_DROPPED:
+            send_ops_alert(f"Trimmed {LAST_STALE_DROPPED} stale-dated "
+                           f"entr{'y' if LAST_STALE_DROPPED == 1 else 'ies'} from "
+                           f"today's digest ({today}) before publishing — the "
+                           "writer emitted a release date outside the freshness "
+                           "window. Published the rest.")
         if not INLINE_PRIMARY:
             # Curator still expected → a fallback day is an exception worth flagging.
             streak = fallback_streak()

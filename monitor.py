@@ -1712,10 +1712,17 @@ def _availability_tag(m: ModelRelease) -> str:
     return "📦 Open weights · HF"
 
 
+# The bare "nothing to publish" body. Both the template and the LLM fallback
+# return this when there is no publishable content. main() checks for it so the
+# sentinel is treated as a no-post day and never dumped on the channel
+# (2026-07-04 backfill incident).
+NO_MODELS_SENTINEL = "No new models today."
+
+
 def build_digest_message(models: List[ModelRelease]) -> str:
     """Build tiered digest message (HTML format)."""
     if not models:
-        return "No new models today."
+        return NO_MODELS_SENTINEL
     models, _ = prepare_models_for_digest(models)
 
     # Deduplicate by base name
@@ -2202,7 +2209,7 @@ def summarize_models(models: List[ModelRelease], web_context: str = "",
     LAST_STALE_DROPPED = 0
     recent_names = recent_names or []
     if not models and not web_context:
-        return "No new models today."
+        return NO_MODELS_SENTINEL
     models, validation_notes = prepare_models_for_digest(models)
     for note in validation_notes:
         print(f"Digest QA: {note}", file=sys.stderr)
@@ -2801,6 +2808,28 @@ def main():
 
         message = summarize_models(digest_models, web_context, recent_names)
         fallback_mode = f"fallback-{LAST_SUMMARY_MODE}"
+
+        # The pipeline degrades to the bare NO_MODELS_SENTINEL when 0 fetched
+        # models survive AND every web-discovered entry is stripped by
+        # link/stale verification. That sentinel is not a digest — posting it
+        # dumps "No new models today." on the public channel (2026-07-04 backfill
+        # incident). Treat it exactly like a no-models day: never post it.
+        if message.strip() == NO_MODELS_SENTINEL:
+            print("Pipeline produced no publishable entries — treating as no-post.")
+            if preview_mode:
+                print("Preview mode — not sending (no publishable entries)")
+                return 0
+            send_ops_alert(f"No post today ({today}): the fallback pipeline "
+                           "produced no publishable entries — 0 new models "
+                           "survived and any web-discovered entries failed "
+                           "link/stale verification. Nothing posted.")
+            record_publish_run(today, fallback_mode, "no-models",
+                               models_found=len(all_new), models_emitted=0,
+                               message_chars=len(message))
+            ping_heartbeat(True, "no publishable entries")
+            save_seen_models(seen_models)
+            return 0
+
         message, qa_warnings, qa_errors = validate_digest_for_publish(
             message, mode="fallback")
         for warning in qa_warnings:

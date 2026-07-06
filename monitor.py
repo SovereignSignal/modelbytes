@@ -126,6 +126,7 @@ PROVIDER_NAMES = {
     "sentence-transformers": "Sentence Transformers",
     "bosonai": "Boson AI",
     "sapientinc": "Sapient Intelligence",
+    "tencent": "Tencent",
 }
 
 # Known significant orgs — never noise-filter these
@@ -144,6 +145,7 @@ KNOWN_ORGS = {
     "amazon", "perplexity-ai", "inclusionai",
     "tencentarc", "resembleai", "adskailab", "open-thoughts",
     "lgai-exaone", "bosonai", "sapientinc",
+    "tencent",
 }
 
 
@@ -1208,6 +1210,7 @@ def is_significant_release(model_id: str, author: str, tags: list,
         "minicpm", "supertonic", "supertone",
         "sulphur", "hidream", "zamba", "zaya",
         "ring-",
+        "hunyuan",
         "north-mini", "higgs-audio",
         "exaone", "k-exaone",
         "anima", "reka-edge", "lyria-",
@@ -1334,7 +1337,7 @@ MAJOR_HF_ORGS = [
     "allenai", "amazon", "perplexity-ai", "stabilityai",
     "HiDream-ai", "SulphurAI", "Zyphra",
     "circlestone-labs", "Hcompany", "Supertone",
-    "TencentARC", "ResembleAI", "ADSKAILab", "open-thoughts",
+    "TencentARC", "tencent", "ResembleAI", "ADSKAILab", "open-thoughts",
     "CohereLabs", "LGAI-EXAONE",
     "bosonai", "sapientinc",
 ]

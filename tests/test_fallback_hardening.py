@@ -582,3 +582,82 @@ def test_empty_sentinel_preview_is_side_effect_free(monkeypatch, tmp_path):
     assert rc == 0
     assert not sent and not alerts and not runs, \
         f"preview must be side-effect-free; sent={sent} alerts={alerts} runs={runs}"
+
+
+# ── F: en-dash entries must count as renderable (2026-07-12 dark day) ──
+# The prompt specifies an em-dash "<b>Name</b> — …", but the writer sometimes
+# substitutes an en-dash "–" (U+2013). The entry-detection grammar accepted only
+# em-dash + hyphen, so an en-dash entry read as "no entry" and silently zeroed a
+# 0-fetched-model digest into a no-post.
+
+def test_count_surfaced_models_accepts_en_dash():
+    body = (
+        '<b>Model A</b> — em-dash entry <a href="https://u.example">→ S</a>\n'
+        '<b>Model B</b> – en-dash entry <a href="https://u.example">→ S</a>\n'
+        '<b>Model C</b> - hyphen entry <a href="https://u.example">→ S</a>\n'
+    )
+    assert monitor._count_surfaced_models(body) == 3
+
+
+def test_en_dash_entry_survives_verification():
+    # A single, fresh, properly-cited entry using an en-dash separator must flow
+    # through as an LLM digest (not fall back to the template) and be counted.
+    fresh = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    models = [_model("acme/Model-1")]
+    fake = MagicMock()
+    fake.json.return_value = {"choices": [{"message": {"content": (
+        "━━━ <b>OPEN FRONTIER</b> 🔓\n"
+        f'<b>Model 1</b> – Released {fresh}. The standout. '
+        '<a href="https://huggingface.co/acme/Model-1">→ Source</a>'
+    )}}]}
+    fake.raise_for_status = lambda: None
+    with patch.object(monitor, "LLM_API_KEY", "test-key"), \
+         patch.object(monitor.requests, "post", return_value=fake):
+        msg = monitor.summarize_models(models)
+    assert "items tracked today" not in msg.lower()      # NOT the template fallback
+    assert "📊 Surfaced 1 · scanned 1 today" in msg       # counted despite the en-dash
+
+
+# ── G: observability when zero entries survive verification ──
+# The fallback log must distinguish "writer wrote entries, all stripped" from
+# "writer wrote none" — the diagnostic gap the 2026-07-12 investigation exposed.
+
+def test_zero_survivors_logs_writer_entry_count_and_drops(capsys):
+    # 0 fetched models; the writer emits 2 entries citing CONSTRUCTED urls (not
+    # among the provided web sources) → both link-stripped → 0 survive.
+    web = "- Foo model (2026-07-10) — https://vendor.example/foo\n  Fresh release."
+    fresh = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    fake = MagicMock()
+    fake.json.return_value = {"choices": [{"message": {"content": (
+        "━━━ <b>OPEN FRONTIER</b> 🔓\n"
+        f'<b>Alpha</b> — Released {fresh}. Nice. <a href="https://huggingface.co/x/alpha">→ Source</a>\n'
+        f'<b>Beta</b> — Released {fresh}. Also. <a href="https://huggingface.co/x/beta">→ Source</a>'
+    )}}]}
+    fake.raise_for_status = lambda: None
+    with patch.object(monitor, "LLM_API_KEY", "test-key"), \
+         patch.object(monitor.requests, "post", return_value=fake):
+        msg = monitor.summarize_models([], web_context=web)
+    log = "".join(capsys.readouterr())
+    assert "writer produced 2" in log
+    assert "link-scrub dropped 2" in log
+    assert msg.strip() == monitor.NO_MODELS_SENTINEL
+
+
+def test_zero_survivors_reports_when_writer_produced_no_entries(capsys):
+    # The actual 2026-07-12 case: the writer returned prose with no
+    # "<b>Name</b> —" entry at all — nothing to strip. The log must say the
+    # writer produced 0 entries, so the operator can tell it apart from the
+    # all-stripped case above.
+    web = "- Foo (2026-07-10) — https://vendor.example/foo\n  Fresh."
+    fake = MagicMock()
+    fake.json.return_value = {"choices": [{"message": {"content": (
+        "<i>Nothing genuinely new stood out across today's sources.</i>"
+    )}}]}
+    fake.raise_for_status = lambda: None
+    with patch.object(monitor, "LLM_API_KEY", "test-key"), \
+         patch.object(monitor.requests, "post", return_value=fake):
+        msg = monitor.summarize_models([], web_context=web)
+    log = "".join(capsys.readouterr())
+    assert "writer produced 0" in log
+    assert "link-scrub dropped 0" in log
+    assert msg.strip() == monitor.NO_MODELS_SENTINEL

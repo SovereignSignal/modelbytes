@@ -1805,17 +1805,27 @@ def build_digest_message(models: List[ModelRelease]) -> str:
     return "\n".join(lines)
 
 
+# The grammar every rendered digest entry follows: a bold display name then a
+# dash separator ("<b>MiniMax M3</b> — ..."). Em-dash is what the prompt
+# specifies; hyphen and en-dash (–, U+2013) are also accepted because the writer
+# occasionally substitutes them — an en-dash entry read as "no entry" and
+# silently zeroed a 0-fetched-model digest into a no-post (2026-07-12). The
+# hyphen sits last in the class so it is a literal, not a range. This one
+# definition is shared by the surfaced-count and the survive-check so they agree.
+_ENTRY_GRAMMAR = r"<b>[^<]+</b>\s*[—–-]"
+
+
 def _count_surfaced_models(summary: str) -> int:
     """Count model entries actually rendered in an LLM digest body.
 
-    Entries are bold-name lines followed by an em-dash/hyphen
+    Entries are bold-name lines followed by an em-dash/en-dash/hyphen
     ("<b>Name</b> — ...") plus Local Ready bullets ("• ..."). Tier headers
     like "<b>🔓 Premier Open</b>" have no trailing dash and are not counted.
     """
     count = 0
     for raw in summary.splitlines():
         line = raw.strip()
-        if re.match(r"^<b>[^<]+</b>\s*[—-]", line):
+        if re.match(_ENTRY_GRAMMAR, line):
             count += 1
         elif line.startswith("•"):
             count += 1
@@ -2344,6 +2354,10 @@ Candidate models from our fetchers (may be sparse or already-covered — the web
     if not summary:
         print("LLM body was only a footer — falling back to template")
         return build_digest_message(models)
+    # How many entries the writer actually produced, before any scrub — so a
+    # zero-survivor fallback can report whether entries existed and were stripped
+    # or the writer never wrote one (the 2026-07-12 diagnosis needed both cases).
+    n_written = _count_surfaced_models(summary)
     # Hard guarantee: every published link is a URL we actually provided. Drops
     # entries whose <a href> the writer constructed/guessed (e.g. a plausible
     # but unverified huggingface.co/... link) rather than copying a source URL.
@@ -2363,8 +2377,13 @@ Candidate models from our fetchers (may be sparse or already-covered — the web
     if stale_dropped:
         print(f"Dropped {stale_dropped} entr(y/ies) with a stale release date.",
               file=sys.stderr)
-    if not summary.strip() or not re.search(r"<b>[^<]+</b>\s*[—-]", summary):
-        print("No entries survived link/staleness verification — falling back to template")
+    if not summary.strip() or not re.search(_ENTRY_GRAMMAR, summary):
+        # Distinguish "writer wrote entries, verification stripped them all" from
+        # "writer wrote none" — otherwise a no-post day is a forensic session
+        # (the 2026-07-12 investigation). The breakdown makes it a one-glance read.
+        print(f"No entries survived verification (writer produced {n_written} "
+              f"entr(y/ies); link-scrub dropped {dropped}, stale-scrub dropped "
+              f"{stale_dropped}) — falling back to template", file=sys.stderr)
         return build_digest_message(models)
     header = f"🤖 <b>ModelBytes Digest</b>\n<i>{datetime.now(timezone.utc).strftime('%A, %B %d, %Y')}</i>"
     # Honest footer: how many we actually surfaced vs how many we scanned.

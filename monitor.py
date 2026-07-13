@@ -128,6 +128,7 @@ PROVIDER_NAMES = {
     "sapientinc": "Sapient Intelligence",
     "tencent": "Tencent",
     "sakanaai": "Sakana AI",
+    "internlm": "Shanghai AI Lab",
 }
 
 # Known significant orgs — never noise-filter these
@@ -147,6 +148,7 @@ KNOWN_ORGS = {
     "tencentarc", "resembleai", "adskailab", "open-thoughts",
     "lgai-exaone", "bosonai", "sapientinc",
     "tencent", "sakanaai",
+    "internlm",
 }
 
 
@@ -1211,6 +1213,7 @@ def is_significant_release(model_id: str, author: str, tags: list,
         "minicpm", "supertonic", "supertone",
         "sulphur", "hidream", "zamba", "zaya",
         "ring-",
+        "internlm", "intern-s",
         "hunyuan", "fugu",
         "north-mini", "higgs-audio",
         "exaone", "k-exaone",
@@ -1341,6 +1344,7 @@ MAJOR_HF_ORGS = [
     "TencentARC", "tencent", "ResembleAI", "ADSKAILab", "open-thoughts",
     "CohereLabs", "LGAI-EXAONE",
     "bosonai", "sapientinc", "SakanaAI",
+    "internlm",
 ]
 
 

@@ -129,7 +129,6 @@ PROVIDER_NAMES = {
     "tencent": "Tencent",
     "sakanaai": "Sakana AI",
     "internlm": "Shanghai AI Lab",
-    "thudm": "Zhipu AI",
 }
 
 # Known significant orgs — never noise-filter these
@@ -150,7 +149,6 @@ KNOWN_ORGS = {
     "lgai-exaone", "bosonai", "sapientinc",
     "tencent", "sakanaai",
     "internlm",
-    "thudm",
 }
 
 
@@ -1347,7 +1345,6 @@ MAJOR_HF_ORGS = [
     "CohereLabs", "LGAI-EXAONE",
     "bosonai", "sapientinc", "SakanaAI",
     "internlm",
-    "THUDM",
 ]
 
 

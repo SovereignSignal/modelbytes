@@ -129,6 +129,7 @@ PROVIDER_NAMES = {
     "tencent": "Tencent",
     "sakanaai": "Sakana AI",
     "internlm": "Shanghai AI Lab",
+    "meituan-longcat": "Meituan",
 }
 
 # Known significant orgs — never noise-filter these
@@ -148,7 +149,7 @@ KNOWN_ORGS = {
     "tencentarc", "resembleai", "adskailab", "open-thoughts",
     "lgai-exaone", "bosonai", "sapientinc",
     "tencent", "sakanaai",
-    "internlm",
+    "internlm", "meituan-longcat",
 }
 
 
@@ -1220,6 +1221,7 @@ def is_significant_release(model_id: str, author: str, tags: list,
         "anima", "reka-edge", "lyria-",
         "openai/o1", "openai/o3", "anthropic/claude",
         "wan2", "dramabox", "pixal3d", "agent",
+        "longcat",
     ]
     if any(f in model_lower for f in significant_families):
         return True
@@ -1344,7 +1346,7 @@ MAJOR_HF_ORGS = [
     "TencentARC", "tencent", "ResembleAI", "ADSKAILab", "open-thoughts",
     "CohereLabs", "LGAI-EXAONE",
     "bosonai", "sapientinc", "SakanaAI",
-    "internlm",
+    "internlm", "meituan-longcat",
 ]
 
 

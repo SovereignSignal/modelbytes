@@ -133,6 +133,7 @@ PROVIDER_NAMES = {
     "poolside": "Poolside",
     "ai-sage": "Sber",
     "thinkingmachines": "Thinking Machines",
+    "black-forest-labs": "Black Forest Labs",
 }
 
 # Known significant orgs — never noise-filter these
@@ -153,7 +154,7 @@ KNOWN_ORGS = {
     "lgai-exaone", "bosonai", "sapientinc",
     "tencent", "sakanaai",
     "internlm", "meituan-longcat", "poolside", "ai-sage",
-    "thinkingmachines",
+    "thinkingmachines", "black-forest-labs",
 }
 
 
@@ -1352,7 +1353,7 @@ MAJOR_HF_ORGS = [
     "CohereLabs", "LGAI-EXAONE",
     "bosonai", "sapientinc", "SakanaAI",
     "internlm", "meituan-longcat", "poolside", "ai-sage",
-    "thinkingmachines",
+    "thinkingmachines", "black-forest-labs",
 ]
 
 

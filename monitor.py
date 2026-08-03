@@ -132,6 +132,7 @@ PROVIDER_NAMES = {
     "meituan-longcat": "Meituan",
     "poolside": "Poolside",
     "ai-sage": "Sber",
+    "thinkingmachines": "Thinking Machines",
 }
 
 # Known significant orgs — never noise-filter these
@@ -152,6 +153,7 @@ KNOWN_ORGS = {
     "lgai-exaone", "bosonai", "sapientinc",
     "tencent", "sakanaai",
     "internlm", "meituan-longcat", "poolside", "ai-sage",
+    "thinkingmachines",
 }
 
 
@@ -1224,6 +1226,7 @@ def is_significant_release(model_id: str, author: str, tags: list,
         "openai/o1", "openai/o3", "anthropic/claude",
         "wan2", "dramabox", "pixal3d", "agent",
         "longcat", "laguna-", "gigachat",
+        "inkling",
     ]
     if any(f in model_lower for f in significant_families):
         return True
@@ -1349,6 +1352,7 @@ MAJOR_HF_ORGS = [
     "CohereLabs", "LGAI-EXAONE",
     "bosonai", "sapientinc", "SakanaAI",
     "internlm", "meituan-longcat", "poolside", "ai-sage",
+    "thinkingmachines",
 ]
 
 
@@ -1674,7 +1678,8 @@ def categorize_model(model: ModelRelease) -> str:
                "qwen2.5-72b", "qwen3", "qwen3.6", "deepseek-v3", "deepseek-v4",
                "gemma-2-27b", "gemma-4", "gemma-3", "diffusiongemma", "command-r-plus", "command-a", "nemotron",
                "sulphur", "minicpm", "zaya", "glm-5", "glm-4.7",
-               "minimax", "grok-2", "grok-3"]
+               "minimax", "grok-2", "grok-3",
+               "inkling"]
     # NOTE: 'kimi' must NOT be in this list — Moonshot's Kimi K2 models are
     # open-weight (issue #16); moonshotai routes via sig_org_map below.
     closed = ["gpt-4", "claude-3", "claude-4", "claude-opus-4", "o1-", "o3-", "gemini-1.5", "gemini-2", "gemini-3", "grok-4"]

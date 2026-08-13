@@ -451,6 +451,43 @@ def test_stale_entry_trimmed_end_to_end_not_whole_digest(monkeypatch):
     assert not any("stale" in e.lower() for e in errors), errors
 
 
+def test_http_hrefs_upgraded_end_to_end_not_whole_digest(monkeypatch):
+    # 2026-08-13: writer copied two aggregator http:// links from Parallel.ai
+    # research. The fallback gate blocked the entire post. Upgrade the scheme
+    # and ship — same "one bad attribute must not take the channel dark"
+    # contract as the 2026-07-04 stale-date scrub.
+    body = (
+        "<i>a real day for open weights</i>\n\n"
+        "━━━ <b>OPEN FRONTIER</b> 🔓\n"
+        '<b>Fresh One</b> — <i>new arch</i>. <a href="http://aireleasetracker.com/">→ Source</a>\n'
+        '<b>Also New</b> — <i>stats</i>. <a href="http://llm-stats.com/llm-updates">→ Source</a>\n'
+    )
+    monkeypatch.setattr(monitor, "LLM_API_KEY", "k")
+    monkeypatch.setattr(monitor, "LLM_MODEL", "primary-model")
+    monkeypatch.setattr(monitor, "LLM_MODEL_FALLBACK", None)
+
+    def fake_post(url, json, headers, timeout):
+        fake = MagicMock()
+        fake.raise_for_status = lambda: None
+        fake.json.return_value = {"choices": [{"message": {"content": body}}]}
+        return fake
+    monkeypatch.setattr(monitor.requests, "post", fake_post)
+
+    web = ("- Fresh One — http://aireleasetracker.com/\n"
+           "- Also New — http://llm-stats.com/llm-updates")
+    msg = monitor.summarize_models([], web_context=web)
+    assert "Fresh One" in msg and "Also New" in msg
+
+    published, warnings, errors = monitor.validate_digest_for_publish(
+        msg, mode="fallback")
+    assert errors == [], errors
+    assert "https://aireleasetracker.com/" in published
+    assert "https://llm-stats.com/llm-updates" in published
+    assert "http://aireleasetracker.com/" not in published
+    assert "http://llm-stats.com/llm-updates" not in published
+    assert any("http://" in w for w in warnings)
+
+
 def test_trimmed_stale_entry_sends_nonblocking_ops_note(monkeypatch, tmp_path):
     # Follow-through on the 2026-07-04 fix: when the scrub trims a stale entry
     # but the digest still publishes, main() sends a NON-blocking ops note so

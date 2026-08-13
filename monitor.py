@@ -720,6 +720,9 @@ _AGGREGATOR_DOMAINS = (
     "techtimes.com", "tomsguide.com", "ndtv.com", "benzinga.com", "msn.com",
     "yahoo.com", "dailymail.co.uk", "businessinsider.com", "marketwatch.com",
     "digitaltrends.com", "zdnet.com",
+    # Release-tracker sites that Parallel.ai cites as "sources"; warn so the
+    # operator sees the writer didn't land on a primary vendor URL.
+    "aireleasetracker.com", "llm-stats.com",
 )
 _QUANT_NAME_RE = re.compile(r"(?i)\b(gguf|awq|gptq|onnx|imatrix|exl2)\b|-bnb-")
 # An entry is a line-leading bold name — with a dash tail (curated/LLM grammar)
@@ -727,6 +730,58 @@ _QUANT_NAME_RE = re.compile(r"(?i)\b(gguf|awq|gptq|onnx|imatrix|exl2)\b|-bnb-")
 # ("━━━ <b>…") and the 🤖 header line don't start with <b> so they don't match.
 _ENTRY_RE = re.compile(r"^(?:• )?<b>([^<]+)</b>\s*(?:[—-]|$)", re.MULTILINE)
 _HREF_RE = re.compile(r'<a href="([^"]*)"')
+
+
+def _upgrade_http_url(url: str) -> str:
+    """http:// → https://. Case-insensitive on the scheme; everything else
+    is left untouched (javascript:/data:/relative/https)."""
+    if url.lower().startswith("http://"):
+        return "https://" + url.split("://", 1)[1]
+    return url
+
+
+def _url_scheme_variants(url: str) -> List[str]:
+    """Both http and https forms of a URL, trailing slash stripped.
+
+    The writer copies source URLs character-for-character, but discovery may
+    have upgraded the scheme (or the writer may still emit http:// of an
+    https:// source). Scheme-only mismatch must not look like a constructed
+    URL and get stripped by _strip_unverified_links.
+    """
+    u = url.rstrip("/").rstrip(".,")
+    variants = {u}
+    if u.lower().startswith("http://"):
+        variants.add("https://" + u.split("://", 1)[1])
+    elif u.lower().startswith("https://"):
+        variants.add("http://" + u.split("://", 1)[1])
+    return list(variants)
+
+
+def _upgrade_insecure_hrefs(body: str) -> Tuple[str, int]:
+    """Rewrite http:// hrefs to https://.
+
+    Telegram renders http:// fine, so this is not channel-harm — but the
+    fallback QA gate treats remaining non-https as an ERROR and would take
+    the whole digest dark (2026-08-13: two aggregator http:// links from
+    Parallel.ai research blocked the day's post). Upgrading the scheme is
+    the per-link counterpart to the stale-date scrub: one bad scheme must
+    not sink the digest. javascript:/data:/relative hrefs are left for the
+    gate. Returns (rewritten, count).
+    """
+    n = 0
+
+    def repl(m):
+        nonlocal n
+        href = m.group(1)
+        upgraded = _upgrade_http_url(href)
+        if upgraded != href:
+            n += 1
+            return f'<a href="{upgraded}"'
+        return m.group(0)
+
+    return _HREF_RE.sub(repl, body), n
+
+
 _MONTHS = {m: i + 1 for i, m in enumerate(
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])}
@@ -817,8 +872,11 @@ def _lint_digest_structure(body: str, mode: str) -> Tuple[List[str], List[str]]:
 
     for href in _HREF_RE.findall(body):
         if not href.startswith("https://"):
-            # Telegram renders http:// fine — not channel-harm, so it only
-            # blocks machine-assembled content; curated gets a warning.
+            # http:// has already been rewritten to https:// by
+            # _upgrade_insecure_hrefs (2026-08-13). Remaining non-https
+            # (javascript:/data:/relative) is still a fallback ERROR /
+            # curated WARNING. Telegram renders http:// fine — not
+            # channel-harm — so we rewrite rather than take the digest dark.
             (errors if mode == "fallback" else warnings).append(
                 f"non-https link: {href[:80]}")
         if href.startswith(("http://", "https://")):
@@ -953,6 +1011,10 @@ def validate_digest_for_publish(message: str, mode: str = "curated") -> Tuple[st
     normalized = (message or "").strip()
     normalized, corrections = _normalize_known_fact_claims(normalized)
     warnings.extend(corrections)
+    normalized, n_upgraded = _upgrade_insecure_hrefs(normalized)
+    if n_upgraded:
+        warnings.append(
+            f"upgraded {n_upgraded} http:// href(s) to https://")
 
     if not normalized:
         errors.append("digest body is empty")
@@ -1940,7 +2002,7 @@ def discover_recent_releases(today: str = None, max_age_days: int = 14,
                     continue  # too old, or implausibly future
             except ValueError:
                 pass  # unparseable → keep, let the writer judge
-        url = (r.get("url") or "").strip()
+        url = _upgrade_http_url((r.get("url") or "").strip())
         title = (r.get("title") or "").strip()
         excerpt = " ".join((r.get("excerpts") or [])[:2]).strip()
         if not url or not (title or excerpt):
@@ -1963,9 +2025,9 @@ def _collect_provided_urls(models, web_context: str) -> set:
     for m in models or []:
         for u in (getattr(m, "url", None), getattr(m, "canonical_url", None)):
             if u:
-                urls.add(u.rstrip("/"))
+                urls.update(_url_scheme_variants(u))
     for u in re.findall(r"https?://[^\s)\]]+", web_context or ""):
-        urls.add(u.rstrip("/").rstrip(".,"))
+        urls.update(_url_scheme_variants(u))
     return urls
 
 

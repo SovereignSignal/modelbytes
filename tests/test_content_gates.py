@@ -2,9 +2,11 @@
 
 validate_digest_for_publish was ornamental — only empty-body and one ZAYA regex
 blocked. These tests pin the new contract:
-- ERRORS are reserved for channel-harm (malformed HTML that would 400, non-https
-  links, floods on the fallback path, empty body). Blocking a curated digest
-  sends the reader something WORSE (the fallback), so format drift is a WARNING.
+- ERRORS are reserved for channel-harm (malformed HTML that would 400,
+  remaining non-https hrefs like javascript:, floods on the fallback path,
+  empty body). http:// hrefs are rewritten to https:// rather than blocking
+  (2026-08-13). Blocking a curated digest sends the reader something WORSE
+  (the fallback), so format drift is a WARNING.
 - WARNINGS catch v3 grammar drift, aggregator sourcing, footer miscounts, and
   cross-day fact contradictions — surfaced to the operator, never censored.
 """
@@ -69,11 +71,25 @@ def test_stray_lt_in_prose_is_an_error():
         assert any("stray" in e.lower() for e in errors), errors
 
 
-def test_non_https_link_severity_by_mode():
-    # Telegram renders http:// fine, so it's not channel-harm: machine-assembled
-    # fallback content gets blocked, curated content gets a warning (blocking a
-    # curated digest would publish the WORSE fallback instead).
-    bad = GOOD.replace("https://vendor.ai/blog", "http://vendor.ai/blog")
+def test_http_hrefs_are_upgraded_not_blocked():
+    # 2026-08-13 incident: Parallel.ai research handed the writer two
+    # aggregator http:// links (aireleasetracker.com, llm-stats.com). The
+    # fallback gate treated non-https as an ERROR and took the whole digest
+    # dark. Telegram renders http:// fine — upgrade the scheme and ship.
+    bad = GOOD.replace(
+        "https://vendor.ai/blog",
+        "http://aireleasetracker.com/")
+    body, warnings, errors = _validate(bad, mode="fallback")
+    assert errors == []
+    assert "https://aireleasetracker.com/" in body
+    assert "http://aireleasetracker.com/" not in body
+    assert any("http://" in w and "https://" in w for w in warnings)
+
+
+def test_javascript_href_still_errors_in_fallback():
+    # Remaining non-https (javascript:/data:/relative) is still a gate error
+    # on the machine-assembled path; http:// is the rewriteable case.
+    bad = GOOD.replace("https://vendor.ai/blog", "javascript:alert(1)")
     _, _, errs_fallback = _validate(bad, mode="fallback")
     _, warns_curated, errs_curated = _validate(bad, mode="curated")
     assert any("https" in e for e in errs_fallback)

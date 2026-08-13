@@ -55,6 +55,25 @@ def test_discovery_filters_stale_and_formats(_discovery_on, monkeypatch):
     assert "Old model from last year" not in block  # >14 days → dropped
 
 
+def test_discovery_upgrades_http_urls(_discovery_on, monkeypatch):
+    # Writer copies URLs character-for-character; if discovery hands it
+    # http://, that scheme lands in the digest and (before 2026-08-13) blocked
+    # the whole fallback post. Normalize at the source.
+    payload = {
+        "results": [
+            {"url": "http://aireleasetracker.com/", "title": "Tracker dump",
+             "publish_date": "2026-06-15", "excerpts": ["new models today"]},
+            {"url": "http://llm-stats.com/llm-updates", "title": "LLM stats",
+             "publish_date": "2026-06-15", "excerpts": ["updates"]},
+        ]
+    }
+    monkeypatch.setattr(monitor.requests, "post", lambda url, **k: _resp(payload))
+    block = monitor.discover_recent_releases(today="2026-06-16", max_age_days=14)
+    assert "https://aireleasetracker.com/" in block
+    assert "https://llm-stats.com/llm-updates" in block
+    assert "http://" not in block
+
+
 def test_discovery_graceful_on_failure(_discovery_on, monkeypatch):
     def boom(url, **k):
         raise RuntimeError("parallel 500")
@@ -113,6 +132,16 @@ def test_collect_provided_urls():
     assert "https://huggingface.co/a/b" in urls
     assert "https://vendor.ai/b" in urls
     assert "https://blog.example/post" in urls
+
+
+def test_collect_provided_urls_accepts_either_scheme():
+    # Writer may copy http:// even after discovery upgraded the source to
+    # https:// (or the reverse). Scheme-only mismatch must not look like a
+    # constructed URL and get stripped.
+    web = "- Title — http://aireleasetracker.com/\n  excerpt"
+    urls = monitor._collect_provided_urls([], web)
+    assert "http://aireleasetracker.com" in urls
+    assert "https://aireleasetracker.com" in urls
 
 
 def test_strip_drops_constructed_link_keeps_provided():

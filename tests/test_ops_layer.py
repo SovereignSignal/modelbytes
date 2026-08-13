@@ -237,6 +237,54 @@ def test_preview_crash_does_not_ops_alert(monkeypatch):
     assert beats == []
 
 
+def test_live_crash_alert_includes_site_hint_and_ledger(monkeypatch):
+    # 2026-08-13 follow-up: the crash DM was only repr(exc), so an off-network
+    # railway.internal DNS failure looked like the cron dying. The alert must
+    # say where it ran, which frame blew up, a known-class hint, and whether
+    # today's digest already shipped.
+    alerts = []
+    beats = []
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda t: alerts.append(t) or True)
+    monkeypatch.setattr(monitor, "ping_heartbeat",
+                        lambda ok, msg=None: beats.append((ok, msg)))
+    monkeypatch.setattr(monitor, "has_posted_digest", lambda d: True)
+    monkeypatch.setattr(monitor, "record_publish_run", lambda *a, **k: True)
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+    monkeypatch.setenv("RAILWAY_SERVICE_NAME", "modelbytes")
+    monkeypatch.delenv("RAILWAY_REPLICA_ID", raising=False)
+
+    def _boom():
+        raise monitor.psycopg2.OperationalError(
+            'could not translate host name "postgres.railway.internal" '
+            'to address: Name or service not known\n')
+    try:
+        _boom()
+    except Exception as err:
+        monitor._handle_crash(err, preview=False, argv=["/workspace/monitor.py"])
+
+    assert len(alerts) == 1
+    body = alerts[0]
+    assert "CRASHED" in body
+    assert "OperationalError" in body
+    assert "postgres.railway.internal" in body
+    assert "in _boom" in body or "test_ops_layer.py" in body
+    assert "private network" in body.lower() or "off-network" in body.lower()
+    assert "cron" in body.lower()
+    assert "already posted" in body.lower() or "shipped" in body.lower()
+    assert "modelbytes" in body
+    assert beats and beats[0][0] is False
+
+
+def test_crash_alert_says_channel_dark_when_not_posted(monkeypatch):
+    alerts = []
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda t: alerts.append(t) or True)
+    monkeypatch.setattr(monitor, "ping_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(monitor, "has_posted_digest", lambda d: False)
+    monkeypatch.setattr(monitor, "record_publish_run", lambda *a, **k: True)
+    monitor._handle_crash(RuntimeError("boom"), preview=False, argv=["monitor.py"])
+    assert "NOT posted" in alerts[0] or "channel is dark" in alerts[0].lower()
+
+
 def test_live_crash_still_ops_alerts(monkeypatch):
     alerts = []
     beats = []

@@ -7,8 +7,10 @@ Posts new model releases to Telegram @modelbytes channel with tiered, LLM-summar
 import hashlib
 import os
 import re
+import socket
 import sys
 import time
+import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -3101,7 +3103,98 @@ def main():
     return 0
 
 
-def _handle_crash(exc: BaseException, preview: bool) -> None:
+def _crash_site(exc: BaseException) -> str:
+    """Last monitor.py frame, else the last frame of any file. No source text
+    (could contain secrets)."""
+    tb = getattr(exc, "__traceback__", None)
+    if tb is None:
+        return ""
+    frames = traceback.extract_tb(tb)
+    if not frames:
+        return ""
+    chosen = frames[-1]
+    for fr in reversed(frames):
+        if Path(fr.filename).name == "monitor.py":
+            chosen = fr
+            break
+    return f"{Path(chosen.filename).name}:{chosen.lineno} in {chosen.name}"
+
+
+def _crash_where() -> str:
+    """Compact 'where is this process' line. Replica id is set on a live
+    Railway container and typically absent for `railway run` / laptops."""
+    parts = [f"host={socket.gethostname()}"]
+    env = (os.environ.get("RAILWAY_ENVIRONMENT_NAME")
+           or os.environ.get("RAILWAY_ENVIRONMENT") or "")
+    svc = os.environ.get("RAILWAY_SERVICE_NAME") or ""
+    loc = "/".join(p for p in (env, svc) if p)
+    if loc:
+        parts.append(f"railway={loc}")
+    dep = os.environ.get("RAILWAY_DEPLOYMENT_ID") or ""
+    if dep:
+        parts.append(f"deploy={dep[:8]}")
+    replica = os.environ.get("RAILWAY_REPLICA_ID") or ""
+    if replica:
+        parts.append("via=replica")
+    elif env:
+        parts.append("via=railway-run-or-local")
+    return " ".join(parts)
+
+
+def _crash_hint(exc: BaseException) -> str:
+    if _is_private_host_unreachable(exc):
+        return ("*.railway.internal DNS failed — this process is off Railway's "
+                "private network (laptop / Cloud VM `railway run`), not the "
+                "16:00 cron. DATABASE_PUBLIC_URL is the fallback.")
+    return ""
+
+
+def _crash_ledger_note(today: str) -> str:
+    """Best-effort: did today already ship? Must not raise (DB may be why we crashed)."""
+    try:
+        if has_posted_digest(today):
+            return f"ledger: {today} already posted (channel shipped)"
+        return f"ledger: {today} NOT posted — channel is dark"
+    except Exception:
+        return "ledger: could not check posted_digests"
+
+
+def _argv_summary(argv) -> str:
+    parts = []
+    for a in argv or []:
+        parts.append(a if a.startswith("-") else Path(a).name)
+    return " ".join(parts) or "monitor.py"
+
+
+def _format_crash_alert(exc: BaseException, argv=None, now=None) -> str:
+    """Operator-facing crash body: error + site + where + hint + ledger.
+
+    2026-08-13: repr(exc) alone made an off-network DNS failure look like the
+    cron dying. Keep this short enough for a Telegram DM; no source lines,
+    no env dumps (secrets).
+    """
+    now = now or datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    err = _redact_secrets(f"{type(exc).__name__}: {exc}").strip()
+    if len(err) > 400:
+        err = err[:400] + "…"
+    lines = [
+        f"Publisher CRASHED — {now.strftime('%Y-%m-%d %H:%M')} UTC",
+        err,
+    ]
+    site = _crash_site(exc)
+    if site:
+        lines.append(f"at: {site}")
+    lines.append(f"run: {_argv_summary(argv)}")
+    lines.append(f"where: {_crash_where()}")
+    hint = _crash_hint(exc)
+    if hint:
+        lines.append(f"hint: {hint}")
+    lines.append(_crash_ledger_note(today))
+    return "\n".join(lines)
+
+
+def _handle_crash(exc: BaseException, preview: bool, argv=None) -> None:
     """Ops-alert + heartbeat on a live crash. Preview is side-effect-free.
 
     2026-08-13: a `railway run … --preview` off the private network crashed
@@ -3109,21 +3202,30 @@ def _handle_crash(exc: BaseException, preview: bool) -> None:
     still DMed the operator — same class as the 2026-06-13 false NO POST
     alert. Capture `--preview` *before* main() strips it from argv.
     """
+    body = _format_crash_alert(exc, argv=argv)
     if preview:
-        print(f"Preview crashed: {_redact_secrets(repr(exc))}", file=sys.stderr)
+        print(f"Preview crashed:\n{body}", file=sys.stderr)
         return
-    send_ops_alert(f"Publisher CRASHED: {_redact_secrets(repr(exc))}")
+    send_ops_alert(body)
     ping_heartbeat(False, f"crash: {_redact_secrets(repr(exc))}")
+    # Audit row is best-effort — the DB may be why we crashed.
+    try:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        record_publish_run(today, "crash", "crashed",
+                           error=_redact_secrets(f"{type(exc).__name__}: {exc}")[:500])
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
     _preview = "--preview" in sys.argv
+    _argv = list(sys.argv)
     try:
         _rc = main()
     except Exception as _e:
         # A crash anywhere must still reach the operator and the dead-man's
         # switch — Railway only records the exit code. Preview is the
         # exception: it must never page (see _handle_crash).
-        _handle_crash(_e, preview=_preview)
+        _handle_crash(_e, preview=_preview, argv=_argv)
         raise
     sys.exit(_rc)

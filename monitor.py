@@ -29,6 +29,10 @@ import requests
 # When DATABASE_URL is unset (local dev, --preview mode), state functions
 # degrade gracefully: load returns empty set, save is a no-op.
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+# Public proxy URL (Railway Postgres service). Used when DATABASE_URL points
+# at *.railway.internal and we are off the private network (`railway run`
+# from a laptop/Cloud VM — 2026-08-13 ops-alert incident).
+DATABASE_PUBLIC_URL = os.environ.get("DATABASE_PUBLIC_URL", "")
 
 HTTP_RETRIES = int(os.environ.get("MODELBYTES_HTTP_RETRIES", "3"))
 HTTP_BACKOFF_SECONDS = float(os.environ.get("MODELBYTES_HTTP_BACKOFF_SECONDS", "1.0"))
@@ -273,11 +277,62 @@ KNOWN_MODEL_FACTS: Tuple[ModelFact, ...] = (
 ZAYA_FACT = KNOWN_MODEL_FACTS[0]
 
 
+def _is_private_host_unreachable(exc: BaseException) -> bool:
+    """True when Postgres failed because *.railway.internal did not resolve.
+
+    Distinguishes off-network DNS (safe to retry DATABASE_PUBLIC_URL) from
+    auth/permission errors on a host we *did* reach (must not retry — that
+    would hide a real credential problem).
+    """
+    text = f"{type(exc).__name__}: {exc}".lower()
+    if "railway.internal" not in text:
+        return False
+    needles = (
+        "could not translate host name",
+        "name or service not known",
+        "temporary failure in name resolution",
+        "nodename nor servname",
+        "getaddrinfo failed",
+    )
+    return any(n in text for n in needles)
+
+
+def _db_connect(**kwargs):
+    """psycopg2.connect against DATABASE_URL, with a public-URL fallback.
+
+    `railway run` injects the private DATABASE_URL (postgres.railway.internal).
+    That hostname only resolves inside Railway's private network; off-network
+    it raises OperationalError and — before 2026-08-13 — the crash handler
+    ops-alerted. If DATABASE_PUBLIC_URL is set, retry it on DNS failure only.
+    """
+    urls = [u for u in (DATABASE_URL, DATABASE_PUBLIC_URL) if u]
+    # Dedup if someone set both to the same public URL.
+    seen, ordered = set(), []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            ordered.append(u)
+    if not ordered:
+        raise psycopg2.OperationalError("DATABASE_URL is not set")
+    last = None
+    for i, url in enumerate(ordered):
+        try:
+            return psycopg2.connect(url, **kwargs)
+        except Exception as e:
+            last = e
+            if i + 1 < len(ordered) and _is_private_host_unreachable(e):
+                print("DATABASE_URL host unreachable off-network; "
+                      "retrying DATABASE_PUBLIC_URL", file=sys.stderr)
+                continue
+            raise
+    raise last
+
+
 def init_database():
     """Create the models table if it doesn't exist. No-op without DATABASE_URL."""
     if not DATABASE_URL:
         return
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = _db_connect()
     try:
         with conn.cursor() as cur:
             cur.execute("""
@@ -324,7 +379,7 @@ def init_posted_digest_store() -> bool:
     if not DATABASE_URL:
         return False
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = _db_connect()
         try:
             with conn.cursor() as cur:
                 _ensure_posted_digests_table(cur)
@@ -342,7 +397,7 @@ def has_posted_digest(date_str: str) -> bool:
     if not DATABASE_URL:
         return False
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = _db_connect()
         try:
             with conn.cursor() as cur:
                 cur.execute(
@@ -363,7 +418,7 @@ def mark_posted_digest(date_str: str, source: str, digest_path: str, message: st
         return False
     message_hash = hashlib.sha256(message.encode("utf-8")).hexdigest() if message else None
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = _db_connect()
         try:
             with conn.cursor() as cur:
                 cur.execute(
@@ -407,7 +462,7 @@ _publisher = Publisher(
     ops_slack_channel_id=OPS_SLACK_CHANNEL_ID,
     disable_preview=True,  # ModelBytes: keep the digest channel clean (no link cards)
     ops_banner="🚨 ModelBytes ops:",
-    secret_values=tuple(s for s in (TELEGRAM_BOT_TOKEN, SLACK_BOT_TOKEN, DATABASE_URL) if s),
+    secret_values=tuple(s for s in (TELEGRAM_BOT_TOKEN, SLACK_BOT_TOKEN, DATABASE_URL, DATABASE_PUBLIC_URL) if s),
 )
 
 
@@ -421,6 +476,8 @@ def _redact_secrets(text: str) -> str:
         out = out.replace(TELEGRAM_BOT_TOKEN, "<token>")
     if DATABASE_URL:
         out = out.replace(DATABASE_URL, "<database-url>")
+    if DATABASE_PUBLIC_URL:
+        out = out.replace(DATABASE_PUBLIC_URL, "<database-url>")
     if SLACK_BOT_TOKEN:
         out = out.replace(SLACK_BOT_TOKEN, "<token>")
     return out
@@ -489,7 +546,7 @@ def record_publish_run(post_date: str, mode: str, status: str,
     if not DATABASE_URL:
         return False
     try:
-        conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
+        conn = _db_connect(connect_timeout=10)
         try:
             with conn.cursor() as cur:
                 if not _publish_runs_ensured:
@@ -521,7 +578,7 @@ def fallback_streak() -> int:
     if not DATABASE_URL:
         return 0
     try:
-        conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
+        conn = _db_connect(connect_timeout=10)
         try:
             with conn.cursor() as cur:
                 cur.execute(
@@ -542,7 +599,7 @@ def load_seen_models() -> Set[str]:
     """Load the set of seen model IDs from Postgres. Empty set without DATABASE_URL."""
     if not DATABASE_URL:
         return set()
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = _db_connect()
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT model_id FROM models")
@@ -555,7 +612,7 @@ def save_seen_models(models: Set[str]):
     """Persist the set of seen model IDs to Postgres. No-op without DATABASE_URL."""
     if not DATABASE_URL or not models:
         return
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = _db_connect()
     try:
         with conn.cursor() as cur:
             cur.executemany(
@@ -3044,13 +3101,29 @@ def main():
     return 0
 
 
+def _handle_crash(exc: BaseException, preview: bool) -> None:
+    """Ops-alert + heartbeat on a live crash. Preview is side-effect-free.
+
+    2026-08-13: a `railway run … --preview` off the private network crashed
+    in init_database() (postgres.railway.internal DNS). The __main__ handler
+    still DMed the operator — same class as the 2026-06-13 false NO POST
+    alert. Capture `--preview` *before* main() strips it from argv.
+    """
+    if preview:
+        print(f"Preview crashed: {_redact_secrets(repr(exc))}", file=sys.stderr)
+        return
+    send_ops_alert(f"Publisher CRASHED: {_redact_secrets(repr(exc))}")
+    ping_heartbeat(False, f"crash: {_redact_secrets(repr(exc))}")
+
+
 if __name__ == "__main__":
+    _preview = "--preview" in sys.argv
     try:
         _rc = main()
     except Exception as _e:
         # A crash anywhere must still reach the operator and the dead-man's
-        # switch — Railway only records the exit code.
-        send_ops_alert(f"Publisher CRASHED: {_e!r}")
-        ping_heartbeat(False, f"crash: {_e!r}")
+        # switch — Railway only records the exit code. Preview is the
+        # exception: it must never page (see _handle_crash).
+        _handle_crash(_e, preview=_preview)
         raise
     sys.exit(_rc)

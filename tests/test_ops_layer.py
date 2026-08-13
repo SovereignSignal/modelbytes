@@ -218,3 +218,32 @@ def test_inline_primary_suppresses_fallback_alert(monkeypatch, tmp_path):
     rc = monitor.main()
     assert rc == 0
     assert not any("FALLBACK" in a or "fallback" in a for a in alerts), alerts
+
+
+def test_preview_crash_does_not_ops_alert(monkeypatch):
+    # 2026-08-13: a `railway run … --preview` off the private network crashed
+    # in init_database() on postgres.railway.internal DNS. The __main__ crash
+    # handler still ops-alerted — preview is supposed to be side-effect-free
+    # (same class as the 2026-06-13 false NO POST alert).
+    alerts = []
+    beats = []
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda t: alerts.append(t) or True)
+    monkeypatch.setattr(monitor, "ping_heartbeat",
+                        lambda ok, msg=None: beats.append((ok, msg)))
+    err = monitor.psycopg2.OperationalError(
+        'could not translate host name "postgres.railway.internal" to address')
+    monitor._handle_crash(err, preview=True)
+    assert alerts == []
+    assert beats == []
+
+
+def test_live_crash_still_ops_alerts(monkeypatch):
+    alerts = []
+    beats = []
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda t: alerts.append(t) or True)
+    monkeypatch.setattr(monitor, "ping_heartbeat",
+                        lambda ok, msg=None: beats.append((ok, msg)))
+    err = RuntimeError("boom")
+    monitor._handle_crash(err, preview=False)
+    assert alerts and "CRASHED" in alerts[0]
+    assert beats and beats[0][0] is False

@@ -109,3 +109,50 @@ def test_mark_posted_digest_upserts_ledger():
     sql_strings = _all_sql_issued(mock_cur)
     assert any("INSERT INTO POSTED_DIGESTS" in sql.upper() for sql in sql_strings)
     assert any("ON CONFLICT" in sql.upper() for sql in sql_strings)
+
+
+def test_db_connect_falls_back_to_public_url_on_internal_dns_failure():
+    # 2026-08-13: `railway run` on a Cloud VM injected DATABASE_URL pointing
+    # at postgres.railway.internal, which does not resolve off the private
+    # network. The crash handler then ops-alerted. Fall back to
+    # DATABASE_PUBLIC_URL instead of paging the operator.
+    public_conn = MagicMock()
+    calls = []
+
+    def connect(url, **kwargs):
+        calls.append(url)
+        if "railway.internal" in url:
+            raise monitor.psycopg2.OperationalError(
+                'could not translate host name "postgres.railway.internal" '
+                'to address: Name or service not known\n')
+        return public_conn
+
+    with patch.object(monitor, "DATABASE_URL",
+                      "postgresql://u:p@postgres.railway.internal:5432/db"), \
+         patch.object(monitor, "DATABASE_PUBLIC_URL",
+                      "postgresql://u:p@hopper.proxy.rlwy.net:1234/db"), \
+         patch.object(monitor.psycopg2, "connect", side_effect=connect):
+        conn = monitor._db_connect()
+    assert conn is public_conn
+    assert len(calls) == 2
+    assert "railway.internal" in calls[0]
+    assert "rlwy.net" in calls[1]
+
+
+def test_db_connect_does_not_fallback_on_auth_failure():
+    def connect(url, **kwargs):
+        raise monitor.psycopg2.OperationalError(
+            'connection to server at "postgres.railway.internal" failed: '
+            'FATAL:  password authentication failed')
+
+    with patch.object(monitor, "DATABASE_URL",
+                      "postgresql://u:p@postgres.railway.internal:5432/db"), \
+         patch.object(monitor, "DATABASE_PUBLIC_URL",
+                      "postgresql://u:p@hopper.proxy.rlwy.net:1234/db"), \
+         patch.object(monitor.psycopg2, "connect", side_effect=connect):
+        try:
+            monitor._db_connect()
+        except monitor.psycopg2.OperationalError as e:
+            assert "password" in str(e)
+        else:
+            raise AssertionError("expected auth failure to propagate")

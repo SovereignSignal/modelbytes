@@ -1,0 +1,19 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Thursday, August 13, 2026</i>
+
+<i>Open-weight agentic and multimodal models dominate today, with Meta’s 30B Muse Glimmer and Qwen’s 2.4T MoE both landing under permissive licenses, while Grok 4.6 and Qwen3.8-Max push closed frontier performance.</i>
+
+━━━ <b>OPEN FRONTIER</b> 🔓
+<b>Muse Glimmer</b> — <i>Meta’s return to open source with a 30B agentic model optimized for tool use and reasoning, released under Apache 2.0.</i> 30B params, Apache 2.0. 📦 Open weights. <a href="https://venturebeat.com/technology/meta-returns-to-open-source-with-muse-glimmer-an-apache-2-0-licensed-30b-parameter-ai-model-optimized-for-agents-available-now">→ Source</a>
+<b>Qwen3.8 2.4T A95B</b> — <i>Open-weight sparse MoE with 95B active parameters out of 2.4T total, matching the closed Qwen3.8-Max and offering a 1M-token context window.</i> 2.4T total, 95B active, 1M context. ⚡ API live · OpenRouter ($2/$6 per 1M tokens). <a href="https://openrouter.ai/models/qwen/qwen3.8-2.4t-a95b">→ Source</a>
+<b>DeepSeek V4 Pro 0813</b> — <i>Updated Pro variant with 49B active parameters out of 1.65T, MIT-licensed, refining reasoning and agent capabilities.</i> 1650.5B total, 49B active, MIT. ⚡ API live. <a href="https://api-docs.deepseek.com/news/news260424">→ Source</a>
+
+━━━ <b>CLOSED FRONTIER</b> 🔒
+<b>Qwen3.8 Max</b> — <i>Alibaba’s latest flagship, now widely accessible globally ahead of its open-weights release, targeting second place behind Claude Fable 5.</i> ⚡ API live. <a href="https://scmp.com/tech/article/3362738/alibabas-ai-model-qwen38-max-made-widely-accessible-ahead-open-weights-release">→ Source</a>
+<b>Grok 4.6</b> — <i>xAI’s newest proprietary model, released Aug 12 with no public parameter details yet.</i> ⚡ API live. <a href="https://aireleasetracker.com/latest">→ Source</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+<b>SCoPE</b> — <i>Tencent’s image-to-video model, Apache 2.0, turning stills into motion with controllable generation.</i> Apache 2.0. 📦 Open weights · HF. <a href="https://huggingface.co/TencentARC/SCoPE">→ Source</a>
+<b>LFM2.5-VL 3B</b> — <i>Liquid AI’s compact 3B vision-language model, bringing multimodal reasoning to edge devices.</i> 3B params. 📦 Model released. <a href="https://llm-stats.com/llm-updates">→ Source</a>
+
+📊 Surfaced 7 · scanned 3 today

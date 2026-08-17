@@ -169,7 +169,7 @@ The bot token has died on us twice in the recent past (each rotation requires re
 | `MODELBYTES_LLM_MODEL` | `gpt-4o-mini` | Model identifier. |
 | `MODELBYTES_LLM_URL` | `https://api.openai.com/v1` | API base URL. Set to OpenRouter's URL to switch providers. |
 
-**Current state on Railway**: the checked-in `railway.toml` only declares required service variables, but production also has shared OpenAI-compatible fallback variables configured in Railway. If the curator routine misses (rare), the fallback path should produce an LLM-written digest. If those shared variables are removed, unset, or fail at request time, the fallback path runs `build_digest_message()` instead — a template-only digest with model names, specs, and links but no LLM-written blurbs. Format is the same; editorial voice is absent.
+**Current state on Railway**: production writer is `deepseek-v4-pro` on Ollama Cloud (`MODELBYTES_LLM_URL=https://ollama.com/v1`) with `gpt-oss:120b` as the secondary. If the primary returns empty (common for reasoning models when thinking consumes `max_tokens` — 2026-08-17) the publisher retries at a higher budget, then the secondary model, then the deterministic template. The ops alert for a primary miss includes the actual reason (`finish_reason`, token counts, reasoning size), not a generic "unavailable". The channel still posts.
 
 **To enable LLM-driven fallback on Railway**:
 

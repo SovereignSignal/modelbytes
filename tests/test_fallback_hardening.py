@@ -285,6 +285,70 @@ def test_primary_used_when_it_works(monkeypatch):
     assert monitor.LAST_LLM_MODEL == "primary-model"
 
 
+def test_empty_reasoning_budget_retries_then_falls_through(monkeypatch):
+    # 2026-08-17: deepseek-v4-pro returned HTTP 200 with empty content (thinking
+    # ate max_tokens). The ops alert said "unavailable" which was wrong — the
+    # model answered, it just didn't leave room for the digest. Retry once with
+    # a larger budget; if still empty, fall through AND record a real reason.
+    monkeypatch.setattr(monitor, "LLM_API_KEY", "k")
+    monkeypatch.setattr(monitor, "LLM_MODEL", "deepseek-v4-pro")
+    monkeypatch.setattr(monitor, "LLM_MODEL_FALLBACK", "gpt-oss:120b")
+    calls = []
+
+    def fake_post(url, json, headers, timeout):
+        calls.append((json["model"], json.get("max_tokens")))
+        fake = MagicMock(); fake.raise_for_status = lambda: None
+        if json["model"] == "deepseek-v4-pro":
+            fake.json.return_value = {
+                "choices": [{
+                    "finish_reason": "length",
+                    "message": {"content": "", "reasoning": "x" * 50},
+                }],
+                "usage": {"completion_tokens": 8000, "prompt_tokens": 1200},
+            }
+        else:
+            fake.json.return_value = {"choices": [{"message": {"content":
+                '<b>X</b> — <i>y</i> <a href="https://huggingface.co/acme/X">→ S</a>'}}]}
+        return fake
+    monkeypatch.setattr(monitor.requests, "post", fake_post)
+    msg = monitor.summarize_models([_model("acme/X")])
+    assert monitor.LAST_LLM_MODEL == "gpt-oss:120b"
+    assert "ModelBytes Digest" in msg
+    assert calls[0] == ("deepseek-v4-pro", 16000)
+    assert calls[1] == ("deepseek-v4-pro", 24000)  # budget retry before fallback
+    assert calls[2][0] == "gpt-oss:120b"
+    assert "finish_reason=length" in (monitor.LAST_LLM_FAILURE or "")
+    assert "unavailable" not in monitor._primary_missed_alert("2026-08-17").lower()
+    assert "gpt-oss:120b" in monitor._primary_missed_alert("2026-08-17")
+
+
+def test_length_retry_recovers_primary(monkeypatch):
+    monkeypatch.setattr(monitor, "LLM_API_KEY", "k")
+    monkeypatch.setattr(monitor, "LLM_MODEL", "deepseek-v4-pro")
+    monkeypatch.setattr(monitor, "LLM_MODEL_FALLBACK", "gpt-oss:120b")
+    calls = []
+
+    def fake_post(url, json, headers, timeout):
+        calls.append(json.get("max_tokens"))
+        fake = MagicMock(); fake.raise_for_status = lambda: None
+        if json.get("max_tokens") == 16000:
+            fake.json.return_value = {
+                "choices": [{
+                    "finish_reason": "length",
+                    "message": {"content": "", "reasoning": "thinking…"},
+                }],
+            }
+        else:
+            fake.json.return_value = {"choices": [{"message": {"content":
+                '<b>X</b> — <i>y</i> <a href="https://huggingface.co/acme/X">→ S</a>'}}]}
+        return fake
+    monkeypatch.setattr(monitor.requests, "post", fake_post)
+    monitor.summarize_models([_model("acme/X")])
+    assert calls == [16000, 24000]
+    assert monitor.LAST_LLM_MODEL == "deepseek-v4-pro"
+    assert monitor.LAST_LLM_FAILURE is None
+
+
 # ── Exit code on deterministic blocks (2026-06-19 incident) ────────────────
 
 def test_qa_blocked_fallback_exits_zero_not_one(monkeypatch, tmp_path):

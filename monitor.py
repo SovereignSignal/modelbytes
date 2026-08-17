@@ -1925,6 +1925,10 @@ LAST_SUMMARY_MODE = "template"
 # The model that actually produced the last digest (None if template). Lets the
 # publisher alert when the primary was unavailable and a fallback model was used.
 LAST_LLM_MODEL = None
+# Why the last failed LLM candidate produced nothing (HTTP error, empty
+# content + finish_reason). Feeds the primary-missed ops alert so
+# "unavailable" is not used for a 200 with thinking-only output (2026-08-17).
+LAST_LLM_FAILURE = None
 # How many entries the last summarize_models() call trimmed for carrying a stale
 # release date. Lets main() send a non-blocking ops note that the writer leaked
 # a stale date and an entry was dropped (2026-07-04 incident).
@@ -2093,17 +2097,67 @@ def _strip_stale_entries(summary: str, today: str = None) -> Tuple[str, int]:
     return _prune_orphaned_tiers(kept), dropped
 
 
-def _call_llm(model: str, prompt: str) -> Optional[str]:
+LLM_MAX_TOKENS = 16000  # 8000 was eaten by deepseek-v4-pro thinking (2026-08-17)
+LLM_MAX_TOKENS_RETRY = 24000
+
+
+def _llm_message_text(msg: dict) -> str:
+    """Visible assistant text. Never use reasoning/thinking fields as the digest."""
+    content = (msg or {}).get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for p in content:
+            if isinstance(p, str):
+                parts.append(p)
+            elif isinstance(p, dict):
+                parts.append(p.get("text") or "")
+        return "\n".join(parts).strip()
+    return ""
+
+
+def _diagnose_empty_llm(model: str, data: dict, choice: dict) -> str:
+    finish = (choice or {}).get("finish_reason") or "?"
+    msg = (choice or {}).get("message") or {}
+    usage = (data or {}).get("usage") or {}
+    reasoning_len = 0
+    for k in ("reasoning", "reasoning_content", "thinking"):
+        v = msg.get(k)
+        if isinstance(v, str):
+            reasoning_len = max(reasoning_len, len(v))
+    bits = [f"empty content, finish_reason={finish}"]
+    ct, pt = usage.get("completion_tokens"), usage.get("prompt_tokens")
+    if ct is not None or pt is not None:
+        bits.append(f"tokens={ct}/{pt}")
+    if reasoning_len:
+        if finish == "length":
+            bits.append(f"reasoning_chars={reasoning_len} (thinking ate the token budget)")
+        else:
+            bits.append(f"reasoning_chars={reasoning_len}")
+    return f"LLM '{model}' " + ", ".join(bits)
+
+
+def _call_llm(model: str, prompt: str, max_tokens: int = None) -> Optional[str]:
     """One chat-completion call against the configured OpenAI-compatible endpoint.
     Returns the stripped content, or None on any failure or empty body — the
-    caller decides whether to try the next model or the template."""
+    caller decides whether to try the next model or the template.
+
+    On empty content with finish_reason=length (reasoning burned the budget),
+    retries once at LLM_MAX_TOKENS_RETRY before giving up (2026-08-17:
+    deepseek-v4-pro HTTP 200 / empty content looked like an outage).
+    """
+    global LAST_LLM_FAILURE
+    if max_tokens is None:
+        max_tokens = LLM_MAX_TOKENS
     try:
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             # Headroom for reasoning models that spend tokens on hidden reasoning
-            # before emitting the digest body (3000 produced empty bodies twice).
-            "max_tokens": 8000,
+            # before emitting the digest body (3000 produced empty bodies twice;
+            # 8000 still wasn't enough on 2026-08-17 for deepseek-v4-pro).
+            "max_tokens": max_tokens,
             "temperature": 0.3,
         }
         headers = {"Authorization": f"Bearer {LLM_API_KEY}",
@@ -2111,10 +2165,34 @@ def _call_llm(model: str, prompt: str) -> Optional[str]:
         resp = requests.post(f"{LLM_BASE_URL}/chat/completions",
                              json=payload, headers=headers, timeout=LLM_TIMEOUT)
         resp.raise_for_status()
-        return (resp.json()["choices"][0]["message"]["content"] or "").strip() or None
-    except Exception as e:
-        print(_redact_secrets(f"LLM '{model}' call failed: {e}"), file=sys.stderr)
+        data = resp.json()
+        choice = (data.get("choices") or [{}])[0]
+        text = _llm_message_text(choice.get("message") or {})
+        if text:
+            if model == LLM_MODEL:
+                LAST_LLM_FAILURE = None  # primary recovered (possibly after retry)
+            return text
+        LAST_LLM_FAILURE = _diagnose_empty_llm(model, data, choice)
+        print(LAST_LLM_FAILURE, file=sys.stderr)
+        if (choice.get("finish_reason") == "length"
+                and max_tokens < LLM_MAX_TOKENS_RETRY):
+            print(f"Retrying '{model}' with max_tokens={LLM_MAX_TOKENS_RETRY} "
+                  "(reasoning likely ate the budget).", file=sys.stderr)
+            return _call_llm(model, prompt, max_tokens=LLM_MAX_TOKENS_RETRY)
         return None
+    except Exception as e:
+        LAST_LLM_FAILURE = _redact_secrets(f"LLM '{model}' call failed: {e}")
+        print(LAST_LLM_FAILURE, file=sys.stderr)
+        return None
+
+
+def _primary_missed_alert(today: str) -> str:
+    """Ops copy when we published with the secondary model. Must say *why*
+    the primary missed — 'unavailable' was a lie on 2026-08-17 (HTTP 200,
+    empty content, thinking consumed max_tokens)."""
+    why = LAST_LLM_FAILURE or "primary returned empty"
+    return (f"Primary LLM '{LLM_MODEL}' missed for {today} — published with "
+            f"'{LAST_LLM_MODEL}'. {why}. Channel still posted.")
 
 
 # Variant-suffix patterns that signal a FINE-TUNE / SFT / data variant of the
@@ -2300,10 +2378,11 @@ def summarize_models(models: List[ModelRelease], web_context: str = "",
     path's freshness engine). recent_names: models already covered in recent
     digests, so the writer doesn't repeat them.
     """
-    global LAST_SUMMARY_MODE, LAST_LLM_MODEL, LAST_STALE_DROPPED
+    global LAST_SUMMARY_MODE, LAST_LLM_MODEL, LAST_STALE_DROPPED, LAST_LLM_FAILURE
     LAST_SUMMARY_MODE = "template"
     LAST_LLM_MODEL = None
     LAST_STALE_DROPPED = 0
+    LAST_LLM_FAILURE = None
     recent_names = recent_names or []
     if not models and not web_context:
         return NO_MODELS_SENTINEL
@@ -3009,9 +3088,7 @@ def main():
         # primary LLM was unavailable and we published with the fallback model,
         # the operator should know so they can update MODELBYTES_LLM_MODEL.
         if LAST_LLM_MODEL and LAST_LLM_MODEL != LLM_MODEL:
-            send_ops_alert(f"Primary LLM '{LLM_MODEL}' unavailable for {today} — "
-                           f"published with fallback model '{LAST_LLM_MODEL}'. "
-                           "Check Ollama Cloud availability / update the primary.")
+            send_ops_alert(_primary_missed_alert(today))
         # Content-drift signal (non-blocking): the writer leaked a stale release
         # date and the per-entry scrub trimmed it, so the digest shipped without
         # tripping the whole-body gate (the 2026-07-04 dark-channel incident).

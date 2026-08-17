@@ -35,3 +35,9 @@ mode) posts to Telegram, then exits.
   set. For a live end-to-end post you also need `DATABASE_URL` (Postgres) and,
   for editorial quality, the LLM + Parallel.ai keys — see the env var table in
   `README.md`. None of these are required for `--preview` or tests.
+- Off-network `railway run` injects `DATABASE_URL` with host
+  `postgres.railway.internal`, which does not resolve on this Cloud VM. The
+  publisher retries `DATABASE_PUBLIC_URL` on that DNS failure only (auth
+  errors still raise). Wire it on the `modelbytes` service as
+  `${{Postgres.DATABASE_PUBLIC_URL}}`. `--preview` crashes must not ops-alert
+  (2026-08-13 false CRASHED page).

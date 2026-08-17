@@ -49,7 +49,7 @@ When adding a model that the curator may mention repeatedly, add a `ModelFact` e
 
 The two are in isolated `try` blocks, so a Telegram outage still reaches Slack (and vice versa). `send_ops_alert()` never raises — a broken alert path cannot take down a publish run. All alert text (and every log line) passes through `_redact_secrets()`, which scrubs the bot token and the `DATABASE_URL` before anything is sent or logged.
 
-Alerts fire on: fallback days (the curator missed), blocked/failed publishes, late curator (grace window expired), a lost `DATABASE_URL`, content-damage QA warnings (fact drift, floods), and an uncaught crash (the `__main__` crash handler alerts + heartbeats, then re-raises). Cosmetic format-drift warnings do **not** alert (anti-noise). Escalating fallback alerts are driven by `fallback_streak()` reading consecutive fallback rows out of `publish_runs`.
+Alerts fire on: fallback days (the curator missed), blocked/failed publishes, late curator (grace window expired), a lost `DATABASE_URL`, content-damage QA warnings (fact drift, floods), and an uncaught crash (the `__main__` crash handler alerts + heartbeats, then re-raises). Crash DMs include where the process ran, the `monitor.py` frame, a known-class hint, and whether today's digest already shipped — so an off-network `railway run` DNS failure is not mistaken for the cron. Cosmetic format-drift warnings do **not** alert (anti-noise). Escalating fallback alerts are driven by `fallback_streak()` reading consecutive fallback rows out of `publish_runs`. Preview-mode crashes never alert.
 
 ### Setting up the admin chat
 
@@ -99,6 +99,7 @@ LIMIT 20;
 | `send-failed` | Validation passed but the Telegram send failed (e.g. dead token, 4xx/5xx) — check `error`, then the token-rotation runbook. |
 | `no-models` | Fallback path ran but found no significant releases after filtering/dedup, so there was nothing to post. |
 | `seeded` | An empty `models` table was seeded (only happens with `MODELBYTES_ALLOW_SEED=1`); no digest posted that run. |
+| `crashed` | Uncaught exception in a live run. The ops DM includes crash site, host/Railway context, a known-class hint (e.g. off-network `railway.internal` DNS), and whether `posted_digests` already has today. Preview crashes do **not** alert or write this row. |
 
 To see the recent fallback streak that drives escalating alerts:
 

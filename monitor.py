@@ -136,6 +136,7 @@ PROVIDER_NAMES = {
     "black-forest-labs": "Black Forest Labs",
     "skt": "SK Telecom",
     "wan-ai": "Alibaba",
+    "sarvamai": "Sarvam AI",
 }
 
 # Known significant orgs — never noise-filter these
@@ -157,7 +158,7 @@ KNOWN_ORGS = {
     "tencent", "sakanaai",
     "internlm", "meituan-longcat", "poolside", "ai-sage",
     "thinkingmachines", "black-forest-labs",
-    "skt", "wan-ai",
+    "skt", "wan-ai", "sarvamai",
 }
 
 
@@ -1293,7 +1294,7 @@ def is_significant_release(model_id: str, author: str, tags: list,
         "openai/o1", "openai/o3", "anthropic/claude",
         "wan2", "wan3", "wan-3", "dramabox", "pixal3d", "agent",
         "longcat", "laguna-", "gigachat",
-        "inkling",
+        "inkling", "sarvam",
     ]
     if any(f in model_lower for f in significant_families):
         return True
@@ -1420,7 +1421,7 @@ MAJOR_HF_ORGS = [
     "bosonai", "sapientinc", "SakanaAI",
     "internlm", "meituan-longcat", "poolside", "ai-sage",
     "thinkingmachines", "black-forest-labs",
-    "skt", "Wan-AI",
+    "skt", "Wan-AI", "sarvamai",
 ]
 
 

@@ -135,6 +135,7 @@ PROVIDER_NAMES = {
     "thinkingmachines": "Thinking Machines",
     "black-forest-labs": "Black Forest Labs",
     "skt": "SK Telecom",
+    "wan-ai": "Alibaba",
 }
 
 # Known significant orgs — never noise-filter these
@@ -156,7 +157,7 @@ KNOWN_ORGS = {
     "tencent", "sakanaai",
     "internlm", "meituan-longcat", "poolside", "ai-sage",
     "thinkingmachines", "black-forest-labs",
-    "skt",
+    "skt", "wan-ai",
 }
 
 
@@ -1290,7 +1291,7 @@ def is_significant_release(model_id: str, author: str, tags: list,
         "exaone", "k-exaone",
         "anima", "reka-edge", "lyria-",
         "openai/o1", "openai/o3", "anthropic/claude",
-        "wan2", "dramabox", "pixal3d", "agent",
+        "wan2", "wan3", "wan-3", "dramabox", "pixal3d", "agent",
         "longcat", "laguna-", "gigachat",
         "inkling",
     ]
@@ -1419,7 +1420,7 @@ MAJOR_HF_ORGS = [
     "bosonai", "sapientinc", "SakanaAI",
     "internlm", "meituan-longcat", "poolside", "ai-sage",
     "thinkingmachines", "black-forest-labs",
-    "skt",
+    "skt", "Wan-AI",
 ]
 
 

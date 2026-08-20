@@ -101,7 +101,7 @@ These power the **inline writer**, which is the everyday digest path (the retire
 - **Ollama** — Local LLM models
 - **Hugging Face** — Open weights and research models
 
-See [`docs/source-growth.md`](./docs/source-growth.md) for the source expansion rubric and candidate pipeline.
+See [`docs/source-growth.md`](./docs/source-growth.md) for the source expansion rubric, [`docs/source-candidates.md`](./docs/source-candidates.md) for the intake queue, and [`docs/superpowers/specs/2026-08-20-coverage-and-quality-expansion.md`](./docs/superpowers/specs/2026-08-20-coverage-and-quality-expansion.md) for the 2026-08-20 coverage/quality plan.
 
 ## License
 

@@ -33,9 +33,12 @@ A new source candidate should score well on most of these before implementation:
 
 ## Organic Growth Loop
 
+Quality and coverage are the same loop. A new fetcher on top of a deaf fact-check or a filter that drops SPECIALIZED modalities adds spam, not recall. The sequenced plan (memory → list bugs → then 2–3 fetchers → recall audit) lives in [`superpowers/specs/2026-08-20-coverage-and-quality-expansion.md`](./superpowers/specs/2026-08-20-coverage-and-quality-expansion.md).
+
 1. **Observe misses**
-   - Compare recent Telegram posts, health logs, and curator notes against models that later prove important.
-   - Track which misses were source gaps versus filter mistakes.
+   - Compare recent Telegram posts and `publish_runs` rows against models that later prove important (OpenRouter `created` ≤14d is a cheap independent set).
+   - Track which misses were source gaps versus filter mistakes versus ranking overflow versus writer-stripped entries.
+   - Once `posted_digests` stores bodies, run a small recall audit (ground-truth list vs posted names) before adding another source. The Grant Wire 2026-06-28 audit is the method.
 
 2. **Capture candidates**
    - Record candidate source name, URL, source type, why it matters, likely metadata fields, and failure risks.
@@ -68,12 +71,13 @@ Good next steps:
 
 ## Candidate Backlog
 
-These are categories to investigate, not approved implementations:
+Ranked candidates (probed 2026-08-20) live in [`source-candidates.md`](./source-candidates.md). Categories still worth revisiting after that queue:
 
-- More direct provider feeds for labs and inference platforms already appearing in the digest.
-- Model hubs outside the current Hugging Face / Ollama / OpenRouter triangle.
-- Benchmark or leaderboard surfaces that expose newly submitted model IDs.
-- Research-release indexes where model cards or code links are part of the metadata.
-- Curated community feeds with a track record of catching open-weight releases early.
+- More direct provider feeds for labs already appearing in the digest (Phase 2 lab RSS).
+- Model hubs outside the Hugging Face / Ollama / OpenRouter triangle (ModelScope probed; noise profile still needed).
+- Lifecycle diffs (LiteLLM pricing) rather than new catalogs — quiet-day fuel for format v3.
+- Research-release indexes where model cards or code links are part of the metadata (HF Daily Papers).
+
+Do **not** add Reddit/HN/Bluesky (wrong product — that is ClawBytes), auth-gated inference catalogs, or HTML-only leaderboards.
 
 Each candidate should go through the rubric above before it becomes code.

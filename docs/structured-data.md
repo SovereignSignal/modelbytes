@@ -7,8 +7,21 @@ ModelBytes should use Postgres as the durable system of record for production st
 | Table | Status | Purpose |
 |---|---|---|
 | `models` | implemented | Deduplicates model IDs already seen by the fallback pipeline. |
-| `posted_digests` | implemented | Records one posted digest per UTC date so reruns are idempotent. |
+| `posted_digests` | implemented | Records one posted digest per UTC date so reruns are idempotent. Also stores `body` (the published HTML) so fact-consistency and already-covered checks survive the ephemeral Railway cron. |
 | `publish_runs` | implemented | One audit row per `monitor.py` run, including failures. |
+
+### `posted_digests` schema
+
+Shipped columns:
+
+- `post_date` (`date`, primary key)
+- `source` (`varchar`)
+- `digest_path` (`text`)
+- `message_hash` (`varchar(64)`)
+- `body` (`text`) — the published Telegram HTML. Added 2026-08-20 so fact-consistency and already-covered survive the ephemeral cron. `ALTER TABLE … ADD COLUMN IF NOT EXISTS` on existing DBs.
+- `posted_at` (`timestamptz`)
+
+`mark_posted_digest` writes `body`. `_check_fact_consistency` and `_recent_digest_names` read it via `load_recent_digest_bodies`, falling back to `pending/*.txt` for dates with no stored body.
 
 ### `publish_runs` schema
 

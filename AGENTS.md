@@ -38,13 +38,12 @@ mode) posts to Telegram, then exits.
 - Production is the Railway project `modelbytes` / service `modelbytes` /
   environment `production` (cron `0 16 * * *`). Manual trigger runbook:
   `docs/operations.md` § "Manually triggering a Telegram post".
-- `railway run` from this Cloud VM **cannot** use the service `DATABASE_URL`
-  as-is: it points at `postgres.railway.internal`, which does not resolve
-  outside the Railway private network (`psycopg2.OperationalError: could not
-  translate host name`). Pull `DATABASE_PUBLIC_URL` from the **Postgres**
-  service and override for the child process, e.g.
-  `railway run --project <id> --environment production --service modelbytes -- env DATABASE_URL="$PUBLIC_DB" venv/bin/python monitor.py --preview`.
-  Do not print that URL.
+- Off-network `railway run` injects `DATABASE_URL` with host
+  `postgres.railway.internal`, which does not resolve on this Cloud VM. The
+  publisher retries `DATABASE_PUBLIC_URL` on that DNS failure only (auth
+  errors still raise). Wire it on the `modelbytes` service as
+  `${{Postgres.DATABASE_PUBLIC_URL}}`. Do not print that URL. `--preview`
+  crashes must not ops-alert (2026-08-13 false CRASHED page).
 - Manual re-runs should set `MODELBYTES_PENDING_GRACE_SECONDS=0`. The default
   600s grace window waits for a retired curator `pending/<today>.txt` that
   will not appear.

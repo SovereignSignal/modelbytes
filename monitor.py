@@ -7,8 +7,10 @@ Posts new model releases to Telegram @modelbytes channel with tiered, LLM-summar
 import hashlib
 import os
 import re
+import socket
 import sys
 import time
+import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -29,6 +31,10 @@ import requests
 # When DATABASE_URL is unset (local dev, --preview mode), state functions
 # degrade gracefully: load returns empty set, save is a no-op.
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+# Public proxy URL (Railway Postgres service). Used when DATABASE_URL points
+# at *.railway.internal and we are off the private network (`railway run`
+# from a laptop/Cloud VM — 2026-08-13 ops-alert incident).
+DATABASE_PUBLIC_URL = os.environ.get("DATABASE_PUBLIC_URL", "")
 
 HTTP_RETRIES = int(os.environ.get("MODELBYTES_HTTP_RETRIES", "3"))
 HTTP_BACKOFF_SECONDS = float(os.environ.get("MODELBYTES_HTTP_BACKOFF_SECONDS", "1.0"))
@@ -135,6 +141,9 @@ PROVIDER_NAMES = {
     "thinkingmachines": "Thinking Machines",
     "black-forest-labs": "Black Forest Labs",
     "skt": "SK Telecom",
+    "wan-ai": "Alibaba",
+    "sarvamai": "Sarvam AI",
+    "meta-models": "Meta",
 }
 
 # Known significant orgs — never noise-filter these
@@ -156,7 +165,7 @@ KNOWN_ORGS = {
     "tencent", "sakanaai",
     "internlm", "meituan-longcat", "poolside", "ai-sage",
     "thinkingmachines", "black-forest-labs",
-    "skt",
+    "skt", "wan-ai", "sarvamai", "meta-models",
 }
 
 
@@ -273,11 +282,62 @@ KNOWN_MODEL_FACTS: Tuple[ModelFact, ...] = (
 ZAYA_FACT = KNOWN_MODEL_FACTS[0]
 
 
+def _is_private_host_unreachable(exc: BaseException) -> bool:
+    """True when Postgres failed because *.railway.internal did not resolve.
+
+    Distinguishes off-network DNS (safe to retry DATABASE_PUBLIC_URL) from
+    auth/permission errors on a host we *did* reach (must not retry — that
+    would hide a real credential problem).
+    """
+    text = f"{type(exc).__name__}: {exc}".lower()
+    if "railway.internal" not in text:
+        return False
+    needles = (
+        "could not translate host name",
+        "name or service not known",
+        "temporary failure in name resolution",
+        "nodename nor servname",
+        "getaddrinfo failed",
+    )
+    return any(n in text for n in needles)
+
+
+def _db_connect(**kwargs):
+    """psycopg2.connect against DATABASE_URL, with a public-URL fallback.
+
+    `railway run` injects the private DATABASE_URL (postgres.railway.internal).
+    That hostname only resolves inside Railway's private network; off-network
+    it raises OperationalError and — before 2026-08-13 — the crash handler
+    ops-alerted. If DATABASE_PUBLIC_URL is set, retry it on DNS failure only.
+    """
+    urls = [u for u in (DATABASE_URL, DATABASE_PUBLIC_URL) if u]
+    # Dedup if someone set both to the same public URL.
+    seen, ordered = set(), []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            ordered.append(u)
+    if not ordered:
+        raise psycopg2.OperationalError("DATABASE_URL is not set")
+    last = None
+    for i, url in enumerate(ordered):
+        try:
+            return psycopg2.connect(url, **kwargs)
+        except Exception as e:
+            last = e
+            if i + 1 < len(ordered) and _is_private_host_unreachable(e):
+                print("DATABASE_URL host unreachable off-network; "
+                      "retrying DATABASE_PUBLIC_URL", file=sys.stderr)
+                continue
+            raise
+    raise last
+
+
 def init_database():
     """Create the models table if it doesn't exist. No-op without DATABASE_URL."""
     if not DATABASE_URL:
         return
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = _db_connect()
     try:
         with conn.cursor() as cur:
             cur.execute("""
@@ -324,7 +384,7 @@ def init_posted_digest_store() -> bool:
     if not DATABASE_URL:
         return False
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = _db_connect()
         try:
             with conn.cursor() as cur:
                 _ensure_posted_digests_table(cur)
@@ -342,7 +402,7 @@ def has_posted_digest(date_str: str) -> bool:
     if not DATABASE_URL:
         return False
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = _db_connect()
         try:
             with conn.cursor() as cur:
                 cur.execute(
@@ -363,7 +423,7 @@ def mark_posted_digest(date_str: str, source: str, digest_path: str, message: st
         return False
     message_hash = hashlib.sha256(message.encode("utf-8")).hexdigest() if message else None
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = _db_connect()
         try:
             with conn.cursor() as cur:
                 cur.execute(
@@ -407,7 +467,7 @@ _publisher = Publisher(
     ops_slack_channel_id=OPS_SLACK_CHANNEL_ID,
     disable_preview=True,  # ModelBytes: keep the digest channel clean (no link cards)
     ops_banner="🚨 ModelBytes ops:",
-    secret_values=tuple(s for s in (TELEGRAM_BOT_TOKEN, SLACK_BOT_TOKEN, DATABASE_URL) if s),
+    secret_values=tuple(s for s in (TELEGRAM_BOT_TOKEN, SLACK_BOT_TOKEN, DATABASE_URL, DATABASE_PUBLIC_URL) if s),
 )
 
 
@@ -421,6 +481,8 @@ def _redact_secrets(text: str) -> str:
         out = out.replace(TELEGRAM_BOT_TOKEN, "<token>")
     if DATABASE_URL:
         out = out.replace(DATABASE_URL, "<database-url>")
+    if DATABASE_PUBLIC_URL:
+        out = out.replace(DATABASE_PUBLIC_URL, "<database-url>")
     if SLACK_BOT_TOKEN:
         out = out.replace(SLACK_BOT_TOKEN, "<token>")
     return out
@@ -489,7 +551,7 @@ def record_publish_run(post_date: str, mode: str, status: str,
     if not DATABASE_URL:
         return False
     try:
-        conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
+        conn = _db_connect(connect_timeout=10)
         try:
             with conn.cursor() as cur:
                 if not _publish_runs_ensured:
@@ -521,7 +583,7 @@ def fallback_streak() -> int:
     if not DATABASE_URL:
         return 0
     try:
-        conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
+        conn = _db_connect(connect_timeout=10)
         try:
             with conn.cursor() as cur:
                 cur.execute(
@@ -542,7 +604,7 @@ def load_seen_models() -> Set[str]:
     """Load the set of seen model IDs from Postgres. Empty set without DATABASE_URL."""
     if not DATABASE_URL:
         return set()
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = _db_connect()
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT model_id FROM models")
@@ -555,7 +617,7 @@ def save_seen_models(models: Set[str]):
     """Persist the set of seen model IDs to Postgres. No-op without DATABASE_URL."""
     if not DATABASE_URL or not models:
         return
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = _db_connect()
     try:
         with conn.cursor() as cur:
             cur.executemany(
@@ -1290,9 +1352,9 @@ def is_significant_release(model_id: str, author: str, tags: list,
         "exaone", "k-exaone",
         "anima", "reka-edge", "lyria-",
         "openai/o1", "openai/o3", "anthropic/claude",
-        "wan2", "dramabox", "pixal3d", "agent",
+        "wan2", "wan3", "wan-3", "dramabox", "pixal3d", "agent",
         "longcat", "laguna-", "gigachat",
-        "inkling",
+        "inkling", "sarvam", "muse-",
     ]
     if any(f in model_lower for f in significant_families):
         return True
@@ -1419,7 +1481,7 @@ MAJOR_HF_ORGS = [
     "bosonai", "sapientinc", "SakanaAI",
     "internlm", "meituan-longcat", "poolside", "ai-sage",
     "thinkingmachines", "black-forest-labs",
-    "skt",
+    "skt", "Wan-AI", "sarvamai", "meta-models",
 ]
 
 
@@ -1922,6 +1984,10 @@ LAST_SUMMARY_MODE = "template"
 # The model that actually produced the last digest (None if template). Lets the
 # publisher alert when the primary was unavailable and a fallback model was used.
 LAST_LLM_MODEL = None
+# Why the last failed LLM candidate produced nothing (HTTP error, empty
+# content + finish_reason). Feeds the primary-missed ops alert so
+# "unavailable" is not used for a 200 with thinking-only output (2026-08-17).
+LAST_LLM_FAILURE = None
 # How many entries the last summarize_models() call trimmed for carrying a stale
 # release date. Lets main() send a non-blocking ops note that the writer leaked
 # a stale date and an entry was dropped (2026-07-04 incident).
@@ -2090,17 +2156,67 @@ def _strip_stale_entries(summary: str, today: str = None) -> Tuple[str, int]:
     return _prune_orphaned_tiers(kept), dropped
 
 
-def _call_llm(model: str, prompt: str) -> Optional[str]:
+LLM_MAX_TOKENS = 16000  # 8000 was eaten by deepseek-v4-pro thinking (2026-08-17)
+LLM_MAX_TOKENS_RETRY = 24000
+
+
+def _llm_message_text(msg: dict) -> str:
+    """Visible assistant text. Never use reasoning/thinking fields as the digest."""
+    content = (msg or {}).get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for p in content:
+            if isinstance(p, str):
+                parts.append(p)
+            elif isinstance(p, dict):
+                parts.append(p.get("text") or "")
+        return "\n".join(parts).strip()
+    return ""
+
+
+def _diagnose_empty_llm(model: str, data: dict, choice: dict) -> str:
+    finish = (choice or {}).get("finish_reason") or "?"
+    msg = (choice or {}).get("message") or {}
+    usage = (data or {}).get("usage") or {}
+    reasoning_len = 0
+    for k in ("reasoning", "reasoning_content", "thinking"):
+        v = msg.get(k)
+        if isinstance(v, str):
+            reasoning_len = max(reasoning_len, len(v))
+    bits = [f"empty content, finish_reason={finish}"]
+    ct, pt = usage.get("completion_tokens"), usage.get("prompt_tokens")
+    if ct is not None or pt is not None:
+        bits.append(f"tokens={ct}/{pt}")
+    if reasoning_len:
+        if finish == "length":
+            bits.append(f"reasoning_chars={reasoning_len} (thinking ate the token budget)")
+        else:
+            bits.append(f"reasoning_chars={reasoning_len}")
+    return f"LLM '{model}' " + ", ".join(bits)
+
+
+def _call_llm(model: str, prompt: str, max_tokens: int = None) -> Optional[str]:
     """One chat-completion call against the configured OpenAI-compatible endpoint.
     Returns the stripped content, or None on any failure or empty body — the
-    caller decides whether to try the next model or the template."""
+    caller decides whether to try the next model or the template.
+
+    On empty content with finish_reason=length (reasoning burned the budget),
+    retries once at LLM_MAX_TOKENS_RETRY before giving up (2026-08-17:
+    deepseek-v4-pro HTTP 200 / empty content looked like an outage).
+    """
+    global LAST_LLM_FAILURE
+    if max_tokens is None:
+        max_tokens = LLM_MAX_TOKENS
     try:
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             # Headroom for reasoning models that spend tokens on hidden reasoning
-            # before emitting the digest body (3000 produced empty bodies twice).
-            "max_tokens": 8000,
+            # before emitting the digest body (3000 produced empty bodies twice;
+            # 8000 still wasn't enough on 2026-08-17 for deepseek-v4-pro).
+            "max_tokens": max_tokens,
             "temperature": 0.3,
         }
         headers = {"Authorization": f"Bearer {LLM_API_KEY}",
@@ -2108,10 +2224,34 @@ def _call_llm(model: str, prompt: str) -> Optional[str]:
         resp = requests.post(f"{LLM_BASE_URL}/chat/completions",
                              json=payload, headers=headers, timeout=LLM_TIMEOUT)
         resp.raise_for_status()
-        return (resp.json()["choices"][0]["message"]["content"] or "").strip() or None
-    except Exception as e:
-        print(_redact_secrets(f"LLM '{model}' call failed: {e}"), file=sys.stderr)
+        data = resp.json()
+        choice = (data.get("choices") or [{}])[0]
+        text = _llm_message_text(choice.get("message") or {})
+        if text:
+            if model == LLM_MODEL:
+                LAST_LLM_FAILURE = None  # primary recovered (possibly after retry)
+            return text
+        LAST_LLM_FAILURE = _diagnose_empty_llm(model, data, choice)
+        print(LAST_LLM_FAILURE, file=sys.stderr)
+        if (choice.get("finish_reason") == "length"
+                and max_tokens < LLM_MAX_TOKENS_RETRY):
+            print(f"Retrying '{model}' with max_tokens={LLM_MAX_TOKENS_RETRY} "
+                  "(reasoning likely ate the budget).", file=sys.stderr)
+            return _call_llm(model, prompt, max_tokens=LLM_MAX_TOKENS_RETRY)
         return None
+    except Exception as e:
+        LAST_LLM_FAILURE = _redact_secrets(f"LLM '{model}' call failed: {e}")
+        print(LAST_LLM_FAILURE, file=sys.stderr)
+        return None
+
+
+def _primary_missed_alert(today: str) -> str:
+    """Ops copy when we published with the secondary model. Must say *why*
+    the primary missed — 'unavailable' was a lie on 2026-08-17 (HTTP 200,
+    empty content, thinking consumed max_tokens)."""
+    why = LAST_LLM_FAILURE or "primary returned empty"
+    return (f"Primary LLM '{LLM_MODEL}' missed for {today} — published with "
+            f"'{LAST_LLM_MODEL}'. {why}. Channel still posted.")
 
 
 # Variant-suffix patterns that signal a FINE-TUNE / SFT / data variant of the
@@ -2297,10 +2437,11 @@ def summarize_models(models: List[ModelRelease], web_context: str = "",
     path's freshness engine). recent_names: models already covered in recent
     digests, so the writer doesn't repeat them.
     """
-    global LAST_SUMMARY_MODE, LAST_LLM_MODEL, LAST_STALE_DROPPED
+    global LAST_SUMMARY_MODE, LAST_LLM_MODEL, LAST_STALE_DROPPED, LAST_LLM_FAILURE
     LAST_SUMMARY_MODE = "template"
     LAST_LLM_MODEL = None
     LAST_STALE_DROPPED = 0
+    LAST_LLM_FAILURE = None
     recent_names = recent_names or []
     if not models and not web_context:
         return NO_MODELS_SENTINEL
@@ -3006,9 +3147,7 @@ def main():
         # primary LLM was unavailable and we published with the fallback model,
         # the operator should know so they can update MODELBYTES_LLM_MODEL.
         if LAST_LLM_MODEL and LAST_LLM_MODEL != LLM_MODEL:
-            send_ops_alert(f"Primary LLM '{LLM_MODEL}' unavailable for {today} — "
-                           f"published with fallback model '{LAST_LLM_MODEL}'. "
-                           "Check Ollama Cloud availability / update the primary.")
+            send_ops_alert(_primary_missed_alert(today))
         # Content-drift signal (non-blocking): the writer leaked a stale release
         # date and the per-entry scrub trimmed it, so the digest shipped without
         # tripping the whole-body gate (the 2026-07-04 dark-channel incident).
@@ -3044,13 +3183,129 @@ def main():
     return 0
 
 
+def _crash_site(exc: BaseException) -> str:
+    """Last monitor.py frame, else the last frame of any file. No source text
+    (could contain secrets)."""
+    tb = getattr(exc, "__traceback__", None)
+    if tb is None:
+        return ""
+    frames = traceback.extract_tb(tb)
+    if not frames:
+        return ""
+    chosen = frames[-1]
+    for fr in reversed(frames):
+        if Path(fr.filename).name == "monitor.py":
+            chosen = fr
+            break
+    return f"{Path(chosen.filename).name}:{chosen.lineno} in {chosen.name}"
+
+
+def _crash_where() -> str:
+    """Compact 'where is this process' line. Replica id is set on a live
+    Railway container and typically absent for `railway run` / laptops."""
+    parts = [f"host={socket.gethostname()}"]
+    env = (os.environ.get("RAILWAY_ENVIRONMENT_NAME")
+           or os.environ.get("RAILWAY_ENVIRONMENT") or "")
+    svc = os.environ.get("RAILWAY_SERVICE_NAME") or ""
+    loc = "/".join(p for p in (env, svc) if p)
+    if loc:
+        parts.append(f"railway={loc}")
+    dep = os.environ.get("RAILWAY_DEPLOYMENT_ID") or ""
+    if dep:
+        parts.append(f"deploy={dep[:8]}")
+    replica = os.environ.get("RAILWAY_REPLICA_ID") or ""
+    if replica:
+        parts.append("via=replica")
+    elif env:
+        parts.append("via=railway-run-or-local")
+    return " ".join(parts)
+
+
+def _crash_hint(exc: BaseException) -> str:
+    if _is_private_host_unreachable(exc):
+        return ("*.railway.internal DNS failed — this process is off Railway's "
+                "private network (laptop / Cloud VM `railway run`), not the "
+                "16:00 cron. DATABASE_PUBLIC_URL is the fallback.")
+    return ""
+
+
+def _crash_ledger_note(today: str) -> str:
+    """Best-effort: did today already ship? Must not raise (DB may be why we crashed)."""
+    try:
+        if has_posted_digest(today):
+            return f"ledger: {today} already posted (channel shipped)"
+        return f"ledger: {today} NOT posted — channel is dark"
+    except Exception:
+        return "ledger: could not check posted_digests"
+
+
+def _argv_summary(argv) -> str:
+    parts = []
+    for a in argv or []:
+        parts.append(a if a.startswith("-") else Path(a).name)
+    return " ".join(parts) or "monitor.py"
+
+
+def _format_crash_alert(exc: BaseException, argv=None, now=None) -> str:
+    """Operator-facing crash body: error + site + where + hint + ledger.
+
+    2026-08-13: repr(exc) alone made an off-network DNS failure look like the
+    cron dying. Keep this short enough for a Telegram DM; no source lines,
+    no env dumps (secrets).
+    """
+    now = now or datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    err = _redact_secrets(f"{type(exc).__name__}: {exc}").strip()
+    if len(err) > 400:
+        err = err[:400] + "…"
+    lines = [
+        f"Publisher CRASHED — {now.strftime('%Y-%m-%d %H:%M')} UTC",
+        err,
+    ]
+    site = _crash_site(exc)
+    if site:
+        lines.append(f"at: {site}")
+    lines.append(f"run: {_argv_summary(argv)}")
+    lines.append(f"where: {_crash_where()}")
+    hint = _crash_hint(exc)
+    if hint:
+        lines.append(f"hint: {hint}")
+    lines.append(_crash_ledger_note(today))
+    return "\n".join(lines)
+
+
+def _handle_crash(exc: BaseException, preview: bool, argv=None) -> None:
+    """Ops-alert + heartbeat on a live crash. Preview is side-effect-free.
+
+    2026-08-13: a `railway run … --preview` off the private network crashed
+    in init_database() (postgres.railway.internal DNS). The __main__ handler
+    still DMed the operator — same class as the 2026-06-13 false NO POST
+    alert. Capture `--preview` *before* main() strips it from argv.
+    """
+    body = _format_crash_alert(exc, argv=argv)
+    if preview:
+        print(f"Preview crashed:\n{body}", file=sys.stderr)
+        return
+    send_ops_alert(body)
+    ping_heartbeat(False, f"crash: {_redact_secrets(repr(exc))}")
+    # Audit row is best-effort — the DB may be why we crashed.
+    try:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        record_publish_run(today, "crash", "crashed",
+                           error=_redact_secrets(f"{type(exc).__name__}: {exc}")[:500])
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
+    _preview = "--preview" in sys.argv
+    _argv = list(sys.argv)
     try:
         _rc = main()
     except Exception as _e:
         # A crash anywhere must still reach the operator and the dead-man's
-        # switch — Railway only records the exit code.
-        send_ops_alert(f"Publisher CRASHED: {_e!r}")
-        ping_heartbeat(False, f"crash: {_e!r}")
+        # switch — Railway only records the exit code. Preview is the
+        # exception: it must never page (see _handle_crash).
+        _handle_crash(_e, preview=_preview, argv=_argv)
         raise
     sys.exit(_rc)

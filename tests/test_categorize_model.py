@@ -158,23 +158,29 @@ def test_high_engagement_unknown_other():
     assert monitor.categorize_model(m) == "other"
 
 
-# ---------- sig_org_map ----------
+# ---------- sig_org_map (issue #22) ----------
 
 def test_tencentarc_specialized():
-    """tencentarc is in sig_org_map → specialized (image), regardless of name.
-    sig_org_map relies on the RAW author slug, not the display name."""
-    m_raw = monitor.ModelRelease(
-        name="tencentarc/something",
-        provider="tencentarc",  # raw slug, not display name
-        source="huggingface",
-        url="https://example.com/tencentarc/something",
-        description="",
-        is_open_source=None,
-        unique_traits=[],
-        likes=0,
-        downloads=0,
-    )
-    assert monitor.categorize_model(m_raw) == "specialized"
+    """TencentARC is specialized (image). Lookup must use the HF slug from
+    model.name — production sets provider to the display name 'Tencent ARC',
+    so a slug-keyed map looked up via provider.lower() is dead (issue #22)."""
+    m = _model("TencentARC/something")
+    assert m.provider == "Tencent ARC"
+    assert monitor.categorize_model(m) == "specialized"
+
+
+def test_inclusion_ai_open_frontier_via_resolved_provider():
+    """inclusionAI Ring is OPEN FRONTIER. _resolve_provider yields
+    'Inclusion AI'; the map must still fire from the name slug."""
+    m = _model("inclusionAI/Ring-2.6-1T", is_open_source=True)
+    assert m.provider == "Inclusion AI"
+    assert monitor.categorize_model(m) == "open_frontier"
+
+
+def test_resemble_ai_specialized_via_resolved_provider():
+    m = _model("ResembleAI/chatterbox-nano")
+    assert m.provider == "Resemble AI"
+    assert monitor.categorize_model(m) == "specialized"
 
 
 # ---------- issue #16: Kimi / moonshotai ----------

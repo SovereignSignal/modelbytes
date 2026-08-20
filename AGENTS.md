@@ -16,7 +16,7 @@ mode) posts to Telegram, then exits.
   system Python, which is PEP 668 externally-managed). Python here is 3.12; the
   production `Dockerfile` pins 3.11, but the suite and `--preview` run cleanly on
   3.12.
-- Tests: `venv/bin/python -m pytest tests/ -q` (~198 tests, a few seconds).
+- Tests: `venv/bin/python -m pytest tests/ -q` (~202 tests, a few seconds).
   `tests/conftest.py` zeroes the grace window and blanks all
   network/alert/DB/heartbeat side-effects, so the suite is safe to run even with
   production env vars exported. Keep it green (this repo is TDD — write the
@@ -35,9 +35,22 @@ mode) posts to Telegram, then exits.
   set. For a live end-to-end post you also need `DATABASE_URL` (Postgres) and,
   for editorial quality, the LLM + Parallel.ai keys — see the env var table in
   `README.md`. None of these are required for `--preview` or tests.
+- Production is the Railway project `modelbytes` / service `modelbytes` /
+  environment `production` (cron `0 16 * * *`). Manual trigger runbook:
+  `docs/operations.md` § "Manually triggering a Telegram post".
 - Off-network `railway run` injects `DATABASE_URL` with host
   `postgres.railway.internal`, which does not resolve on this Cloud VM. The
   publisher retries `DATABASE_PUBLIC_URL` on that DNS failure only (auth
   errors still raise). Wire it on the `modelbytes` service as
-  `${{Postgres.DATABASE_PUBLIC_URL}}`. `--preview` crashes must not ops-alert
-  (2026-08-13 false CRASHED page).
+  `${{Postgres.DATABASE_PUBLIC_URL}}`. Do not print that URL. `--preview`
+  crashes must not ops-alert (2026-08-13 false CRASHED page).
+- Manual re-runs should set `MODELBYTES_PENDING_GRACE_SECONDS=0`. The default
+  600s grace window waits for a retired curator `pending/<today>.txt` that
+  will not appear.
+- Idempotency is `posted_digests`, not `publish_runs`. A `blocked` row does
+  not prevent a same-day retry. A `posted` row does — do not live-run twice
+  on a day that already has `telegram_message_id` set.
+- `pending/<YYYY-MM-DD>.txt` is a write-back cache of what was published
+  (feeds the next day's fact-consistency check). After a successful live
+  publish, commit that file to master so the image's cache matches the
+  channel. The publisher writes it locally; it does not auto-push.

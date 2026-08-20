@@ -171,9 +171,10 @@ Public APIs, no authentication required (HF may rate-limit anonymous traffic; no
 
 ## Known follow-ups (not blocking)
 
-- **Broader filter golden tests** — `categorize_model` has regression coverage now, but `is_noise_model()` and `is_significant_release()` still need fixture-based tests before larger taxonomy changes.
+- **Coverage and quality expansion (2026-08-20)** — sequenced plan in [`superpowers/specs/2026-08-20-coverage-and-quality-expansion.md`](./superpowers/specs/2026-08-20-coverage-and-quality-expansion.md): persist published digest bodies, fix HF org casing / `sig_org_map` / `significant_orgs` lag, then add HF Daily Papers + lab feeds. Candidate queue: [`source-candidates.md`](./source-candidates.md).
+- **Broader filter golden tests** — `categorize_model` has regression coverage now, but `is_noise_model()` and `is_significant_release()` still need fixture-based tests before larger taxonomy changes. Tests must use **resolved** provider display names (issue #22).
 - **Filter-list consolidation (audit A12)** — `KNOWN_ORGS`, `MAJOR_HF_ORGS`, `PROVIDER_NAMES`, `significant_families`, and the `categorize_model` tier lists overlap and drift. Consolidation needs the broader golden tests first.
-- **Source growth loop** — the source expansion rubric and candidate queue exist, but the supervisor prompt still needs to be updated to use them automatically.
+- **Source growth loop** — the source expansion rubric and candidate queue exist, but the retired supervisor prompt was never updated to use them. The inline path should log per-source fetch counts instead (`structured-data.md` `source_fetches`).
 
 ## How v2 got here
 

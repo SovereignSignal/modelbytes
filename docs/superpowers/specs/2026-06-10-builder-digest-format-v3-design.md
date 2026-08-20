@@ -87,9 +87,9 @@ hardening pass to keep the publish-critical change reviewable:
   `digest_format.py` so drift breaks a test, not production.
 - **Data-driven fact corrections**: replace the bespoke ZAYA regex with a
   `bad_claim_pattern` field on `ModelFact`, rendered from its stored params.
-- **Fact-consistency history altitude**: read prior digests from the
-  `posted_digests` table (what readers actually saw) instead of the image's
-  possibly-stale `pending/` dir.
+- **Fact-consistency history altitude**: ~~read prior digests from the
+  `posted_digests` table~~ **shipped 2026-08-20** (`posted_digests.body`;
+  `pending/` remains a fallback).
 - **ORG_REGISTRY consolidation** (audit A12): one data module deriving the
   seven org/family lists, supervisor pointed at it only.
 - **DB helper consolidation**: 7 near-identical psycopg2 blocks → one

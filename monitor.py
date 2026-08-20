@@ -374,9 +374,17 @@ def _ensure_posted_digests_table(cur):
             source VARCHAR(50) NOT NULL,
             digest_path TEXT,
             message_hash VARCHAR(64),
+            body TEXT,
             posted_at TIMESTAMPTZ DEFAULT NOW()
         )
     """)
+    # Existing production tables were created without body; ADD COLUMN is
+    # idempotent. The published HTML is what fact-consistency and
+    # already-covered need — the hash alone cannot reconstruct it, and
+    # pending/<date>.txt does not survive the ephemeral Railway cron.
+    cur.execute(
+        "ALTER TABLE posted_digests ADD COLUMN IF NOT EXISTS body TEXT"
+    )
 
 
 def init_posted_digest_store() -> bool:
@@ -426,14 +434,15 @@ def mark_posted_digest(date_str: str, source: str, digest_path: str, message: st
         conn = _db_connect()
         try:
             with conn.cursor() as cur:
+                _ensure_posted_digests_table(cur)
                 cur.execute(
                     """
                     INSERT INTO posted_digests
-                        (post_date, source, digest_path, message_hash)
-                    VALUES (%s, %s, %s, %s)
+                        (post_date, source, digest_path, message_hash, body)
+                    VALUES (%s, %s, %s, %s, %s)
                     ON CONFLICT (post_date) DO NOTHING
                     """,
-                    (date_str, source, digest_path, message_hash),
+                    (date_str, source, digest_path, message_hash, message or None),
                 )
             conn.commit()
             return True
@@ -442,6 +451,78 @@ def mark_posted_digest(date_str: str, source: str, digest_path: str, message: st
     except Exception as e:
         print(f"Could not mark digest posted for {date_str}: {e}", file=sys.stderr)
         return False
+
+
+def _posted_date_str(value) -> str:
+    if hasattr(value, "isoformat"):
+        return value.isoformat()[:10]
+    return str(value)[:10]
+
+
+def load_recent_digest_bodies(today: str = None, days: int = 14) -> List[Tuple[str, str]]:
+    """Published digest HTML from posted_digests, newest first, today excluded.
+
+    Empty list when DATABASE_URL is unset or on any failure — callers fall
+    back to pending/*.txt. Never raises.
+    """
+    if not DATABASE_URL:
+        return []
+    today = today or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        conn = _db_connect()
+        try:
+            with conn.cursor() as cur:
+                _ensure_posted_digests_table(cur)
+                cur.execute(
+                    """
+                    SELECT post_date, body
+                    FROM posted_digests
+                    WHERE body IS NOT NULL AND btrim(body) <> ''
+                      AND post_date <> %s::date
+                    ORDER BY post_date DESC
+                    LIMIT %s
+                    """,
+                    (today, days),
+                )
+                return [
+                    (_posted_date_str(post_date), body)
+                    for post_date, body in cur.fetchall()
+                ]
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"Could not load posted digest bodies: {e}", file=sys.stderr)
+        return []
+
+
+def _digest_history(today: str = None, days: int = 14,
+                    pending_dir: Path = None) -> List[Tuple[str, str]]:
+    """[(date, body), ...] newest first, `today` excluded.
+
+    Postgres posted_digests.body wins for a given date (what readers saw).
+    pending/*.txt fills dates the DB has no body for (baked-in corpus,
+    --preview, tests).
+    """
+    today = today or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    by_date = {}
+    for date_str, body in load_recent_digest_bodies(today=today, days=days):
+        d = str(date_str)[:10]
+        if d == today or not (body or "").strip():
+            continue
+        by_date[d] = body
+    pending_dir = pending_dir or Path("pending")
+    if pending_dir.is_dir():
+        for path in pending_dir.glob("*.txt"):
+            d = path.stem
+            if d == today or d in by_date:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if text.strip():
+                by_date[d] = text
+    return sorted(by_date.items(), reverse=True)[:days]
 
 
 # ── Ops layer: run records, admin alerts, heartbeat ─────────────────────────
@@ -1019,29 +1100,22 @@ def _extract_fact_claims(body: str) -> Tuple[dict, dict]:
 def _check_fact_consistency(body: str, pending_dir: Path = None,
                             today: str = None) -> List[str]:
     """Flag entries whose param claims contradict the MOST RECENT prior figure
-    we published (last 14 files, today's own file excluded) without an explicit
+    we published (last 14 digests, today's own post excluded) without an explicit
     correction marker. Would have caught MiniMax M3 going from 229.9B/9.8B
     (Jun 9, 11) to ~428B/23B (Jun 12) silently.
 
-    Limitation (accepted): history comes from the image's pending/ dir, which
-    can lag master by up to a day; the supervisor's daily auto-commits keep
-    deploys frequent enough in practice."""
-    pending_dir = pending_dir or Path("pending")
-    if not pending_dir.is_dir():
-        return []
+    History prefers posted_digests.body (what readers saw; survives the
+    ephemeral Railway cron). pending/*.txt fills dates the DB has no body for.
+    """
     today = today or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     today_claims, today_blocks = _extract_fact_claims(body)
     if not today_claims:
         return []
     warnings = []
-    history = [p for p in sorted(pending_dir.glob("*.txt"), reverse=True)
-               if p.stem != today][:14]
     resolved = set()  # (name, kind) pairs already judged against the most recent prior
-    for path in history:
-        try:
-            prior, _ = _extract_fact_claims(path.read_text())
-        except OSError:
-            continue
+    for date_str, prior_body in _digest_history(
+            today=today, days=14, pending_dir=pending_dir):
+        prior, _ = _extract_fact_claims(prior_body)
         for name, today_vals in today_claims.items():
             prior_vals = prior.get(name)
             if not prior_vals:
@@ -1058,7 +1132,7 @@ def _check_fact_consistency(body: str, pending_dir: Path = None,
                     if not any(mk in block for mk in _CORRECTION_MARKERS):
                         warnings.append(
                             f"fact drift for {name}: {kind} params {today_v} today "
-                            f"vs {prior_v} in {path.stem} — mark corrections explicitly")
+                            f"vs {prior_v} in {date_str} — mark corrections explicitly")
     return sorted(set(warnings))
 
 
@@ -1996,21 +2070,15 @@ LAST_STALE_DROPPED = 0
 
 def _recent_digest_names(today: str = None, days: int = 10,
                          pending_dir: Path = None) -> List[str]:
-    """Bold entry names from the last `days` pending digests (today excluded),
-    so the writer doesn't repeat a model we already covered — the curator's
-    dedup mechanism, replicated for the inline path."""
-    pending_dir = pending_dir or Path("pending")
-    if not pending_dir.is_dir():
-        return []
-    today = today or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    files = [p for p in sorted(pending_dir.glob("*.txt"), reverse=True)
-             if p.stem != today][:days]
+    """Bold entry names from the last `days` published digests (today excluded),
+    so the writer doesn't repeat a model we already covered.
+
+    Reads posted_digests.body first (durable), then pending/*.txt for dates
+    the DB has no body for.
+    """
     seen, out = set(), []
-    for p in files:
-        try:
-            text = p.read_text()
-        except OSError:
-            continue
+    for _date, text in _digest_history(
+            today=today, days=days, pending_dir=pending_dir):
         for name in _ENTRY_RE.findall(text):
             name = name.strip()
             if name.lower() not in seen:

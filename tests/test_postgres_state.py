@@ -78,6 +78,14 @@ def test_init_database_creates_posted_digests_table():
     assert any("POSTED_DIGESTS" in sql.upper() for sql in sql_strings), (
         f"init_database did not create posted_digests. SQL issued: {sql_strings}"
     )
+    joined = " ".join(sql_strings).upper()
+    assert "BODY" in joined, (
+        "posted_digests schema must include a body column so fact-consistency "
+        "survives the ephemeral Railway cron (2026-08-20 coverage plan)."
+    )
+    assert "ADD COLUMN" in joined, (
+        "existing production tables need ALTER TABLE … ADD COLUMN IF NOT EXISTS body"
+    )
 
 
 def test_has_posted_digest_queries_ledger():
@@ -109,6 +117,40 @@ def test_mark_posted_digest_upserts_ledger():
     sql_strings = _all_sql_issued(mock_cur)
     assert any("INSERT INTO POSTED_DIGESTS" in sql.upper() for sql in sql_strings)
     assert any("ON CONFLICT" in sql.upper() for sql in sql_strings)
+    assert any("BODY" in sql.upper() for sql in sql_strings), (
+        "mark_posted_digest must persist the published body, not just a hash"
+    )
+    inserted_values = []
+    for call in mock_cur.execute.call_args_list:
+        if call.args and "INSERT INTO" in call.args[0].upper():
+            inserted_values.append(call.args[1])
+    assert any(vals and "hello" in vals for vals in inserted_values), (
+        f"published message was not bound on INSERT: {inserted_values}"
+    )
+
+
+def test_load_recent_digest_bodies_returns_rows():
+    mock_cur, mock_conn = _setup_pg_mocks()
+    mock_cur.fetchall.return_value = [
+        ("2026-06-15", "<b>Kimi K2.7 Code</b> — <i>z</i>"),
+        ("2026-06-14", "<b>MiniMax M3</b> — <i>x</i>"),
+    ]
+    with patch.object(monitor, "DATABASE_URL", "postgres://fake"), \
+         patch.object(monitor.psycopg2, "connect", return_value=mock_conn):
+        rows = monitor.load_recent_digest_bodies(today="2026-06-16", days=14)
+
+    assert rows[0][0].startswith("2026-06-15")
+    assert "Kimi K2.7 Code" in rows[0][1]
+    sql = " ".join(_all_sql_issued(mock_cur)).upper()
+    assert "FROM POSTED_DIGESTS" in sql
+    assert "BODY" in sql
+
+
+def test_load_recent_digest_bodies_noop_without_database_url():
+    with patch.object(monitor, "DATABASE_URL", ""), \
+         patch.object(monitor.psycopg2, "connect") as mock_connect:
+        assert monitor.load_recent_digest_bodies(today="2026-06-16") == []
+    assert not mock_connect.called
 
 
 def test_db_connect_falls_back_to_public_url_on_internal_dns_failure():

@@ -145,7 +145,7 @@ The publisher tells on itself. Every run lands a `publish_runs` row and routes a
 
 - **PostgreSQL** — three implemented tables:
   - `models` — the dedup set used by `monitor.py`'s fallback path. `load_seen_models()` / `save_seen_models()` use `INSERT … ON CONFLICT DO NOTHING` (no DELETE-and-rebuild — that was an audit A5 fix in Phase 2b).
-  - `posted_digests` — one row per posted UTC date so publisher reruns are idempotent (`post_date` / `source` / `digest_path` / `message_hash` / `posted_at`).
+  - `posted_digests` — one row per posted UTC date so publisher reruns are idempotent (`post_date` / `source` / `digest_path` / `message_hash` / `body` / `posted_at`). `body` is the published HTML; fact-consistency and already-covered read it first, then fall back to `pending/*.txt`.
   - `publish_runs` — one audit row per run (`run_at` / `post_date` / `mode` / `status` / `models_found` / `models_emitted` / `message_chars` / `telegram_message_id` / `slack_ok` / `error`); powers `fallback_streak()` and the disabled health routine's eventual receipt-based replacement.
 - **GitHub master** — pending and committed config state. The curator's daily output lives at `pending/<TODAY>.txt`. The supervisor's commits to monitor.py's constants accumulate over time. The `.supervisor-bootstrapped` marker controls supervisor authority.
 
@@ -154,7 +154,7 @@ The publisher tells on itself. Every run lands a `publish_runs` row and routes a
 The production design keeps durable operational state in Postgres, not scattered external notes. Current implemented tables:
 
 - `models` — deduplication memory for fetched model IDs.
-- `posted_digests` — one row per posted UTC date for idempotency.
+- `posted_digests` — one row per posted UTC date for idempotency, plus the published `body` for cross-day checks.
 - `publish_runs` — one audit row per publisher run (mode/status/counts/`telegram_message_id`/`slack_ok`/error); see [Ops / observability](#ops--observability-added-2026-06-12).
 
 Recommended next tables are described in [`structured-data.md`](./structured-data.md): per-source fetch summaries, health checks, supervisor decisions, and source candidates. The Claude routine prompts should be updated to write or propose changes against those structured records rather than external note pages.
@@ -171,7 +171,7 @@ Public APIs, no authentication required (HF may rate-limit anonymous traffic; no
 
 ## Known follow-ups (not blocking)
 
-- **Coverage and quality expansion (2026-08-20)** — sequenced plan in [`superpowers/specs/2026-08-20-coverage-and-quality-expansion.md`](./superpowers/specs/2026-08-20-coverage-and-quality-expansion.md): persist published digest bodies, fix HF org casing / `sig_org_map` / `significant_orgs` lag, then add HF Daily Papers + lab feeds. Candidate queue: [`source-candidates.md`](./source-candidates.md).
+- **Coverage and quality expansion (2026-08-20)** — sequenced plan in [`superpowers/specs/2026-08-20-coverage-and-quality-expansion.md`](./superpowers/specs/2026-08-20-coverage-and-quality-expansion.md). **Shipped:** persist published digest bodies on `posted_digests.body`. Still open: HF org casing / `sig_org_map` / `significant_orgs` lag, then HF Daily Papers + lab feeds. Candidate queue: [`source-candidates.md`](./source-candidates.md).
 - **Broader filter golden tests** — `categorize_model` has regression coverage now, but `is_noise_model()` and `is_significant_release()` still need fixture-based tests before larger taxonomy changes. Tests must use **resolved** provider display names (issue #22).
 - **Filter-list consolidation (audit A12)** — `KNOWN_ORGS`, `MAJOR_HF_ORGS`, `PROVIDER_NAMES`, `significant_families`, and the `categorize_model` tier lists overlap and drift. Consolidation needs the broader golden tests first.
 - **Source growth loop** — the source expansion rubric and candidate queue exist, but the retired supervisor prompt was never updated to use them. The inline path should log per-source fetch counts instead (`structured-data.md` `source_fetches`).

@@ -1400,7 +1400,6 @@ def is_significant_release(model_id: str, author: str, tags: list,
                            downloads: int = 0) -> bool:
     """Check if this is a significant release worth reporting."""
     model_lower = model_id.lower()
-    author_lower = (author or "").lower()
 
     significant_families = [
         "llama-", "llama2-", "llama3", "llama4", "llama-4",
@@ -1433,13 +1432,11 @@ def is_significant_release(model_id: str, author: str, tags: list,
     if any(f in model_lower for f in significant_families):
         return True
 
-    significant_orgs = ["meta-llama", "mistralai", "alibaba", "qwen", "google",
-                        "deepseek-ai", "deepseek", "anthropic", "openai", "x-ai",
-                        "z-ai", "zai-org", "arcee-ai", "nvidia", "microsoft",
-                        "minimaxai", "openbmb", "netflix", "k2-fsa",
-                        "xiaomi", "rekaai", "baai", "tencentarc",
-                        "resembleai", "adskailab", "open-thoughts"]
-    if author_lower in significant_orgs:
+    # KNOWN_ORGS is the significance list. A parallel significant_orgs subset
+    # lagged every supervisor org add (issue #15): Cohere / poolside /
+    # sapientinc / inclusionAI day-one releases needed 100k downloads to rank.
+    author_key = (author or "").lower().split("/")[0].lstrip("~")
+    if author_key in KNOWN_ORGS:
         return True
 
     if downloads and downloads >= 100000:
@@ -1543,10 +1540,9 @@ def fetch_ollama_models() -> List[ModelRelease]:
 MAJOR_HF_ORGS = [
     "deepseek-ai", "meta-llama", "mistralai", "Qwen", "google",
     "anthropic", "openai", "nvidia", "microsoft", "x-ai",
-    "z-ai", "zai-org", "arcee-ai", "openbmb", "minimaxai",
-    "NousResearch", "tiiuae", "01-ai", "baai", "xiaomi",
-    "moonshotai", "bytedance-seed", "bytedance-research", "inclusionai", "ibm",
-    "MiniMaxAI",
+    "z-ai", "zai-org", "arcee-ai", "openbmb", "MiniMaxAI",
+    "NousResearch", "tiiuae", "01-ai", "BAAI", "xiaomi",
+    "moonshotai", "ByteDance-Seed", "bytedance-research", "inclusionAI", "ibm",
     "allenai", "amazon", "perplexity-ai", "stabilityai",
     "HiDream-ai", "SulphurAI", "Zyphra",
     "circlestone-labs", "Hcompany", "Supertone",
@@ -1906,14 +1902,19 @@ def categorize_model(model: ModelRelease) -> str:
         return "specialized"
     if any(a in name for a in audio):
         return "specialized"
-    # Known significant orgs always get meaningful categorization
+    # Known significant orgs always get meaningful categorization.
+    # Key by the HF/OpenRouter slug from model.name — production sets
+    # provider to the PROVIDER_NAMES display string ("Tencent ARC"), so a
+    # slug-keyed lookup on provider.lower() never fired (issue #22).
+    name_org = ""
+    if "/" in (model.name or ""):
+        name_org = model.name.split("/", 1)[0].lower().lstrip("~")
     sig_org_map = {"tencentarc": "specialized", "resembleai": "specialized",
                    "adskailab": "other", "open-thoughts": "specialized",
                    "deepseek-ai": "open_frontier", "inclusionai": "open_frontier",
                    "moonshotai": "open_frontier"}
-    if provider in sig_org_map:
-        cat = sig_org_map[provider]
-        return cat
+    if name_org in sig_org_map:
+        return sig_org_map[name_org]
     if model.source == "ollama":
         return "local"
     # Give high-engagement unknown orgs a shot at being shown

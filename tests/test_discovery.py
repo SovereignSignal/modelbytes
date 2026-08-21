@@ -115,6 +115,8 @@ def test_web_context_and_avoid_reach_the_prompt(monkeypatch):
     prompt = captured["json"]["messages"][0]["content"]
     assert "FRESH WEB RESEARCH" in prompt and "New Thing" in prompt
     assert "ALREADY COVERED" in prompt and "Old Model A" in prompt
+    assert "omit that model entirely" in prompt
+    assert "Take line" in prompt
 
 
 def test_summarize_returns_nothing_when_no_models_and_no_web():

@@ -2067,6 +2067,11 @@ LAST_LLM_FAILURE = None
 # release date. Lets main() send a non-blocking ops note that the writer leaked
 # a stale date and an entry was dropped (2026-07-04 incident).
 LAST_STALE_DROPPED = 0
+# Display labels for those entries ("Shieldstral (2026-08-04)") so the ops
+# note names what was trimmed — a count-only alert is a forensic session
+# (2026-08-21: take still mentioned a 3B safety classifier; Railway logs
+# only said "Dropped 1").
+LAST_STALE_DROPPED_NAMES: List[str] = []
 
 
 def _recent_digest_names(today: str = None, days: int = 10,
@@ -2204,7 +2209,18 @@ def _prune_orphaned_tiers(lines: List[str]) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
 
 
-def _strip_stale_entries(summary: str, today: str = None) -> Tuple[str, int]:
+def _stale_drop_label(line: str, today: str = None) -> str:
+    """Human label for a stale-scrubbed entry: 'Name (YYYY-MM-DD)'."""
+    m = _ENTRY_RE.search(line)
+    name = (m.group(1).strip() if m else "") or "unnamed entry"
+    stale_dates = [d for d in _loose_release_dates(line, today=today)
+                   if is_stale_release(d, today=today)]
+    if stale_dates:
+        return f"{name} ({stale_dates[0]})"
+    return name
+
+
+def _strip_stale_entries(summary: str, today: str = None) -> Tuple[str, List[str]]:
     """Drop any single entry line carrying a release date too old to be "new
     today", then prune orphaned tier headers. This is the per-entry counterpart
     to the whole-body stale-release gate: it reuses the SAME parser
@@ -2213,13 +2229,15 @@ def _strip_stale_entries(summary: str, today: str = None) -> Tuple[str, int]:
     granularity first. One hallucinated date (from an undated web source or the
     writer's own knowledge) therefore trims a single entry instead of taking the
     whole digest dark (the 2026-07-04 incident). The gate stays as the backstop
-    for a stale date that lands outside an entry line. Returns (cleaned, count).
+    for a stale date that lands outside an entry line. Returns (cleaned, labels)
+    where labels are 'Name (YYYY-MM-DD)' so the ops note can name the trim
+    (2026-08-21: count-only alert left the operator guessing).
     """
-    kept, dropped = [], 0
+    kept, dropped = [], []
     for line in summary.split("\n"):
         if any(is_stale_release(d, today=today)
                for d in _loose_release_dates(line, today=today)):
-            dropped += 1
+            dropped.append(_stale_drop_label(line, today=today))
             continue
         kept.append(line)
     return _prune_orphaned_tiers(kept), dropped
@@ -2507,9 +2525,11 @@ def summarize_models(models: List[ModelRelease], web_context: str = "",
     digests, so the writer doesn't repeat them.
     """
     global LAST_SUMMARY_MODE, LAST_LLM_MODEL, LAST_STALE_DROPPED, LAST_LLM_FAILURE
+    global LAST_STALE_DROPPED_NAMES
     LAST_SUMMARY_MODE = "template"
     LAST_LLM_MODEL = None
     LAST_STALE_DROPPED = 0
+    LAST_STALE_DROPPED_NAMES = []
     LAST_LLM_FAILURE = None
     recent_names = recent_names or []
     if not models and not web_context:
@@ -2617,6 +2637,7 @@ RULES:
 - Do NOT write a totals/count line; it is appended automatically.
 - Technical and direct, no hype
 - Prefer genuinely-NEW models (released/updated in the last ~10 days). The web research below is your freshness source; the fetched catalog may be mostly already-seen.
+- Never write a release date older than 10 days. If the only date you have is older, omit that model entirely — do not mention it in the Take line either. A weekly roundup that recaps last month's release is not today's news.
 {avoid_block}{web_block}
 Candidate models from our fetchers (may be sparse or already-covered — the web research above is primary for freshness):
 {chr(10).join(info) if info else "(none from fetchers today — build the digest from the web research above)"}"""
@@ -2666,18 +2687,19 @@ Candidate models from our fetchers (may be sparse or already-covered — the web
     # stale line trims a single entry instead of tripping the whole-body gate
     # and taking the digest dark (the 2026-07-04 incident). The gate remains the
     # backstop for a stale date outside an entry line.
-    summary, stale_dropped = _strip_stale_entries(summary)
-    LAST_STALE_DROPPED = stale_dropped
-    if stale_dropped:
-        print(f"Dropped {stale_dropped} entr(y/ies) with a stale release date.",
-              file=sys.stderr)
+    summary, stale_names = _strip_stale_entries(summary)
+    LAST_STALE_DROPPED = len(stale_names)
+    LAST_STALE_DROPPED_NAMES = stale_names
+    if stale_names:
+        print(f"Dropped {len(stale_names)} entr(y/ies) with a stale release date: "
+              f"{', '.join(stale_names)}.", file=sys.stderr)
     if not summary.strip() or not re.search(_ENTRY_GRAMMAR, summary):
         # Distinguish "writer wrote entries, verification stripped them all" from
         # "writer wrote none" — otherwise a no-post day is a forensic session
         # (the 2026-07-12 investigation). The breakdown makes it a one-glance read.
         print(f"No entries survived verification (writer produced {n_written} "
               f"entr(y/ies); link-scrub dropped {dropped}, stale-scrub dropped "
-              f"{stale_dropped}) — falling back to template", file=sys.stderr)
+              f"{len(stale_names)}) — falling back to template", file=sys.stderr)
         return build_digest_message(models)
     header = f"🤖 <b>ModelBytes Digest</b>\n<i>{datetime.now(timezone.utc).strftime('%A, %B %d, %Y')}</i>"
     # Honest footer: how many we actually surfaced vs how many we scanned.
@@ -3223,9 +3245,11 @@ def main():
         # Worth knowing — a recurring trim points at a bad web source or model
         # drift — but never a reason to block the post.
         if LAST_STALE_DROPPED:
+            who = (": " + ", ".join(LAST_STALE_DROPPED_NAMES)
+                   if LAST_STALE_DROPPED_NAMES else "")
             send_ops_alert(f"Trimmed {LAST_STALE_DROPPED} stale-dated "
                            f"entr{'y' if LAST_STALE_DROPPED == 1 else 'ies'} from "
-                           f"today's digest ({today}) before publishing — the "
+                           f"today's digest ({today}){who} before publishing — the "
                            "writer emitted a release date outside the freshness "
                            "window. Published the rest.")
         if not INLINE_PRIMARY:

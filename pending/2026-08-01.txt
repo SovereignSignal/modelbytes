@@ -1,0 +1,9 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Saturday, August 01, 2026</i>
+
+<i>Open-weight models are now matching or beating proprietary giants in both general reasoning and code, giving builders a clear path to avoid vendor lock-in without sacrificing capability.</i>
+
+━━━ <b>CLOSED FRONTIER</b> 🔒
+<b>GPT-5.6 Sol</b> — <i>OpenAI's latest flagship with text+vision, high-tier API, proprietary.</i> ⚡ API live · OpenAI. <a href="https://sqmagazine.co.uk/openai-launches-gpt-5-6-sol-new-ai-features/">→ Source</a>
+
+📊 Surfaced 1 · scanned 0 today

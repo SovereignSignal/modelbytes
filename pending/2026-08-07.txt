@@ -1,0 +1,14 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Friday, August 07, 2026</i>
+
+Take: <i>Today's releases push frontier intelligence toward lower price points and open access, with MIT-licensed DeepSeek V4 Flash, a free Ling 3.0 Tiny MoE, and Claude Opus 5 at half the cost of Fable.</i>
+
+━━━ <b>OPEN FRONTIER</b> 🔓
+<b>DeepSeek V4 Flash 0731</b> — <i>Cost-efficient reasoning model under MIT license, priced at $0.14 per million input tokens.</i> MIT license. ⚡ API live · $0.14/M input. <a href="https://aitoolsrecap.com/Blog/upcoming-ai-models-2026-release-tracker">→ Source</a>
+
+━━━ <b>CLOSED FRONTIER</b> 🔒
+<b>Claude Opus 5</b> — <i>Thoughtful, proactive model that approaches Claude Fable 5’s frontier intelligence at half the price.</i> Released Jul 24. ⚡ API live. <a href="https://www.anthropic.com/news/claude-opus-5">→ Source</a>
+
+<b>Ling 3.0 Tiny</b> — <i>Free mixture-of-experts model with 1.3B active parameters (7.9B total) and 262k context window.</i> 1.3B active / 7.9B total params, 262k context. ⚡ API live · OpenRouter (free). <a href="https://openrouter.ai/models/inclusionai/ling-3.0-tiny:free">→ Source</a>
+
+📊 Surfaced 3 · scanned 1 today

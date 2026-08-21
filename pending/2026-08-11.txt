@@ -1,0 +1,19 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Tuesday, August 11, 2026</i>
+
+<i>Today’s models lean into efficiency and specialization: open MoE, domain-tuned reasoning, and agentic LLMs let builders assemble cheaper, task-specific pipelines without sacrificing capability.</i>
+
+━━━ <b>OPEN FRONTIER</b> 🔓
+<b>Nemotron 3.5 Lightning</b> — <i>NVIDIA's open mixture-of-experts model with 3B active parameters out of 30B total, delivering a 1M context window for free.</i> Released Aug 11 · 3B active / 30B total · 1M context · free. ⚡ API live · OpenRouter. <a href="https://openrouter.ai/models/nvidia/nemotron-3.5-lightning:free">→ Source</a>
+
+━━━ <b>CLOSED FRONTIER</b> 🔒
+<b>Claude Opus 5</b> — <i>Anthropic's latest flagship model, expected to advance reasoning and agentic performance.</i> ⚡ API live. <a href="https://llm-stats.com/llm-updates">→ Source</a>
+<b>Gemini 3.5 Flash Cyber</b> — <i>Google's Gemini Flash variant tuned for cybersecurity tasks.</i> ⚡ API live. <a href="https://llm-stats.com/llm-updates">→ Source</a>
+<b>DeepSeek V4 Flash 0731</b> — <i>DeepSeek's fast inference model, optimized for cost-effective throughput.</i> ⚡ API live. <a href="https://llm-stats.com/llm-updates">→ Source</a>
+<b>Solar Pro 4</b> — <i>Upstage's LLM for agentic workflows, document-intensive tasks, and coding, with a 524k context window at $0.03/$0.12 per 1M tokens.</i> Released Aug 10 · 524k context · $0.03/$0.12 per 1M. ⚡ API live · OpenRouter. <a href="https://openrouter.ai/models/upstage/solar-pro4">→ Source</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+<b>Sakana Namazu</b> — <i>Japanese-specialized reasoning model based on Kimi K2.6, fine-tuned for business contexts, with 262k context.</i> Released Aug 11 · 262k context · $0.95/$4.00 per 1M. ⚡ API live · OpenRouter. <a href="https://openrouter.ai/models/sakana/sakana-namazu">→ Source</a>
+<b>FLUX 3</b> — <i>Multimodal flow model for video, image, and audio generation, released as open weights.</i> Released Jul 31. 📦 Open weights. <a href="https://bfl.ai/blog/flux-3">→ Source</a>
+
+📊 Surfaced 7 · scanned 5 today

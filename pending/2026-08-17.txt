@@ -1,0 +1,20 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Monday, August 17, 2026</i>
+
+Today's batch shows a surge of open‑weight, domain‑specific models aimed at safety, security and visual tasks.
+
+━━━ <b>OPEN FRONTIER</b> 🔓  
+<b>Qwen 3.8 27B</b> — <i>27B uncensored LLM released with full weight access, targeting aggressive generation.</i> 27B params. 📦 Open weights. <a href="https://www.orcarouter.ai/blog/qwen-3-8-27b-release-date">→ Source</a>
+
+━━━ <b>SPECIALIZED</b> 🎯  
+<b>Shieldstral</b> — <i>3B open‑weights multimodal safety classifier that outperforms models up to 7× its size.</i> 3B params. 📦 Open weights. <a href="https://mistral.ai/news/shieldstral/">→ Source</a>  
+
+<b>Antares</b> — <i>Highly efficient open‑weight models for vulnerability localization, cutting compute needs dramatically.</i> 📦 Open weights. <a href="https://blogs.cisco.com/ai/introducing-antares-the-most-efficient-open-weight-ai-models-for-vulnerability-localization">→ Source</a>  
+
+<b>Muse Glimmer</b> — <i>30B image‑text‑to‑text model optimized for single‑GPU agentic tasks on consumer hardware.</i> 30B params. Apache‑2.0 license. 📦 Open weights · HF. <a href="https://huggingface.co/meta-models/Muse-Glimmer-30B-ExecuTorch-PTE">→ Source</a>  
+
+<b>Wan2.2 Animate 2 14B Diffusers</b> — <i>14B diffusion model for high‑quality animation generation.</i> 14B params. Apache‑2.0 license. 📦 Open weights · HF. <a href="https://huggingface.co/Wan-AI/Wan2.2-Animate-2-14B-Diffusers">→ Source</a>  
+
+<b>EVIE Preview 4.5B</b> — <i>4.5B visual‑document‑retrieval model for fast multimodal search.</i> 4.5B params. Apache‑2.0 license. 📦 Open weights · HF. <a href="https://huggingface.co/tencent/EVIE-Preview-4.5B">→ Source</a>
+
+📊 Surfaced 6 · scanned 3 today

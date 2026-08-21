@@ -1,0 +1,16 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Friday, August 21, 2026</i>
+
+<i>Open-weight multimodal and coding models are closing the gap with closed frontier while a 3B safety classifier makes moderation cheap — builders can now assemble vision, coding, and safety from open components without API lock-in.</i>
+
+━━━ <b>OPEN FRONTIER</b> 🔓
+<b>GLM-5.3</b> — <i>Post-training-only upgrade on the 743B GLM-5.2 base claims a 50% coding jump and top open Terminal-Bench scores.</i> 743B total params · open weights · Released Aug 14. 📦 Open weights. <a href="https://www.oflight.co.jp/en/columns/glm-5-3-zai-open-weights-coding-2026">→ Source</a>
+
+<b>DeepSeek V4 Flash Vision Exp</b> — <i>Experimental vision-enabled V4 Flash matches text performance and closes most of the gap to Opus-4.8 on multimodal agent tasks.</i> 284B total / 13B active · 1M context · MIT · $0.22/$0.66 per 1M · Released Aug 21. ⚡ API live · OpenRouter. <a href="https://openrouter.ai/models/deepseek/deepseek-v4-flash-vision-exp">→ Source</a>
+
+<b>Ling 3.0 Flash Base</b> — <i>127.5B open-weights text-generation base model under MIT, a clean pretrained foundation for further tuning.</i> 127.5B total params · MIT · Released Aug 11. 📦 Open weights · HF. <a href="https://huggingface.co/inclusionAI/Ling-3.0-flash-base">→ Source</a>
+
+━━━ <b>CLOSED FRONTIER</b> 🔒
+<b>Ox Alpha</b> — <i>Reasoning model built for coding, sustained agentic work, and production workloads with a 1M-token context.</i> 1M context · Closed/API · Free · Released Aug 20. ⚡ API live · OpenRouter. <a href="https://openrouter.ai/models/stealth/ox-alpha">→ Source</a>
+
+📊 Surfaced 4 · scanned 10 today

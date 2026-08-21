@@ -1,0 +1,14 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Wednesday, August 12, 2026</i>
+
+<i>Today's releases push compact, agentic, and multimodal capabilities into smaller, cheaper packages — builders can now pair a frontier coding model with a free reasoning engine and a 2.5B vision model for end-to-end workflows.</i>
+
+━━━ <b>CLOSED FRONTIER</b> 🔒
+<b>Grok 4.6</b> — <i>SpaceXAI's smartest model, tuned for coding, knowledge work, and STEM with a 500k context window.</i> Released Aug 12 · 500k context · Closed/API · $2.00/$6.00 per 1M. ⚡ API live · OpenRouter. <a href="https://openrouter.ai/models/x-ai/grok-4.6">→ Source</a>
+<b>Seed 2.1 Turbo</b> — <i>Multimodal model optimized for end-to-end software delivery and multi-step agent workflows.</i> Released Aug 10 · 262k context · Closed/API · $0.50/$2.50 per 1M. ⚡ API live · OpenRouter. <a href="https://openrouter.ai/models/bytedance-seed/seed-2-1-turbo">→ Source</a>
+<b>LFM 2.5 2.6B</b> — <i>Compact reasoning model for agent workflows, data extraction, and RAG, free on OpenRouter.</i> Released Aug 11 · 128k context · Closed/API · FREE. ⚡ API live · OpenRouter. <a href="https://openrouter.ai/models/liquid/lfm-2.5-2.6b:free">→ Source</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+<b>North Micro Vision Instruct</b> — <i>2.5B vision model under Apache 2.0, bringing image understanding to resource-constrained environments.</i> Released Aug 10 · 2.5B total params · Apache 2.0. 📦 Open weights · HF. <a href="https://huggingface.co/CohereLabs/North-Micro-Vision-Instruct">→ Source</a>
+
+📊 Surfaced 4 · scanned 7 today

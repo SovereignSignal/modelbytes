@@ -1,0 +1,18 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Wednesday, August 05, 2026</i>
+
+<i>Today’s releases signal that open-weight models are becoming the default distribution strategy, with even OpenAI and Alibaba shifting toward accessibility over walled gardens.</i>
+
+━━━ <b>OPEN FRONTIER</b> 🔓
+<b>GPT-oss</b> — <i>OpenAI’s first open-weight model in five years, shipping in 120B and 20B sizes, with Sam Altman calling it the “best and most usable open model.”</i> 120B and 20B versions, open weights. 📦 Open weights. <a href="https://www.businessinsider.com/openai-gpt-oss-open-weight-llm-ai-model-2025-8">→ Source</a>
+
+━━━ <b>CLOSED FRONTIER</b> 🔒
+<b>Qwen3.8 Max</b> — <i>Now widely accessible via API ahead of its open-weights release; a 2.4T-param MoE with native multimodal and long-horizon agentic capabilities.</i> 2.4T total parameters (MoE). ⚡ API live. <a href="https://www.scmp.com/tech/article/3362738/alibabas-ai-model-qwen38-max-made-widely-accessible-ahead-open-weights-release">→ Source</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+<b>Shieldstral</b> — <i>3B open-weights multimodal safety classifier that frames moderation as policy-adaptive, outperforming models up to 7× its size.</i> 3B params, open weights. 📦 Open weights. <a href="https://mistral.ai/news/shieldstral/">→ Source</a>
+
+━━━ <b>LOCAL</b> 🏠
+<b>LFM 2.5 2.6B</b> — <i>Liquid AI’s latest small language model, a 2.6B-param text generator designed for efficient on-device deployment.</i> 2.6B total params. 📦 Open weights · HF. <a href="https://huggingface.co/LiquidAI/LFM2.5-2.6B">→ Source</a>
+
+📊 Surfaced 4 · scanned 1 today

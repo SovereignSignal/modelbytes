@@ -1,0 +1,16 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Saturday, August 15, 2026</i>
+
+<i>Today's pattern: open-weight teacher models and a free MoE preview give builders distillation sources and a zero-cost 512k-context option.</i>
+
+━━━ <b>OPEN FRONTIER</b> 🔓
+<b>Dots 3 Note Preview</b> — <i>Lightest Dots 3 family MoE, free preview with 512k context.</i> Released Aug 14, 16B active / 280B total, 512k context, free. ⚡ API live · OpenRouter. <a href="https://openrouter.ai/models/dots-studio/dots-3-note-preview:free">→ Source</a>
+
+<b>Nemotron 3.5 Lightning</b> — <i>Open-source 30B MoE with 3B active for efficient inference.</i> Released Aug 11, 30B total, 3B active, open source. 📦 Open weights. <a href="https://llm-stats.com/llm-updates">→ Source</a>
+
+<b>NVIDIA Nemotron Labs Teacher STEM</b> — <i>560.5B teacher model for STEM distillation.</i> Released Aug 14, 560.5B params. 📦 Open weights · HF. <a href="https://huggingface.co/nvidia/NVIDIA-Nemotron-Labs-Teacher-STEM">→ Source</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+<b>NVIDIA Nemotron Labs Teacher Competition Coding</b> — <i>560.5B teacher model tuned for competitive coding.</i> Released Aug 14, 560.5B params. 📦 Open weights · HF. <a href="https://huggingface.co/nvidia/NVIDIA-Nemotron-Labs-Teacher-Competition-Coding">→ Source</a>
+
+📊 Surfaced 4 · scanned 8 today

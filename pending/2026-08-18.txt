@@ -1,0 +1,21 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Tuesday, August 18, 2026</i>
+
+<i>Open-weight releases are compressing frontier capability into smaller, task-specific packages this week — builders get coding, multimodal safety, and UI understanding without the closed API tax.</i>
+
+━━━ <b>OPEN FRONTIER</b> 🔓
+<b>Muse Glimmer</b> — <i>Meta's smaller open-weight model, positioned as a lightweight alternative to larger rivals.</i> Released Aug 10. 📦 Open weights. <a href="https://www.reuters.com/world/china/meta-launches-new-ai-model-zuckerberg-champions-open-weight-push-2026-08-10/">→ Source</a>
+
+<b>Qwen 3.8 27B</b> — <i>Latest Qwen release.</i> 27B params. Released Aug 14. 📦 Open weights. <a href="https://aireleasetracker.com/latest">→ Source</a>
+
+━━━ <b>CLOSED FRONTIER</b> 🔒
+<b>Gemini 3.7 Flash</b> — <i>Google's newest Flash-tier model, iterating on speed and cost.</i> Released Aug 13. ⚡ API live. <a href="https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-3-7-flash/">→ Source</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+<b>Shieldstral 1.0 3B</b> — <i>Open-weights policy-adaptive multimodal safety classifier matching models 7× its size.</i> 3B params, open weights. Released Aug 7. 📦 Open weights. <a href="https://www.marktechpost.com/2026/08/07/mistral-ai-releases-shieldstral-1-0-3b/">→ Source</a>
+
+<b>UI-Mate 27B</b> — <i>Image-text-to-text model for UI understanding.</i> 27B params, Apache-2.0. Released Aug 14. 📦 Open weights · HF. <a href="https://huggingface.co/tencent/UI-Mate-27B">→ Source</a>
+
+<b>UI-Mate 9B</b> — <i>Smaller image-text-to-text model for UI understanding.</i> 9B params, Apache-2.0. Released Aug 14. 📦 Open weights · HF. <a href="https://huggingface.co/tencent/UI-Mate-9B">→ Source</a>
+
+📊 Surfaced 6 · scanned 2 today

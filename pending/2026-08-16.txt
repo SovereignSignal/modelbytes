@@ -1,0 +1,12 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Sunday, August 16, 2026</i>
+
+━━━ <b>OPEN FRONTIER</b> 🔓
+
+<b>Qwen3.8-27B-XYZ</b>
+  ML model...
+  Released: 2026-08-14 | License: apache-2.0 | Params: 27B
+  📦 Open weights · HF
+  <a href="https://huggingface.co/quimmedes/Qwen3.8-27B-XYZ">→ Source</a>
+
+Total: 1 items tracked today

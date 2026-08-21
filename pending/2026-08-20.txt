@@ -1,0 +1,14 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Thursday, August 20, 2026</i>
+
+Today's releases are narrow: Tencent ships two translation-specific APIs while Z.Ai iterates GLM with a Turbo variant, so builders get cheaper specialized calls rather than a new general frontier.
+
+━━━ <b>CLOSED FRONTIER</b> 🔒
+<b>GLM-5.2 Turbo</b> — <a href="http://Z.AI/"><i>Z.AI</i></a><i>'s faster GLM-5.2 variant, released Aug 17.</i> Released Aug 17. <a href="https://llmgateway.io/timeline">→ Source</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+<b>Hy-MT2 1.8B</b> — <i>Compact translation model covering 33 language pairs plus five Chinese dialect and minority-language pairs.</i> Released Aug 20 · 8k context · Closed/API · $0.04/$0.18 per 1M tokens. ⚡ API live · OpenRouter. <a href="https://openrouter.ai/models/tencent/hy-mt2-1.8b">→ Source</a>
+
+<b>Hy-MT2 30B A3B</b> — <i>Tencent's flagship translation model with the same 33+5 language coverage and structured workflows.</i> Released Aug 20 · 8k context · Closed/API · $0.07/$0.29 per 1M tokens. ⚡ API live · OpenRouter. <a href="https://openrouter.ai/models/tencent/hy-mt2-30b-a3b">→ Source</a>
+
+📊 Surfaced 3 · scanned 3 today

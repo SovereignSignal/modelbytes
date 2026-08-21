@@ -1,0 +1,20 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Friday, August 14, 2026</i>
+
+Today’s releases pair open-weight agentic models with new safety classifiers and multimodal flash models, giving builders both the raw components and the guardrails to ship compound AI systems faster.
+
+━━━ <b>OPEN FRONTIER</b> 🔓
+<b>Qwen3.8 27B</b> — <i>Multimodal image-text-to-text model under Apache 2.0, ready for vision-grounded reasoning and agentic pipelines.</i> 27B params, Apache 2.0. Released Aug 14. 📦 Open weights · HF. <a href="https://huggingface.co/Qwen/Qwen3.8-27B">→ Source</a>
+<b>Muse Glimmer</b> — <i>Meta’s 30B agentic model released under Apache 2.0, built for tool use and multi-step tasks at a smaller scale than leading models.</i> 30B params, Apache 2.0. Released Aug 10. 📦 Open weights. <a href="https://www.reuters.com/world/china/meta-launches-new-ai-model-zuckerberg-champions-open-weight-push-2026-08-10/">→ Source</a>
+
+━━━ <b>CLOSED FRONTIER</b> 🔒
+<b>Gemini 3.7 Flash</b> — <i>Multimodal model for fast agentic workflows and complex reasoning, with a 1M context window.</i> 1M context, Closed/API, $0.38/$1.88 per 1M tokens. Released Aug 14. ⚡ API live · OpenRouter. <a href="https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-3-7-flash/">→ Source</a>
+<b>Qwen3.8-Max</b> — <i>Flagship 2.4 trillion parameter model now widely accessible via API, with multimodal document and video understanding ahead of open-weights release.</i> 2.4T params. Released Aug 3. ⚡ API live. <a href="https://scmp.com/tech/article/3362738/alibabas-ai-model-qwen38-max-made-widely-accessible-ahead-open-weights-release">→ Source</a>
+<b>GPT-5.6-Cyber</b> — <i>OpenAI’s latest model, likely optimized for cybersecurity or coding tasks.</i> Released Aug 10. ⚡ API live. <a href="https://aireleasetracker.com/latest">→ Source</a>
+<b>GLM-5.3</b> — <a href="http://Z.ai/"><i>Z.ai</i></a><i>’s newest model, details sparse.</i> Released Aug 14. ⚡ API live. <a href="https://aireleasetracker.com/latest">→ Source</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+<b>Shieldstral</b> — <i>3B open-weights multimodal safety classifier that frames moderation as policy-adaptive, outperforming models 7x its size.</i> 3B params, open weights. Released Aug 7. 📦 Open weights. <a href="https://mistral.ai/news/shieldstral/">→ Source</a>
+<b>MiniMax Music3</b> — <i>2.4B text-to-audio model for generating music and sound effects.</i> 2.4B params. Released Aug 14. 📦 Open weights · HF. <a href="https://huggingface.co/MiniMaxAI/MiniMax-Music3">→ Source</a>
+
+📊 Surfaced 8 · scanned 4 today

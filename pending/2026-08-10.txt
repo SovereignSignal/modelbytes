@@ -1,0 +1,16 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Monday, August 10, 2026</i>
+
+<i>Multimodal is now the default for both open and closed releases, and safety classifiers are being productized as a standard companion.</i>
+
+━━━ <b>OPEN FRONTIER</b> 🔓
+<b>Muse Glimmer 30B</b> — <i>Meta's 30B multimodal model that claims best-in-class performance against peers, with image-text-to-text capabilities.</i> Released Aug 10. Apache-2.0. 📦 Open weights · HF. <a href="https://huggingface.co/meta-models/Muse-Glimmer-30B">→ Source</a>
+
+━━━ <b>CLOSED FRONTIER</b> 🔒
+<b>Qwen3.8-Max</b> — <i>2.4T parameter flagship with native multimodal and agentic task handling, now accessible via API before open-weights release.</i> Released Aug 3. ⚡ API live. <a href="https://www.scmp.com/tech/article/3362738/alibabas-ai-model-qwen38-max-made-widely-accessible-ahead-open-weights-release">→ Source</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+<b>Shieldstral</b> — <i>3B multimodal safety classifier that beats models 7x larger by treating content moderation as policy-adaptive.</i> Released Aug 4. 📦 Open weights. <a href="https://mistral.ai/news/shieldstral/">→ Source</a>
+<b>MiniMax H3</b> — <i>Multimodal generation model for text-to-image and text-to-video, positioned against Seedance 2.5.</i> Released Aug 4. ⚡ API live. <a href="https://www.opensourceforu.com/2026/08/minimax-releases-h3-multimodal-ai/">→ Source</a>
+
+📊 Surfaced 4 · scanned 6 today

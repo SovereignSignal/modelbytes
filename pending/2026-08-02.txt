@@ -1,0 +1,12 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Sunday, August 02, 2026</i>
+
+━━━ <b>OPEN FRONTIER</b> 🔓
+
+<b>deepseek-v4-flash</b>
+  This model always redirects to the latest model in the DeepSeek V4 Flash family....
+  Released: 2026-08-01 | Context: 1.0M | License: MIT | Params: 284B total / 13B active | $0.09/$0.18 per 1M
+  ⚡ API live · OpenRouter
+  <a href="https://api-docs.deepseek.com/news/news260424">→ Source</a>
+
+Total: 1 items tracked today

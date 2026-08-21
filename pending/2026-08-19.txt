@@ -1,0 +1,14 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Wednesday, August 19, 2026</i>
+
+<i>Open-weight releases are splitting into compact agentic models and frontier-scale reasoning, so builders can now choose cost/performance without leaving the open ecosystem.</i>
+
+━━━ <b>OPEN FRONTIER</b> 🔓
+<b>Muse Spark 1.2</b> — <i>Meta's latest open-weight model, open weights per Zuckerberg.</i> 📦 Open weights. <a href="https://cnbc.com/2026/08/10/meta-muse-glimmer-open-weight-ai.html">→ Source</a>
+<b>Qwen3.8 Max</b> — <i>Largest open-weight release in history, per local-ai-zone.</i> 📦 Open weights. <a href="https://local-ai-zone.github.io/blog/ai-updates-august-2026.html">→ Source</a>
+<b>Nemotron 3.5 Lightning</b> — <i>Compact open agentic model in the same wave as Muse Glimmer and Qwen3.8-27B.</i> 📦 Open weights. <a href="https://local-ai-zone.github.io/blog/ai-updates-august-2026.html">→ Source</a>
+
+━━━ <b>CLOSED FRONTIER</b> 🔒
+<b>GLM 5.3</b> — <i>Large-scale reasoning model for complex software engineering and long-horizon agent tasks.</i> Context 1.0M · License Closed/API · Pricing $1.40/$4.40 per 1M · Released Aug 18. ⚡ API live · OpenRouter. <a href="https://openrouter.ai/models/z-ai/glm-5.3">→ Source</a>
+
+📊 Surfaced 4 · scanned 3 today

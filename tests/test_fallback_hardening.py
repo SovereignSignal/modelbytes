@@ -437,7 +437,7 @@ def test_strip_stale_entries_drops_stale_keeps_fresh():
         '<b>Fresh Model</b> — <i>new arch</i>. Released 2026-07-02. <a href="https://ok.example/a">→ S</a>\n'
         '<b>Stale Model</b> — <i>backfill</i>. Released: 2026-06-01. <a href="https://ok.example/b">→ S</a>\n')
     cleaned, dropped = monitor._strip_stale_entries(summary, today="2026-07-04")
-    assert dropped == 1
+    assert dropped == ["Stale Model (2026-06-01)"]
     assert "Fresh Model" in cleaned
     assert "Stale Model" not in cleaned and "2026-06-01" not in cleaned
 
@@ -451,7 +451,7 @@ def test_strip_stale_entries_prunes_orphaned_tier():
         "━━━ <b>SPECIALIZED</b> 🎯\n"
         '<b>Old</b> — <i>d</i>. Released: 2026-06-01. <a href="https://ok.example/b">→ S</a>\n')
     cleaned, dropped = monitor._strip_stale_entries(summary, today="2026-07-04")
-    assert dropped == 1
+    assert dropped == ["Old (2026-06-01)"]
     assert "OPEN FRONTIER" in cleaned
     assert "SPECIALIZED" not in cleaned  # orphaned header removed
 
@@ -463,7 +463,7 @@ def test_strip_stale_entries_keeps_dateless_and_fresh():
         '<b>A</b> — <i>d</i>. Released 2026-07-01. <a href="https://a/1">→ S</a>\n'
         '<b>B</b> — <i>d</i>. No date at all here. <a href="https://b/2">→ S</a>')
     cleaned, dropped = monitor._strip_stale_entries(summary, today="2026-07-04")
-    assert dropped == 0
+    assert dropped == []
     assert "A" in cleaned and "B" in cleaned
 
 
@@ -474,7 +474,7 @@ def test_strip_stale_entries_catches_prose_date():
     summary = ('<b>Old</b> — <i>d</i>. Released Jun 1. <a href="https://x/1">→ S</a>\n'
                '<b>New</b> — <i>d</i>. Released Jul 2. <a href="https://x/2">→ S</a>')
     cleaned, dropped = monitor._strip_stale_entries(summary, today="2026-07-04")
-    assert dropped == 1
+    assert dropped == ["Old (2026-06-01)"]
     assert "Old" not in cleaned and "New" in cleaned
 
 
@@ -511,6 +511,7 @@ def test_stale_entry_trimmed_end_to_end_not_whole_digest(monkeypatch):
     assert "Fresh One" in msg
     assert "Stale One" not in msg and "2025-01-01" not in msg
     assert monitor.LAST_STALE_DROPPED == 1
+    assert monitor.LAST_STALE_DROPPED_NAMES == ["Stale One (2025-01-01)"]
     _, _warnings, errors = monitor.validate_digest_for_publish(msg, mode="fallback")
     assert not any("stale" in e.lower() for e in errors), errors
 
@@ -584,6 +585,7 @@ def test_trimmed_stale_entry_sends_nonblocking_ops_note(monkeypatch, tmp_path):
 
     def fake_summarize(models, *a, **k):
         monitor.LAST_STALE_DROPPED = 1  # scrub trimmed one entry this run
+        monitor.LAST_STALE_DROPPED_NAMES = ["Shieldstral (2026-08-04)"]
         return clean
     monkeypatch.setattr(monitor, "summarize_models", fake_summarize)
 
@@ -600,6 +602,8 @@ def test_trimmed_stale_entry_sends_nonblocking_ops_note(monkeypatch, tmp_path):
     assert sent, "the trimmed-but-valid digest must still publish (not go dark)"
     assert any("stale" in a.lower() for a in alerts), \
         f"expected a non-blocking stale-trim ops note; got {alerts}"
+    assert any("Shieldstral" in a and "2026-08-04" in a for a in alerts), \
+        f"ops note must name the trimmed entry; got {alerts}"
 
 
 # ── 2026-07-04 backfill incident: the empty "No new models today." sentinel must

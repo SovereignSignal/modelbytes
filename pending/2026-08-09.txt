@@ -1,0 +1,12 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Sunday, August 09, 2026</i>
+
+<i>Today's releases balance frontier access with safety infrastructure: Alibaba opens Qwen3.8‑Max API ahead of its open‑weights release, while Mistral ships a tiny open safety classifier that outperforms models 7× its size.</i>
+
+━━━ <b>CLOSED FRONTIER</b> 🔒
+<b>Qwen3.8‑Max</b> — <i>Now widely accessible via API ahead of next week’s planned open‑weights release; native multimodal and long‑horizon agentic tasks with a 1M‑token context window.</i> 2.4T parameters, 1M context. ⚡ API live. <a href="https://www.scmp.com/tech/article/3362738/alibabas-ai-model-qwen38-max-made-widely-accessible-ahead-open-weights-release">→ Source</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+<b>Shieldstral</b> — <i>A 3B multimodal safety classifier that frames content moderation as policy‑adaptive reasoning, outperforming models up to 7× its size.</i> 3B parameters, Apache 2.0. 📦 Open weights · HF. <a href="https://mistral.ai/news/shieldstral/">→ Source</a>
+
+📊 Surfaced 2 · scanned 0 today

@@ -1,0 +1,17 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Monday, August 03, 2026</i>
+
+<i>Today's wave of open-weight releases across coding, multimodal, and video generation signals that builders can now access frontier-grade capabilities without API lock-in, while Alibaba's Qwen3.8-Max raises the bar for closed-source agentic models.</i>
+
+━━━ <b>OPEN FRONTIER</b> 🔓
+<b>Kimi K3</b> — <i>Moonshot AI's open-weights escalation, designed to match top closed models on reasoning and agentic tasks.</i> Open weights. 📦 Open weights. <a href="https://www.interconnects.ai/p/kimi-k3-the-open-weights-escalation">→ Source</a>
+<b>Inkling Small</b> — <i>266B image-text-to-text model under Apache 2.0, bringing open multimodal capabilities to the frontier.</i> 266B total params, Apache 2.0 license. 📦 Open weights · HF. <a href="https://huggingface.co/thinkingmachines/Inkling-Small">→ Source</a>
+
+━━━ <b>CLOSED FRONTIER</b> 🔒
+<b>Qwen3.8 Max</b> — <i>Flagship 2.4T-param model with native multimodal and long-horizon agentic capabilities, now widely accessible via API.</i> 2.4T total params, 1M context, $2.00/$6.00 per 1M tokens. ⚡ API live · OpenRouter. <a href="https://www.scmp.com/tech/article/3362738/alibabas-ai-model-qwen38-max-made-widely-accessible-ahead-open-weights-release">→ Source</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+<b>Laguna S 2.1</b> — <i>118B MoE coding model that activates only a fraction of parameters, outperforming models 10x its size on coding benchmarks.</i> 118B total params (MoE), open-weight. 📦 Open weights. <a href="https://venturebeat.com/infrastructure/poolside-drops-laguna-s-2-1-an-open-weight-coding-model-that-beats-rivals-10x-its-size">→ Source</a>
+<b>MiniMax H3</b> — <i>33.1B image-to-video model, extending MiniMax's open-weight video generation lineup.</i> 33.1B total params. 📦 Open weights · HF. <a href="https://huggingface.co/MiniMaxAI/MiniMax-H3">→ Source</a>
+
+📊 Surfaced 5 · scanned 3 today

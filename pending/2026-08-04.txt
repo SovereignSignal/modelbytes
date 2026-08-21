@@ -1,0 +1,12 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Tuesday, August 04, 2026</i>
+
+<i>Open-weights multimodal generation and real-time voice models are maturing in parallel, giving builders composable blocks for immersive apps without vendor lock-in.</i>
+
+━━━ <b>OPEN FRONTIER</b> 🔓
+<b>FLUX 3</b> — <i>Multimodal flow model that generates video, image, and audio from text in a single architecture, released as open weights for builders to integrate visual intelligence into any stack.</i> Released Jul 31. 📦 Open weights · HF. <a href="https://bfl.ai/blog/flux-3">→ Source</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+<b>NemotronLabs VoiceChat 11B</b> — <i>Real-time voice chat model designed for conversational AI, with 11B total parameters under the openmdw-1.1 license.</i> Released Jul 29. 📦 Open weights · HF. <a href="https://huggingface.co/nvidia/NVIDIA-NemotronLabs-VoiceChat-11B">→ Source</a>
+
+📊 Surfaced 2 · scanned 2 today

@@ -1,0 +1,12 @@
+🤖 <b>ModelBytes Digest</b>
+<i>Thursday, August 06, 2026</i>
+
+<i>Today’s releases sharpen the agentic toolkit: one model brings multimodal reasoning to long-context tasks, another tackles memory efficiency for retrieval-heavy pipelines.</i>
+
+━━━ <b>CLOSED FRONTIER</b> 🔒
+<b>Muse Spark 1.2</b> — <i>Meta’s reasoning model built for complex agentic workflows, natively handling text, images, video, audio, and PDFs across a 1M-token context window.</i> Pricing: $1.25/$4.25 per 1M input/output. ⚡ API live · OpenRouter <a href="https://openrouter.ai/models/meta/muse-spark-1.2">→ Source</a>
+
+━━━ <b>SPECIALIZED</b> 🎯
+<b>Intern-MemDec 4B</b> — <i>A memory-decoding architecture that improves long-context retrieval and reasoning efficiency without scaling total parameters.</i> 4B total params. Released Aug 6. 📦 Open weights · HF <a href="https://huggingface.co/internlm/Intern-MemDec-4B">→ Source</a>
+
+📊 Surfaced 2 · scanned 4 today

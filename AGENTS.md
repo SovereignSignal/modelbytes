@@ -44,9 +44,11 @@ mode) posts to Telegram, then exits.
   errors still raise). Wire it on the `modelbytes` service as
   `${{Postgres.DATABASE_PUBLIC_URL}}`. Do not print that URL. `--preview`
   crashes must not ops-alert (2026-08-13 false CRASHED page).
-- Manual re-runs should set `MODELBYTES_PENDING_GRACE_SECONDS=0`. The default
-  600s grace window waits for a retired curator `pending/<today>.txt` that
-  will not appear.
+- Manual re-runs should keep `MODELBYTES_PENDING_GRACE_SECONDS=0` (the code
+  default). A positive grace window waits for a retired curator
+  `pending/<today>.txt` that will not appear; `INLINE_PRIMARY=1` skips the
+  wait even if grace is set. The leftover `modelbytes-supervisor-routine`
+  Claude schedule was paused 2026-08-22 — daily publish does not use it.
 - Idempotency is `posted_digests`, not `publish_runs`. A `blocked` row does
   not prevent a same-day retry. A `posted` row does — do not live-run twice
   on a day that already has `telegram_message_id` set.

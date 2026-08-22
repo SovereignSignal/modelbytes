@@ -42,10 +42,11 @@ The daily run, in `main()`:
 > supervisor / daily-health) writing `pending/<TODAY>.txt`. That design was
 > replaced by the inline writer above. `pending/*.txt` is now only a write-back
 > cache of what was published (for the cross-day fact-consistency check), and
-> `docs/curator-prompt.md` + `.supervisor-bootstrapped` + the
+> `docs/curator-prompt.md` + the
 > `modelbytes-curator-routines.md` memory are **stale artifacts**, not live
 > config. Do not "restore the curator" — it is intentionally gone. See
-> `docs/architecture.md` § "How we got here".
+> `docs/architecture.md` § "How we got here". The leftover Monday supervisor
+> Claude schedule was paused 2026-08-22.
 
 The publisher still **reads `pending/<TODAY>.txt` if one is present** (GitHub
 raw first, then baked-in, then a grace window) — so a hand-written or
@@ -112,8 +113,9 @@ a figure published in the last 14 days) and a deterministic dateline rewrite.
   follow-ups).
 - `pending/<date>.txt` — write-back cache of what was published (feeds the
   cross-day fact-consistency check). No longer a curator handoff.
-- `docs/curator-prompt.md`, `.supervisor-bootstrapped` — **stale artifacts**
-  from the retired claude.ai layer; kept for history, not live config.
+- `docs/curator-prompt.md` — **stale artifact** from the retired claude.ai
+  curator; kept for history, not live config. The leftover supervisor
+  schedule was paused 2026-08-22 (`.supervisor-bootstrapped` removed).
 
 ## Conventions
 

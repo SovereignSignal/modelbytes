@@ -90,7 +90,8 @@ venv/bin/python -m pytest tests/ -v
 | `MODELBYTES_ADMIN_CHAT_ID` | Telegram chat to DM on publish failures or degradation (operator alerts). | ❌ |
 | `MODELBYTES_OPS_SLACK_CHANNEL_ID` | Slack channel used as a fallback for operator alerts when the Telegram DM can't be reached. | ❌ |
 | `MODELBYTES_HEARTBEAT_URL` | Dead-man's-switch ping URL (e.g. healthchecks.io) — the only signal that catches "the cron never fired". | ❌ |
-| `MODELBYTES_PENDING_GRACE_SECONDS` | How long the publisher waits for a late curator digest before falling back. Default: `600`. | ❌ |
+| `MODELBYTES_INLINE_PRIMARY` | Treat the inline writer as the everyday digest (no "curator absent" alert). Default: `1`. Set `0` only if a pre-written `pending/<date>.txt` is still the intended author. | ❌ |
+| `MODELBYTES_PENDING_GRACE_SECONDS` | How long to poll GitHub for a late hand-written `pending/<date>.txt` before the inline path. Default: `0` (no wait). Ignored when `MODELBYTES_INLINE_PRIMARY=1`. | ❌ |
 | `MODELBYTES_ALLOW_SEED` | Set to `1` to let the fallback path seed an empty `models` table (otherwise it refuses, to guard wiped/migrated state). | ❌ |
 
 These power the **inline writer**, which is the everyday digest path (the retired claude.ai curator layer did not use them). The writer has a primary + fallback model; if the primary (`MODELBYTES_LLM_MODEL`) returns empty, it tries `MODELBYTES_LLM_MODEL_FALLBACK` and alerts the operator that the primary was unavailable.

@@ -179,3 +179,61 @@ def test_dateline_rewritten_to_actual_utc_date():
     body = "🤖 <b>ModelBytes Digest</b>\n<i>Wednesday, June 11, 2026</i>\n\nx"
     fixed = monitor._fix_dateline(body, today="2026-06-11")
     assert "<i>Thursday, June 11, 2026</i>" in fixed  # Jun 11 2026 IS a Thursday
+
+
+class _FakeClock:
+    """Monotonic clock that advances only when sleep() is called.
+
+    Lets tests assert that the curator grace window does not run without
+    spinning for wall-clock seconds if the wait loop is still live.
+    """
+
+    def __init__(self):
+        self.t = 0.0
+        self.slept = []
+
+    def monotonic(self):
+        return self.t
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.t += seconds
+
+
+def test_wait_for_pending_skips_when_inline_primary(monkeypatch):
+    """INLINE_PRIMARY days must not wait or page for a late curator file.
+
+    Production is inline-primary and the leftover Claude supervisor is paused;
+    a 10-minute grace + 'curated digest not on master' ops alert would fire
+    every 16:00 UTC if this path still treated a missing pending file as
+    exceptional.
+    """
+    clock = _FakeClock()
+    alerts = []
+    monkeypatch.setattr(monitor, "INLINE_PRIMARY", True)
+    monkeypatch.setattr(monitor, "PENDING_GRACE_SECONDS", 600)
+    monkeypatch.setattr(monitor.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(monitor.time, "sleep", clock.sleep)
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda t: alerts.append(t))
+    monkeypatch.setattr(
+        monitor, "_fetch_pending_from_github",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not poll")),
+    )
+
+    assert monitor._wait_for_pending("2026-08-22") is None
+    assert clock.slept == []
+    assert alerts == []
+
+
+def test_wait_for_pending_skips_when_grace_zero(monkeypatch):
+    clock = _FakeClock()
+    alerts = []
+    monkeypatch.setattr(monitor, "INLINE_PRIMARY", False)
+    monkeypatch.setattr(monitor, "PENDING_GRACE_SECONDS", 0)
+    monkeypatch.setattr(monitor.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(monitor.time, "sleep", clock.sleep)
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda t: alerts.append(t))
+
+    assert monitor._wait_for_pending("2026-08-22") is None
+    assert clock.slept == []
+    assert alerts == []

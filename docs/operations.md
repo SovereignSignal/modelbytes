@@ -2,12 +2,14 @@
 
 Day-to-day operational tasks for ModelBytes. For the design behind these mechanics, see [`architecture.md`](./architecture.md).
 
-> **⚠️ ARCHITECTURE NOTE (2026-06): the claude.ai routine layer is RETIRED.**
-> The publish path is **inline-primary** (writer model + Parallel.ai research,
-> no Claude Code dependency). Several sections of this runbook describe
+> **⚠️ ARCHITECTURE NOTE (2026-06, confirmed 2026-08-22): the claude.ai
+> routine layer is RETIRED.** The publish path is **inline-primary** (writer
+> model + Parallel.ai research, no Claude Code dependency). The leftover
+> Monday `modelbytes-supervisor-routine` (`trig_011Qooj5aZGgTDWyJv4RJcED`)
+> was **paused 2026-08-22** — it only added org/family list entries, and the
+> 16:00 UTC cron does not call it. Several sections of this runbook describe
 > operating the now-retired routines and are marked **`[RETIRED]`** below.
-> They are kept for historical context only — the routines do not exist and
-> the runbooks do not apply:
+> They are kept for historical context only — the runbooks do not apply:
 > - Pausing / Re-enabling the supervisor's autonomy (`[RETIRED]`)
 > - Manually triggering a routine (`[RETIRED]`)
 > - When the curator misses (no `pending/<TODAY>.txt` was pushed) (`[RETIRED]` —
@@ -111,7 +113,14 @@ ORDER BY run_at DESC LIMIT 10;
 
 ## [RETIRED] Pausing the supervisor's autonomy
 
-If the supervisor starts proposing bad additions (or proactively, before a risky period like an upcoming release window), revoke its auto-commit authority:
+The Claude schedule (`trig_011Qooj5aZGgTDWyJv4RJcED`) was paused 2026-08-22.
+Daily publish does not use it. The repo-root `.supervisor-bootstrapped` marker
+was removed the same day so an accidental unpause would be propose-only
+(GitHub issue, no auto-commit) instead of pushing list edits to master.
+
+Historical: if the supervisor started proposing bad additions (or proactively,
+before a risky period like an upcoming release window), revoke its auto-commit
+authority:
 
 ```bash
 cd modelbytes
@@ -209,7 +218,8 @@ Optional / tuning:
 | `MODELBYTES_ADMIN_CHAT_ID` | (none) | Telegram DM target for ops alerts (primary). **Live since 2026-06-12.** |
 | `MODELBYTES_OPS_SLACK_CHANNEL_ID` | (none) | Slack channel for ops alerts (fallback when the Telegram DM fails). |
 | `MODELBYTES_HEARTBEAT_URL` | (none) | Dead-man's-switch ping target (e.g. healthchecks.io). Currently UNSET. |
-| `MODELBYTES_PENDING_GRACE_SECONDS` | `600` (10 min) | How long `_wait_for_pending` polls GitHub raw for a late curator before giving up to the fallback path. |
+| `MODELBYTES_INLINE_PRIMARY` | `1` | Inline writer is the everyday path; suppresses the "curator absent" alert. Default `1` in code. |
+| `MODELBYTES_PENDING_GRACE_SECONDS` | `0` | How long `_wait_for_pending` polls GitHub raw for a late hand-written pending file. Default `0`. Skipped entirely when `INLINE_PRIMARY` is on. |
 | `MODELBYTES_PENDING_POLL_SECONDS` | `120` | Poll interval inside the grace window. |
 | `MODELBYTES_ALLOW_SEED` | unset | Set to `1` to allow seeding an empty `models` table (see "Live-mode guards"). |
 | `MODELBYTES_HTTP_RETRIES` / `MODELBYTES_HTTP_BACKOFF_SECONDS` / `MODELBYTES_USER_AGENT` | see "When source fetches are flaky" | Retrying HTTP helper knobs. |

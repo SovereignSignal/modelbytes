@@ -84,9 +84,9 @@ the job Crashed when it returned 1 and re-ran it 3× under ON_FAILURE).
 
 The sections below describe the pre-inline architecture. They are preserved
 because the audit-history plans in `docs/superpowers/plans/` reference them,
-but **none of this runs in production anymore**. The routines do not exist,
-`docs/curator-prompt.md` is a stale artifact, and `.supervisor-bootstrapped` is
-meaningless. Read this only to understand the history, not to operate the system.
+but **none of this runs in production anymore**. The Claude schedules are
+paused, `docs/curator-prompt.md` is a stale artifact, and `.supervisor-bootstrapped`
+was removed 2026-08-22 when the leftover Monday supervisor schedule was paused.
 
 **Duplicate protection**: `posted_digests` is the source of truth for whether a UTC date has already posted. This means same-day Railway redeploys, manual re-runs, and stale pending files do not post twice once the first successful send has been recorded. If Postgres is temporarily unavailable, the curated fast-path still tries to post so the channel does not go dark, but the log will say the idempotency ledger could not be checked or written.
 

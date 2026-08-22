@@ -1567,7 +1567,9 @@ PARALLEL_SEARCH_URL = "https://api.parallel.ai/v1/search"
 # the everyday digest, not a degraded fallback — so don't alert "published via
 # fallback / curator absent" every day. Real failures (QA block, send fail,
 # no-models, crash) still alert.
-INLINE_PRIMARY = os.environ.get("MODELBYTES_INLINE_PRIMARY") == "1"
+# Default ON: the claude.ai curator is retired (supervisor paused 2026-08-22).
+# Unset / missing must not page "curator absent" every day. Set to 0 to opt out.
+INLINE_PRIMARY = os.environ.get("MODELBYTES_INLINE_PRIMARY", "1") == "1"
 
 
 def _param_size_from_name(name: str) -> Optional[str]:
@@ -2801,9 +2803,10 @@ PENDING_RAW_BASE = os.environ.get(
 )
 
 
-# 10 minutes covers curator jitter (it lands 15:42-15:45 against a 16:00 cron)
-# without holding the container for half an hour on days the curator is dead.
-PENDING_GRACE_SECONDS = int(os.environ.get("MODELBYTES_PENDING_GRACE_SECONDS", "600"))
+# Default 0: there is no curator to wait for. A positive value still polls
+# GitHub for a late hand-written pending/<date>.txt, but INLINE_PRIMARY days
+# skip the wait regardless (see _wait_for_pending).
+PENDING_GRACE_SECONDS = int(os.environ.get("MODELBYTES_PENDING_GRACE_SECONDS", "0"))
 PENDING_POLL_INTERVAL = int(os.environ.get("MODELBYTES_PENDING_POLL_SECONDS", "120"))
 
 
@@ -2842,12 +2845,14 @@ def _fetch_pending_from_github(today: str, attempts: int = 3) -> Optional[str]:
 
 
 def _wait_for_pending(today: str) -> Optional[str]:
-    """Grace window: the curator usually lands ~15:42-15:45 but has slipped past
-    16:00 before (2026-06-08: 18:50). The container is already running, so
-    polling GitHub for a few minutes costs nothing and beats permanently losing
-    a late curated digest to the fallback (the ledger makes that irreversible).
-    Disable with MODELBYTES_PENDING_GRACE_SECONDS=0."""
-    if PENDING_GRACE_SECONDS <= 0:
+    """Optional wait for a late hand-written pending/<date>.txt.
+
+    The claude.ai curator this existed for is retired (supervisor paused
+    2026-08-22). INLINE_PRIMARY days skip the wait: a missing pending file is
+    the normal path, not a 10-minute hang plus ops alert. A positive
+    MODELBYTES_PENDING_GRACE_SECONDS still polls when INLINE_PRIMARY is off.
+    """
+    if INLINE_PRIMARY or PENDING_GRACE_SECONDS <= 0:
         return None
     # Tell the operator at the START of the wait, not after it — a late curator
     # is itself a signal worth seeing in real time.

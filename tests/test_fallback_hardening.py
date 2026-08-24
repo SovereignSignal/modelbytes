@@ -607,32 +607,35 @@ def test_trimmed_stale_entry_sends_nonblocking_ops_note(monkeypatch, tmp_path):
 
 
 # ── 2026-07-04 backfill incident: the empty "No new models today." sentinel must
-#    never be POSTED. It is produced when 0 fetched models survive AND every
-#    web-discovered entry is stripped by link/stale verification; the fallback
-#    branch used to send it verbatim, dumping a bare sentinel on the public
-#    channel. It must be treated exactly like a no-models day: no post, alert. ──
+#    never be POSTED. It is produced when 0 fetched models survive AND the writer
+#    emits nothing publishable. Never dump the sentinel on the channel.
+#    2026-08-24: a catalog-quiet day with writer-produced-0 is a quiet day, not
+#    a pipeline failure — record no-models, do NOT 🚨 the operator. ──
 
-def test_empty_sentinel_digest_is_not_posted(monkeypatch, tmp_path):
+def _live_main_env(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv", ["monitor.py"])  # live (non-preview)
+    monkeypatch.setattr(sys, "argv", ["monitor.py"])
     monkeypatch.setattr(monitor, "TELEGRAM_BOT_TOKEN", "t")
     monkeypatch.setattr(monitor, "TELEGRAM_CHANNEL_ID", "c")
     monkeypatch.setattr(monitor, "DATABASE_URL", "postgres://x")
     monkeypatch.setattr(monitor, "try_post_pending_curated", lambda: False)
     monkeypatch.setattr(monitor, "init_database", lambda: None)
     monkeypatch.setattr(monitor, "load_seen_models", lambda: {"seed/x"})
-    monkeypatch.setattr(monitor, "save_seen_models", lambda s: None)
     for f in ["fetch_ollama_models", "fetch_huggingface_trending",
               "fetch_major_orgs", "fetch_hf_text_generation"]:
         monkeypatch.setattr(monitor, f, lambda: [])
-    # 0 new from fetchers, but web discovery is present → enters the posting
-    # branch (all_new empty, web_context truthy).
     monkeypatch.setattr(monitor, "fetch_openrouter_models", lambda: [])
-    monkeypatch.setattr(monitor, "discover_recent_releases",
-                        lambda *a, **k: "- src (2026-07-04) — https://x/1")
     monkeypatch.setattr(monitor, "_recent_digest_names", lambda *a, **k: [])
     monkeypatch.setattr(monitor, "enrich_with_hf_cards", lambda models: None)
-    # ...but the writer degrades to the bare sentinel (all entries stripped).
+
+
+def test_empty_sentinel_digest_is_not_posted(monkeypatch, tmp_path):
+    _live_main_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(monitor, "save_seen_models", lambda s: None)
+    monkeypatch.setattr(monitor, "discover_recent_releases",
+                        lambda *a, **k: "- src (2026-07-04) — https://x/1")
+    monkeypatch.setattr(monitor, "LAST_DISCOVERY_MODELS", [])
+    # Writer produced nothing (LAST_WRITER_N_WRITTEN stays 0).
     monkeypatch.setattr(monitor, "summarize_models",
                         lambda *a, **k: "No new models today.")
 
@@ -650,7 +653,135 @@ def test_empty_sentinel_digest_is_not_posted(monkeypatch, tmp_path):
     assert not sent, f"the bare sentinel must NOT be posted; got sent={sent}"
     assert any("no-models" in a for (a, k) in runs), \
         f"expected a no-models publish_run; got {runs}"
-    assert alerts, "a no-post day must alert the operator"
+    assert not alerts, (
+        "a quiet writer-0 / catalog-empty day must not 🚨 the operator; "
+        f"got {alerts}")
+
+
+def test_quiet_catalog_empty_day_does_not_ops_alert(monkeypatch, tmp_path):
+    # The other no-post branch: fetchers + discovery both empty.
+    _live_main_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(monitor, "save_seen_models", lambda s: None)
+    monkeypatch.setattr(monitor, "discover_recent_releases", lambda *a, **k: "")
+    monkeypatch.setattr(monitor, "LAST_DISCOVERY_MODELS", [])
+
+    alerts, runs, sent = [], [], []
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda t: alerts.append(t) or True)
+    monkeypatch.setattr(monitor, "record_publish_run",
+                        lambda *a, **k: runs.append((a, k)) or True)
+    monkeypatch.setattr(monitor, "ping_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(monitor, "send_telegram_post",
+                        lambda m: sent.append(m) or True)
+
+    rc = monitor.main()
+    assert rc == 0
+    assert not sent
+    assert any("no-models" in a for (a, k) in runs)
+    assert not alerts, f"quiet empty-catalog day must not 🚨; got {alerts}"
+
+
+def test_verification_stripped_entries_still_alert(monkeypatch, tmp_path):
+    # Writer DID produce entries and verification ate them all — that is a
+    # real pipeline failure, unlike a quiet day. Page the operator with
+    # the actual counts, not a canned "link/stale" guess.
+    _live_main_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(monitor, "save_seen_models", lambda s: None)
+    monkeypatch.setattr(monitor, "discover_recent_releases",
+                        lambda *a, **k: "- Foo (2026-08-24) — https://vendor.example/foo")
+
+    def fake_summarize(*a, **k):
+        monitor.LAST_WRITER_N_WRITTEN = 2
+        monitor.LAST_LINK_DROPPED = 2
+        monitor.LAST_STALE_DROPPED = 0
+        return monitor.NO_MODELS_SENTINEL
+    monkeypatch.setattr(monitor, "summarize_models", fake_summarize)
+
+    alerts, runs, sent = [], [], []
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda t: alerts.append(t) or True)
+    monkeypatch.setattr(monitor, "record_publish_run",
+                        lambda *a, **k: runs.append((a, k)) or True)
+    monkeypatch.setattr(monitor, "ping_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(monitor, "send_telegram_post",
+                        lambda m: sent.append(m) or True)
+
+    rc = monitor.main()
+    assert rc == 0
+    assert not sent
+    assert any("no-models" in a for (a, k) in runs)
+    assert alerts, "verification-stripped entries must still alert"
+    body = alerts[0].lower()
+    assert "writer produced 2" in body
+    assert "link-scrub dropped 2" in body
+
+
+def test_discovery_model_posts_via_template_when_writer_empty(monkeypatch, tmp_path):
+    # 2026-08-24: Parallel found 9 sources, fetchers 0, writer produced 0
+    # entries → sentinel → dark channel. Promoting a primary-source hit into
+    # a ModelRelease must still publish via the template fallback.
+    _live_main_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(monitor, "save_seen_models", lambda s: None)
+    disc = monitor.ModelRelease(
+        name="acme/X-2", provider="Acme", source="discovery",
+        url="https://vendor.ai/blog/x2",
+        description="Acme released X-2, a 70B open model.",
+        release_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        canonical_url="https://vendor.ai/blog/x2",
+        confidence="low",
+    )
+
+    def fake_discover(*a, **k):
+        monitor.LAST_DISCOVERY_MODELS = [disc]
+        return "- Acme X-2 released — https://vendor.ai/blog/x2\n  70B open model."
+    monkeypatch.setattr(monitor, "discover_recent_releases", fake_discover)
+    monkeypatch.setattr(monitor, "summarize_models",
+                        lambda models, *a, **k: monitor.build_digest_message(models))
+
+    sent, alerts = [], []
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda t: alerts.append(t) or True)
+    monkeypatch.setattr(monitor, "record_publish_run", lambda *a, **k: True)
+    monkeypatch.setattr(monitor, "ping_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(monitor, "send_slack_post", lambda m: False)
+    monkeypatch.setattr(monitor, "mark_posted_digest", lambda *a, **k: None)
+    monkeypatch.setattr(monitor, "send_telegram_post",
+                        lambda m: sent.append(m) or True)
+    (tmp_path / "pending").mkdir(exist_ok=True)
+
+    rc = monitor.main()
+    assert rc == 0
+    assert sent, "discovery hit must publish via template when the writer emits 0"
+    assert "X-2" in sent[0]
+    assert "https://vendor.ai/blog/x2" in sent[0]
+    assert sent[0].strip() != monitor.NO_MODELS_SENTINEL
+    assert not alerts, f"a successful salvage post must not 🚨; got {alerts}"
+
+
+def test_sentinel_does_not_mark_unposted_models_seen(monkeypatch, tmp_path):
+    # Marking digest candidates seen before a successful post burned them
+    # forever on no-post days. A fetched model that never shipped must
+    # remain unseen so tomorrow can retry.
+    _live_main_env(monkeypatch, tmp_path)
+    fresh = _model(
+        "acme/Fresh-One",
+        release_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+    )
+    monkeypatch.setattr(monitor, "fetch_openrouter_models", lambda: [fresh])
+    monkeypatch.setattr(monitor, "discover_recent_releases", lambda *a, **k: "")
+    monkeypatch.setattr(monitor, "LAST_DISCOVERY_MODELS", [])
+    monkeypatch.setattr(monitor, "summarize_models",
+                        lambda *a, **k: monitor.NO_MODELS_SENTINEL)
+
+    saved = []
+    monkeypatch.setattr(monitor, "save_seen_models",
+                        lambda models: saved.append(set(models)))
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda t: True)
+    monkeypatch.setattr(monitor, "record_publish_run", lambda *a, **k: True)
+    monkeypatch.setattr(monitor, "ping_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(monitor, "send_telegram_post", lambda m: True)
+
+    rc = monitor.main()
+    assert rc == 0
+    assert saved, "no-post days still persist stale/seen state"
+    assert "acme/Fresh-One" not in saved[-1]
 
 
 def test_empty_sentinel_preview_is_side_effect_free(monkeypatch, tmp_path):

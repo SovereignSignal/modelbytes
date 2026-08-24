@@ -53,8 +53,10 @@ The writer model (`MODELBYTES_LLM_MODEL`, prod = `deepseek-v4-pro` on Ollama Clo
 
 `INLINE_PRIMARY=1` (prod) means an inline day is expected — the publisher does
 **not** alert "published via fallback / curator absent". Real failures still
-alert: QA block, send-fail, no-models, crash, lost `DATABASE_URL`, content-damage
-warnings, and the writer falling back to `MODELBYTES_LLM_MODEL_FALLBACK`.
+alert: QA block, send-fail, verification-stripped no-post, crash, lost
+`DATABASE_URL`, content-damage warnings, and the writer falling back to
+`MODELBYTES_LLM_MODEL_FALLBACK`. A catalog-quiet day records `no-models` but
+does not page.
 
 ---
 

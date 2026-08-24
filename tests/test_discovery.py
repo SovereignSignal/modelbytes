@@ -58,19 +58,21 @@ def test_discovery_filters_stale_and_formats(_discovery_on, monkeypatch):
 def test_discovery_upgrades_http_urls(_discovery_on, monkeypatch):
     # Writer copies URLs character-for-character; if discovery hands it
     # http://, that scheme lands in the digest and (before 2026-08-13) blocked
-    # the whole fallback post. Normalize at the source.
+    # the whole fallback post. Normalize at the source. Aggregator hosts are
+    # dropped entirely — they are how roundup pages reached the writer and
+    # zeroed catalog-quiet days (2026-08-24).
     payload = {
         "results": [
             {"url": "http://aireleasetracker.com/", "title": "Tracker dump",
              "publish_date": "2026-06-15", "excerpts": ["new models today"]},
-            {"url": "http://llm-stats.com/llm-updates", "title": "LLM stats",
-             "publish_date": "2026-06-15", "excerpts": ["updates"]},
+            {"url": "http://vendor.ai/blog/x2", "title": "Acme X-2 released",
+             "publish_date": "2026-06-15", "excerpts": ["70B open model"]},
         ]
     }
     monkeypatch.setattr(monitor.requests, "post", lambda url, **k: _resp(payload))
     block = monitor.discover_recent_releases(today="2026-06-16", max_age_days=14)
-    assert "https://aireleasetracker.com/" in block
-    assert "https://llm-stats.com/llm-updates" in block
+    assert "aireleasetracker" not in block
+    assert "https://vendor.ai/blog/x2" in block
     assert "http://" not in block
 
 
@@ -180,3 +182,67 @@ def test_strip_keeps_all_when_all_provided():
     cleaned, dropped = monitor._strip_unverified_links(summary, allowed)
     assert dropped == 0
     assert "A" in cleaned and "B" in cleaned
+
+
+def test_strip_keeps_provided_url_with_path_or_query_suffix():
+    # Writer often appends /tree/main or ?utm= to a URL we provided. That is
+    # not a constructed link — dropping it zeroed otherwise-valid entries.
+    allowed = {"https://huggingface.co/acme/Model-1"}
+    summary = (
+        '<b>Model 1</b> — <i>d</i>. '
+        '<a href="https://huggingface.co/acme/Model-1/tree/main">→ S</a>\n'
+        '<b>Sibling</b> — <i>d</i>. '
+        '<a href="https://huggingface.co/acme/Model-1-instruct">→ S</a>\n'
+    )
+    cleaned, dropped = monitor._strip_unverified_links(summary, allowed)
+    assert dropped == 1
+    assert "Model 1" in cleaned
+    assert "Sibling" not in cleaned
+
+
+def test_discovery_emits_model_releases_for_primary_sources(_discovery_on, monkeypatch):
+    monkeypatch.setattr(monitor.requests, "post", lambda url, **k: _resp(_PARALLEL_RESP))
+    monitor.discover_recent_releases(today="2026-06-16", max_age_days=14)
+    names = [m.name for m in monitor.LAST_DISCOVERY_MODELS]
+    urls = [m.url for m in monitor.LAST_DISCOVERY_MODELS]
+    assert any("X-2" in n or "x2" in n.lower() for n in names)
+    assert "https://vendor.ai/blog/x2" in urls
+    assert all("old.example" not in (m.url or "") for m in monitor.LAST_DISCOVERY_MODELS)
+
+
+def test_filter_discovery_drops_aggregators_and_roundups():
+    agg = monitor.ModelRelease(
+        name="Tracker dump", provider="Web", source="discovery",
+        url="https://aireleasetracker.com/model/zai/glm-5.3",
+        description="GLM-5.3 by Z.ai", release_date="2026-08-14")
+    roundup = monitor.ModelRelease(
+        name="AI weekly roundup", provider="Web", source="discovery",
+        url="https://vendor.ai/blog/week",
+        description="this week's new models", release_date="2026-08-23")
+    keeper = monitor.ModelRelease(
+        name="acme/X-2", provider="Acme", source="discovery",
+        url="https://vendor.ai/blog/x2",
+        description="Acme released X-2, a 70B open model.",
+        release_date="2026-08-23")
+    kept = monitor._filter_discovery_models(
+        [agg, roundup, keeper], recent_names=[], seen=set(), today="2026-08-24")
+    assert [m.name for m in kept] == ["acme/X-2"]
+
+
+def test_filter_discovery_drops_already_covered_and_seen():
+    vision = monitor.ModelRelease(
+        name="deepseek/deepseek-v4-flash-vision-exp", provider="DeepSeek",
+        source="discovery",
+        url="https://the-decoder.com/deepseek-vision",
+        description="DeepSeek V4 Flash Vision Exp is available through the API.",
+        release_date="2026-08-24")
+    seen_hit = monitor.ModelRelease(
+        name="acme/X-2", provider="Acme", source="discovery",
+        url="https://vendor.ai/blog/x2",
+        description="Acme X-2", release_date="2026-08-23")
+    kept = monitor._filter_discovery_models(
+        [vision, seen_hit],
+        recent_names=["DeepSeek V4 Flash Vision Exp"],
+        seen={"acme/X-2"},
+        today="2026-08-24")
+    assert kept == []

@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
+from urllib.parse import urlparse
 
 from ss_publish import (
     Publisher,
@@ -900,6 +901,28 @@ def _url_scheme_variants(url: str) -> List[str]:
     return list(variants)
 
 
+def _href_is_provided(href: str, allowed_urls: set) -> bool:
+    """True if href is a URL we handed the writer, or a path/query suffix of one.
+
+    Exact match (scheme variants, trailing slash) plus a suffix like
+    huggingface.co/org/model vs huggingface.co/org/model/tree/main. A sibling
+    slug (Model-1-instruct vs Model-1) is NOT a suffix — require '/', '?', or
+    '#' after the allowed URL.
+    """
+    candidates = {_upgrade_http_url(u).rstrip("/")
+                  for u in _url_scheme_variants(href)}
+    allowed_norm = {_upgrade_http_url(u).rstrip("/")
+                    for u in (allowed_urls or set())}
+    if candidates & allowed_norm:
+        return True
+    for h in candidates:
+        for a in allowed_norm:
+            if a and (h.startswith(a + "/") or h.startswith(a + "?")
+                      or h.startswith(a + "#")):
+                return True
+    return False
+
+
 def _upgrade_insecure_hrefs(body: str) -> Tuple[str, int]:
     """Rewrite http:// hrefs to https://.
 
@@ -1566,7 +1589,8 @@ PARALLEL_SEARCH_URL = "https://api.parallel.ai/v1/search"
 # When the claude.ai curator is retired, the inline (deepseek/Ollama) path IS
 # the everyday digest, not a degraded fallback — so don't alert "published via
 # fallback / curator absent" every day. Real failures (QA block, send fail,
-# no-models, crash) still alert.
+# verification-stripped no-post, crash) still alert. Quiet catalog-empty
+# no-models days are recorded, not paged (2026-08-24).
 # Default ON: the claude.ai curator is retired (supervisor paused 2026-08-22).
 # Unset / missing must not page "curator absent" every day. Set to 0 to opt out.
 INLINE_PRIMARY = os.environ.get("MODELBYTES_INLINE_PRIMARY", "1") == "1"
@@ -1932,6 +1956,8 @@ def _availability_tag(m: ModelRelease) -> str:
         return "⚡ API live · OpenRouter"
     if m.source == "ollama":
         return "📦 Ollama pull-ready"
+    if m.source == "discovery":
+        return "🔗 Cited source"
     return "📦 Open weights · HF"
 
 
@@ -2074,6 +2100,16 @@ LAST_STALE_DROPPED = 0
 # (2026-08-21: take still mentioned a 3B safety classifier; Railway logs
 # only said "Dropped 1").
 LAST_STALE_DROPPED_NAMES: List[str] = []
+# Writer-entry counts from the last summarize_models() call. Lets main() tell
+# "writer produced 0 on a quiet day" (do not 🚨) from "writer produced N and
+# verification stripped them all" (do 🚨) — the 2026-08-24 alert blamed
+# link/stale verification on a writer-0 day.
+LAST_WRITER_N_WRITTEN = 0
+LAST_LINK_DROPPED = 0
+# Primary-source Parallel.ai hits promoted to ModelRelease objects so a
+# catalog-quiet day can still post via the template when the writer emits
+# nothing. Reset at the start of each discover_recent_releases() call.
+LAST_DISCOVERY_MODELS: List[ModelRelease] = []
 
 
 def _recent_digest_names(today: str = None, days: int = 10,
@@ -2095,11 +2131,128 @@ def _recent_digest_names(today: str = None, days: int = 10,
     return out
 
 
+_HF_REPO_RE = re.compile(
+    r"https?://(?:www\.)?huggingface\.co/([^/]+)/([^/?#]+)", re.I)
+_OR_MODEL_RE = re.compile(
+    r"https?://(?:www\.)?openrouter\.ai/models/([^?#]+)", re.I)
+_OLLAMA_LIB_RE = re.compile(
+    r"https?://(?:www\.)?ollama\.com/library/([^/?#]+)", re.I)
+_ROUNDUP_TITLE_RE = re.compile(
+    r"(?i)\b("
+    r"this week|round-?up|release tracker|weekly(?: ai| llm)?|"
+    r"daily update|new models today|llm updates|"
+    r"top \d+|best llms|every llm|what.?s new in (?:ai|llms)|"
+    r"latest (?:ai |llm )?models"
+    r")\b")
+
+
+def _url_host(url: str) -> str:
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return ""
+    return host[4:] if host.startswith("www.") else host
+
+
+def _host_is_aggregator(url: str) -> bool:
+    host = _url_host(url)
+    if not host:
+        return False
+    return any(host == d or host.endswith("." + d) for d in _AGGREGATOR_DOMAINS)
+
+
+def _discovery_name(url: str, title: str) -> str:
+    m = _HF_REPO_RE.search(url or "")
+    if m:
+        return f"{m.group(1)}/{m.group(2)}"
+    m = _OR_MODEL_RE.search(url or "")
+    if m:
+        return m.group(1).rstrip("/")
+    m = _OLLAMA_LIB_RE.search(url or "")
+    if m:
+        return m.group(1)
+    title = (title or "").strip()
+    return title[:80] if title else (url or "discovery-hit")
+
+
+def _discovery_hit_to_model(url: str, title: str, excerpt: str,
+                            publish_date: str) -> Optional[ModelRelease]:
+    """Turn one Parallel.ai hit into a ModelRelease, or None if it is not a
+    candidate (aggregator, roundup, empty)."""
+    if not url or not (title or excerpt):
+        return None
+    if _host_is_aggregator(url):
+        return None
+    if (_ROUNDUP_TITLE_RE.search(title or "")
+            or _ROUNDUP_TITLE_RE.search(excerpt or "")):
+        return None
+    name = _discovery_name(url, title)
+    pd = (publish_date or "").strip()[:10] or None
+    return ModelRelease(
+        name=name,
+        provider=_resolve_provider(name.split("/")[0] if "/" in name else "",
+                                   name),
+        source="discovery",
+        url=url,
+        description=_smart_truncate(excerpt or title, 200),
+        release_date=pd,
+        canonical_url=url,
+        confidence="low",
+        unique_traits=["web_discovery"],
+    )
+
+
+def _discovery_already_covered(model: ModelRelease,
+                               recent_names: List[str]) -> bool:
+    blob = _compact_match_text(
+        f"{model.name} {model.description or ''} {model.url or ''}")
+    name_key = _compact_match_text((model.name or "").split("/")[-1])
+    for r in recent_names or []:
+        rk = _compact_match_text(r)
+        if len(rk) < 6:
+            continue
+        if rk == name_key or (blob and rk in blob):
+            return True
+    return False
+
+
+def _filter_discovery_models(models: List[ModelRelease],
+                             recent_names: List[str] = None,
+                             seen: Set[str] = None,
+                             today: str = None) -> List[ModelRelease]:
+    """Keep primary-source discovery hits that are fresh, unseen, and not
+    already covered in recent digests. Aggregator/roundup pages are dropped
+    so a catalog-quiet day does not re-post last week's tracker dump."""
+    recent_names = recent_names or []
+    seen = seen or set()
+    out = []
+    for m in models or []:
+        if not m or not m.url:
+            continue
+        if _host_is_aggregator(m.url):
+            continue
+        if (_ROUNDUP_TITLE_RE.search(m.name or "")
+                or _ROUNDUP_TITLE_RE.search(m.description or "")):
+            continue
+        if is_stale_release(m.release_date, today=today):
+            continue
+        if m.name in seen or m.url in seen:
+            continue
+        if _discovery_already_covered(m, recent_names):
+            continue
+        out.append(m)
+    return out
+
+
 def discover_recent_releases(today: str = None, max_age_days: int = 14,
                              timeout: int = 60) -> str:
     """Query Parallel.ai for genuinely-new model releases → a compact, cited
-    web-research block for the writer model. Returns '' when disabled or on any
-    failure (the pipeline falls back to fetcher-only). Never raises."""
+    web-research block for the writer model. Also fills LAST_DISCOVERY_MODELS
+    with primary-source hits promoted to ModelRelease objects (the catalog-
+    quiet-day salvage). Returns '' when disabled or on any failure (the
+    pipeline falls back to fetcher-only). Never raises."""
+    global LAST_DISCOVERY_MODELS
+    LAST_DISCOVERY_MODELS = []
     if not (DISCOVERY_ENABLED and PARALLEL_API_KEY):
         return ""
     ref = (datetime.strptime(today, "%Y-%m-%d").date() if today
@@ -2112,14 +2265,15 @@ def discover_recent_releases(today: str = None, max_age_days: int = 14,
             "coding, multimodal, and audio. Prefer primary sources (vendor blogs, "
             "model cards, release notes) stating the release date and specs."),
         # Diverse angles → broader recall across tiers (frontier/open/coding/
-        # multimodal/audio/local), not just one obvious release.
+        # multimodal/audio/local), not just one obvious release. Named labs
+        # raise precision vs generic "new AI model {month}" aggregator hits.
         "search_queries": [
             f"new AI model release {month}",
             f"new open-weight LLM released {month}",
-            f"new multimodal model released {month}",
+            "Anthropic Claude OpenAI GPT Google Gemini xAI Grok model launch this week",
+            "DeepSeek Qwen GLM Kimi MiniMax Mistral model release this week",
             f"new coding model release {month}",
-            f"new audio or speech model released {month}",
-            "AI model launch announcement this week",
+            f"new multimodal or audio model released {month}",
             "Hugging Face newly released model this week",
         ],
     }
@@ -2135,6 +2289,7 @@ def discover_recent_releases(today: str = None, max_age_days: int = 14,
         return ""
 
     kept = []
+    models = []
     for r in results:
         pd = (r.get("publish_date") or "").strip()
         if pd:
@@ -2149,13 +2304,23 @@ def discover_recent_releases(today: str = None, max_age_days: int = 14,
         excerpt = " ".join((r.get("excerpts") or [])[:2]).strip()
         if not url or not (title or excerpt):
             continue
+        if _host_is_aggregator(url):
+            continue
+        if (_ROUNDUP_TITLE_RE.search(title)
+                or _ROUNDUP_TITLE_RE.search(excerpt)):
+            continue
         kept.append(f"- {title} ({pd or 'undated'}) — {url}\n  "
                     f"{_smart_truncate(excerpt, 280)}")
+        model = _discovery_hit_to_model(url, title, excerpt, pd)
+        if model:
+            models.append(model)
         if len(kept) >= 10:
             break
+    LAST_DISCOVERY_MODELS = models
     if not kept:
         return ""
-    print(f"Parallel discovery: {len(kept)} recent web source(s).", file=sys.stderr)
+    print(f"Parallel discovery: {len(kept)} recent web source(s)"
+          f" ({len(models)} candidate model(s)).", file=sys.stderr)
     return "\n".join(kept)
 
 
@@ -2178,11 +2343,10 @@ def _strip_unverified_links(summary: str, allowed_urls: set) -> Tuple[str, int]:
     writer must cite a real source, never construct one — the curator verified
     URLs by fetching; this enforces it deterministically). Then drop tier
     headers left with no entries. Returns (cleaned, dropped_count)."""
-    allowed = {u.rstrip("/") for u in allowed_urls}
     kept, dropped = [], 0
     for line in summary.split("\n"):
         hrefs = re.findall(r'<a href="([^"]+)"', line)
-        if hrefs and not all(h.rstrip("/") in allowed for h in hrefs):
+        if hrefs and not all(_href_is_provided(h, allowed_urls) for h in hrefs):
             dropped += 1
             continue
         kept.append(line)
@@ -2527,12 +2691,14 @@ def summarize_models(models: List[ModelRelease], web_context: str = "",
     digests, so the writer doesn't repeat them.
     """
     global LAST_SUMMARY_MODE, LAST_LLM_MODEL, LAST_STALE_DROPPED, LAST_LLM_FAILURE
-    global LAST_STALE_DROPPED_NAMES
+    global LAST_STALE_DROPPED_NAMES, LAST_WRITER_N_WRITTEN, LAST_LINK_DROPPED
     LAST_SUMMARY_MODE = "template"
     LAST_LLM_MODEL = None
     LAST_STALE_DROPPED = 0
     LAST_STALE_DROPPED_NAMES = []
     LAST_LLM_FAILURE = None
+    LAST_WRITER_N_WRITTEN = 0
+    LAST_LINK_DROPPED = 0
     recent_names = recent_names or []
     if not models and not web_context:
         return NO_MODELS_SENTINEL
@@ -2675,11 +2841,13 @@ Candidate models from our fetchers (may be sparse or already-covered — the web
     # zero-survivor fallback can report whether entries existed and were stripped
     # or the writer never wrote one (the 2026-07-12 diagnosis needed both cases).
     n_written = _count_surfaced_models(summary)
+    LAST_WRITER_N_WRITTEN = n_written
     # Hard guarantee: every published link is a URL we actually provided. Drops
     # entries whose <a href> the writer constructed/guessed (e.g. a plausible
     # but unverified huggingface.co/... link) rather than copying a source URL.
     summary, dropped = _strip_unverified_links(
         summary, _collect_provided_urls(models, web_context))
+    LAST_LINK_DROPPED = dropped
     if dropped:
         print(f"Dropped {dropped} entr(y/ies) with unverified/constructed links.",
               file=sys.stderr)
@@ -2983,6 +3151,31 @@ def try_post_pending_curated() -> bool:
     return True
 
 
+def _record_no_publishable(today: str, mode: str, models_found: int,
+                           message: str = "") -> None:
+    """Record a no-post day. Alert only when the writer produced entries that
+    verification then stripped — a catalog-quiet / writer-0 day is expected
+    (2026-08-24) and must not 🚨."""
+    n_written = LAST_WRITER_N_WRITTEN
+    n_link = LAST_LINK_DROPPED
+    n_stale = LAST_STALE_DROPPED
+    stripped = n_written > 0 and (n_link > 0 or n_stale > 0)
+    err = None
+    if n_written or n_link or n_stale:
+        err = (f"writer produced {n_written}; link-scrub dropped {n_link}, "
+               f"stale-scrub dropped {n_stale}")
+    record_publish_run(today, mode, "no-models",
+                       models_found=models_found, models_emitted=0,
+                       message_chars=len(message or ""),
+                       error=err)
+    ping_heartbeat(True, "no publishable entries" if stripped else "no models")
+    if stripped:
+        send_ops_alert(
+            f"No post today ({today}): writer produced {n_written} "
+            f"entr(y/ies); link-scrub dropped {n_link}, stale-scrub dropped "
+            f"{n_stale}. Nothing survived verification. Nothing posted.")
+
+
 def main():
     preview_mode = "--preview" in sys.argv
     if preview_mode:
@@ -2990,6 +3183,18 @@ def main():
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     live_mode = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID) and not preview_mode
+
+    # Per-run diagnostics. summarize_models overwrites these; reset here so a
+    # no-summarize quiet day cannot inherit counts from a previous call in
+    # the same process (the test suite).
+    global LAST_WRITER_N_WRITTEN, LAST_LINK_DROPPED, LAST_STALE_DROPPED
+    global LAST_DISCOVERY_MODELS, LAST_LLM_MODEL, LAST_SUMMARY_MODE
+    LAST_WRITER_N_WRITTEN = 0
+    LAST_LINK_DROPPED = 0
+    LAST_STALE_DROPPED = 0
+    LAST_DISCOVERY_MODELS = []
+    LAST_LLM_MODEL = None
+    LAST_SUMMARY_MODE = "template"
 
     if live_mode and not DATABASE_URL:
         # Degraded but not fatal yet: the curated fast-path doesn't need the DB
@@ -3087,9 +3292,25 @@ def main():
     #
     # Web discovery (Parallel.ai) is the inline freshness engine: it runs even
     # when the fetchers find 0 new models (the dedup-drained dark-channel case),
-    # so the channel stays fresh without the claude.ai curator.
+    # so the channel stays fresh without the claude.ai curator. Hits that name
+    # a primary URL are promoted to ModelRelease objects and merged into the
+    # candidate set so a writer-0 day can still post via the template
+    # (2026-08-24: 9 web sources, 0 catalog models, writer produced 0 entries).
     web_context = discover_recent_releases(today)
     recent_names = _recent_digest_names(today)
+    n_disc = 0
+    existing = {m.name for m in all_new}
+    for m in _filter_discovery_models(
+            LAST_DISCOVERY_MODELS, recent_names=recent_names,
+            seen=seen_models, today=today):
+        if m.name in existing or m.name in seen_models:
+            continue
+        all_new.append(m)
+        existing.add(m.name)
+        n_disc += 1
+    if n_disc:
+        print(f"Added {n_disc} web-discovery candidate(s); "
+              f"{len(all_new)} new model(s) total")
 
     if all_new or web_context:
         def _author(m):
@@ -3125,20 +3346,10 @@ def main():
             + (f"; {len(held)} held for a later run" if held else "")
         )
 
-        # Mark posted models seen so they don't re-appear. Use the pre-collapse
-        # names (the individual variants) PLUS the collapsed family entry names
-        # so neither the variants nor the family-base re-surfaces.
-        for m in pre_collapse:
-            seen_models.add(m.name)
-        for m in digest_models:
-            seen_models.add(m.name)
-        # For the overflow, mark ONLY confirmed-insignificant models as seen so
-        # we don't re-scan noise every run -- but keep significant-but-unposted
-        # models UNSEEN so a busy-day overflow (or a model gaining traction)
-        # surfaces on a later run instead of being silently dropped.
-        for m in held:
-            if not _significant(m):
-                seen_models.add(m.name)
+        # Defer seen-marking until a successful post. Marking before summarize
+        # burned unposted models on no-post days (they never resurfaced).
+        posted_names = {m.name for m in pre_collapse} | {m.name for m in digest_models}
+        noise_overflow = {m.name for m in held if not _significant(m)}
 
         # Enrich the top candidates with real HF-card facts (params, license,
         # context, benchmarks) so the inline model writes from specs, not just
@@ -3149,24 +3360,17 @@ def main():
         message = summarize_models(digest_models, web_context, recent_names)
         fallback_mode = f"fallback-{LAST_SUMMARY_MODE}"
 
-        # The pipeline degrades to the bare NO_MODELS_SENTINEL when 0 fetched
-        # models survive AND every web-discovered entry is stripped by
-        # link/stale verification. That sentinel is not a digest — posting it
-        # dumps "No new models today." on the public channel (2026-07-04 backfill
-        # incident). Treat it exactly like a no-models day: never post it.
+        # The pipeline degrades to the bare NO_MODELS_SENTINEL when there is
+        # nothing to render (0 candidates, or the writer emitted no entries
+        # and the template also had nothing). That sentinel is not a digest —
+        # posting it dumps "No new models today." on the public channel
+        # (2026-07-04 backfill incident). Never post it.
         if message.strip() == NO_MODELS_SENTINEL:
             print("Pipeline produced no publishable entries — treating as no-post.")
             if preview_mode:
                 print("Preview mode — not sending (no publishable entries)")
                 return 0
-            send_ops_alert(f"No post today ({today}): the fallback pipeline "
-                           "produced no publishable entries — 0 new models "
-                           "survived and any web-discovered entries failed "
-                           "link/stale verification. Nothing posted.")
-            record_publish_run(today, fallback_mode, "no-models",
-                               models_found=len(all_new), models_emitted=0,
-                               message_chars=len(message))
-            ping_heartbeat(True, "no publishable entries")
+            _record_no_publishable(today, fallback_mode, len(all_new), message)
             save_seen_models(seen_models)
             return 0
 
@@ -3233,6 +3437,8 @@ def main():
             print(f"Could not record published digest to {pending_path}: {exc}", file=sys.stderr)
         mark_posted_digest(today, "fallback", str(pending_path), message)
         slack_ok = send_slack_post(message)  # mirror to Slack (no-op unless configured)
+        for n in posted_names | noise_overflow:
+            seen_models.add(n)
         record_publish_run(today, fallback_mode, "posted",
                            models_found=len(all_new),
                            models_emitted=len(digest_models),
@@ -3271,11 +3477,7 @@ def main():
     else:
         print("No new models")
         if not preview_mode:
-            send_ops_alert(f"No post today ({today}): no curated digest and no new "
-                           "models surfaced by the fallback. If sources look quiet "
-                           "several days running, check fetchers.")
-            record_publish_run(today, "fallback", "no-models", models_found=0)
-            ping_heartbeat(True, "no models")
+            _record_no_publishable(today, "fallback", 0)
 
     save_seen_models(seen_models)
     return 0

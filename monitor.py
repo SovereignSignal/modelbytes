@@ -1468,6 +1468,34 @@ def is_significant_release(model_id: str, author: str, tags: list,
     return False
 
 
+# OpenRouter lists each model as a base id plus serving SKUs (`:batch` for
+# async batch inference, `:free` for the $0 routed copy). Those are not
+# releases — collapsing them onto the base id stops a leftover SKU from
+# becoming the day's only digest item (2026-08-29: glm-5.3-flash:batch).
+_OPENROUTER_SERVING_SUFFIXES = (":batch", ":free")
+
+
+def _openrouter_base_id(model_id: str) -> str:
+    """Strip trailing OpenRouter serving suffixes (`:batch`, `:free`)."""
+    name = (model_id or "").strip()
+    while True:
+        lower = name.lower()
+        stripped = False
+        for suffix in _OPENROUTER_SERVING_SUFFIXES:
+            if lower.endswith(suffix):
+                name = name[: -len(suffix)]
+                stripped = True
+                break
+        if not stripped:
+            return name
+
+
+def is_openrouter_serving_sku(model_id: str) -> bool:
+    """True when `model_id` is an OpenRouter `:batch` / `:free` serving copy."""
+    raw = (model_id or "").strip()
+    return bool(raw) and _openrouter_base_id(raw) != raw
+
+
 def fetch_openrouter_models() -> List[ModelRelease]:
     models = []
     try:
@@ -1475,6 +1503,8 @@ def fetch_openrouter_models() -> List[ModelRelease]:
         for m in resp.json().get("data", []):
             model_id = m.get("id", "")
             if not model_id:
+                continue
+            if is_openrouter_serving_sku(model_id):
                 continue
             pricing = m.get("pricing", {})
             try:
@@ -1970,6 +2000,12 @@ NO_MODELS_SENTINEL = "No new models today."
 
 def build_digest_message(models: List[ModelRelease]) -> str:
     """Build tiered digest message (HTML format)."""
+    if not models:
+        return NO_MODELS_SENTINEL
+    # Serving SKUs are not publishable leftovers. If they are all that
+    # remains after the writer produced 0 entries, stay quiet rather than
+    # posting an ALSO TRACKED stub (2026-08-29).
+    models = [m for m in models if not is_openrouter_serving_sku(m.name)]
     if not models:
         return NO_MODELS_SENTINEL
     models, _ = prepare_models_for_digest(models)
@@ -2700,6 +2736,7 @@ def summarize_models(models: List[ModelRelease], web_context: str = "",
     LAST_WRITER_N_WRITTEN = 0
     LAST_LINK_DROPPED = 0
     recent_names = recent_names or []
+    models = [m for m in (models or []) if not is_openrouter_serving_sku(m.name)]
     if not models and not web_context:
         return NO_MODELS_SENTINEL
     models, validation_notes = prepare_models_for_digest(models)
@@ -3250,6 +3287,16 @@ def main():
         for m in stale:
             seen_models.add(m.name)
         all_new = [m for m in all_new if not is_stale_release(m.release_date)]
+
+    serving = [m for m in all_new if is_openrouter_serving_sku(m.name)]
+    if serving:
+        print(f"Dropping {len(serving)} OpenRouter serving SKU(s): "
+              + ", ".join(m.name for m in serving[:5])
+              + ("…" if len(serving) > 5 else ""))
+        # Same as stale: mark seen so a fetcher leak cannot retry daily.
+        for m in serving:
+            seen_models.add(m.name)
+        all_new = [m for m in all_new if not is_openrouter_serving_sku(m.name)]
 
     print(f"Found {len(all_new)} new model(s)")
 

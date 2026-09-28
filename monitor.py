@@ -145,6 +145,7 @@ PROVIDER_NAMES = {
     "wan-ai": "Alibaba",
     "sarvamai": "Sarvam AI",
     "meta-models": "Meta",
+    "jetbrains": "JetBrains",
 }
 
 # Known significant orgs — never noise-filter these
@@ -166,7 +167,7 @@ KNOWN_ORGS = {
     "tencent", "sakanaai",
     "internlm", "meituan-longcat", "poolside", "ai-sage",
     "thinkingmachines", "black-forest-labs",
-    "skt", "wan-ai", "sarvamai", "meta-models",
+    "skt", "wan-ai", "sarvamai", "meta-models", "jetbrains",
 }
 
 
@@ -1451,6 +1452,7 @@ def is_significant_release(model_id: str, author: str, tags: list,
         "wan2", "wan3", "wan-3", "dramabox", "pixal3d", "agent",
         "longcat", "laguna-", "gigachat",
         "inkling", "sarvam", "muse-",
+        "mellum",
     ]
     if any(f in model_lower for f in significant_families):
         return True
@@ -1605,6 +1607,7 @@ MAJOR_HF_ORGS = [
     "internlm", "meituan-longcat", "poolside", "ai-sage",
     "thinkingmachines", "black-forest-labs",
     "skt", "Wan-AI", "sarvamai", "meta-models",
+    "JetBrains",
 ]
 
 

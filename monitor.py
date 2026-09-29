@@ -5,6 +5,7 @@ Posts new model releases to Telegram @modelbytes channel with tiered, LLM-summar
 """
 
 import hashlib
+import json
 import os
 import re
 import socket
@@ -12,7 +13,7 @@ import sys
 import time
 import traceback
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
@@ -584,6 +585,285 @@ def send_ops_alert(text: str) -> bool:
     secret_values passed at construction.
     """
     return _publisher.send_ops_alert(text)
+
+
+# Per-source health. Visibility only — never changes which models are fetched,
+# filtered, or posted. State is a small JSON file under the image's state/
+# directory (Dockerfile already creates /app/state). Railway's cron filesystem
+# is ephemeral and this repo does not mount a volume, so the file survives a
+# run on a machine with a durable disk and is missing on the next cron
+# container. Missing and corrupt files start fresh. No new env var and no
+# schema change.
+SOURCE_HEALTH_PATH = Path(__file__).resolve().parent / "state" / "source_health.json"
+SOURCE_HEALTH_ALERT_AFTER = timedelta(hours=24)
+_SOURCE_ERROR_LIMIT = 200
+_SOURCE_ERRORS = {}
+_DISCOVERY_DISABLED = False
+
+
+def _short_source_error(exc: BaseException) -> str:
+    """One-line reason, capped, with known secrets removed."""
+    text = _redact_secrets(f"{type(exc).__name__}: {exc}")
+    for secret in (
+        PARALLEL_API_KEY,
+        LLM_API_KEY,
+        TELEGRAM_BOT_TOKEN,
+        SLACK_BOT_TOKEN,
+        DATABASE_URL,
+        DATABASE_PUBLIC_URL,
+    ):
+        if secret:
+            text = text.replace(secret, "<redacted>")
+    text = re.sub(
+        r"(?i)(authorization\s*[:=]\s*bearer\s+)\S+",
+        r"\1<redacted>",
+        text,
+    )
+    text = re.sub(r"(?i)((?:api[_-]?key|token)\s*[:=]\s*)\S+", r"\1<redacted>", text)
+    text = " ".join(text.split())
+    if len(text) > _SOURCE_ERROR_LIMIT:
+        text = text[: _SOURCE_ERROR_LIMIT - 3] + "..."
+    return text
+
+
+def _remember_source_error(source: str, exc: BaseException) -> str:
+    """Record a swallowed source failure. Later failures keep the first reason."""
+    reason = _short_source_error(exc)
+    slot = _SOURCE_ERRORS.get(source)
+    if slot is None:
+        _SOURCE_ERRORS[source] = {"reason": reason, "extra": 0}
+    else:
+        slot["extra"] = int(slot.get("extra") or 0) + 1
+    return reason
+
+
+def _consume_source_error(source: str) -> str:
+    slot = _SOURCE_ERRORS.pop(source, None)
+    if not slot:
+        return ""
+    reason = slot.get("reason") or ""
+    extra = int(slot.get("extra") or 0)
+    if extra:
+        suffix = f" (+{extra} more)"
+        keep = _SOURCE_ERROR_LIMIT - len(suffix)
+        reason = (reason[:keep] if keep > 0 else "") + suffix
+    return reason[:_SOURCE_ERROR_LIMIT]
+
+
+def classify_source_health(items: int, error: str) -> str:
+    """ok when the source returned anything; error when it failed empty; else empty."""
+    if int(items or 0) > 0:
+        return "ok"
+    if (error or "").strip():
+        return "error"
+    return "empty"
+
+
+def format_source_health_line(source: str, status: str, items: int, error: str = "") -> str:
+    err = (error or "").strip() or "-"
+    return f"source_health source={source} status={status} items={int(items)} error={err}"
+
+
+def format_writer_health_line(candidates: int, included: int,
+                               link_dropped: int, stale_dropped: int) -> str:
+    return (
+        f"source_health writer candidates={int(candidates)} included={int(included)} "
+        f"link_dropped={int(link_dropped)} stale_dropped={int(stale_dropped)}"
+    )
+
+
+def _parse_health_time(value):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _blank_source_record() -> dict:
+    return {
+        "last_ok": None,
+        "consecutive_failures": 0,
+        "consecutive_empties": 0,
+        "unhealthy_since": None,
+        "last_alert_at": None,
+    }
+
+
+def _coerce_source_record(raw) -> dict:
+    rec = _blank_source_record()
+    if not isinstance(raw, dict):
+        return rec
+    if _parse_health_time(raw.get("last_ok")):
+        rec["last_ok"] = raw.get("last_ok")
+    if _parse_health_time(raw.get("unhealthy_since")):
+        rec["unhealthy_since"] = raw.get("unhealthy_since")
+    if _parse_health_time(raw.get("last_alert_at")):
+        rec["last_alert_at"] = raw.get("last_alert_at")
+    for key in ("consecutive_failures", "consecutive_empties"):
+        try:
+            rec[key] = max(0, int(raw.get(key) or 0))
+        except (TypeError, ValueError):
+            rec[key] = 0
+    return rec
+
+
+def load_source_health(path: Path = None) -> dict:
+    """Return persisted per-source health, or {} if the file is missing or corrupt."""
+    path = Path(path) if path is not None else SOURCE_HEALTH_PATH
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        print("source_health state unreadable — starting fresh", file=sys.stderr)
+        return {}
+    if not isinstance(data, dict):
+        print("source_health state unreadable — starting fresh", file=sys.stderr)
+        return {}
+    return data
+
+
+def save_source_health(state: dict, path: Path = None) -> None:
+    path = Path(path) if path is not None else SOURCE_HEALTH_PATH
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        payload = json.dumps(state, indent=2, sort_keys=True) + "\n"
+        tmp.write_text(payload, encoding="utf-8")
+        tmp.replace(path)
+    except OSError as exc:
+        print(f"source_health state write failed: {exc}", file=sys.stderr)
+
+
+def _apply_source_status(rec: dict, status: str, now: datetime) -> None:
+    iso = now.astimezone(timezone.utc).isoformat()
+    if status == "ok":
+        rec["last_ok"] = iso
+        rec["consecutive_failures"] = 0
+        rec["consecutive_empties"] = 0
+        rec["unhealthy_since"] = None
+        return
+    if status == "error":
+        rec["consecutive_failures"] += 1
+        rec["consecutive_empties"] = 0
+    else:
+        rec["consecutive_empties"] += 1
+        rec["consecutive_failures"] = 0
+    if _parse_health_time(rec.get("unhealthy_since")) is None:
+        rec["unhealthy_since"] = iso
+
+
+def _source_alert_due(rec: dict, now: datetime) -> bool:
+    since = _parse_health_time(rec.get("unhealthy_since"))
+    if since is None or now - since < SOURCE_HEALTH_ALERT_AFTER:
+        return False
+    last = _parse_health_time(rec.get("last_alert_at"))
+    if last is not None and now - last < SOURCE_HEALTH_ALERT_AFTER:
+        return False
+    return True
+
+
+def _fire_source_health_alert(source: str, status: str, rec: dict) -> bool:
+    """One admin ping per source per 24h, or a WARN line when no admin chat is configured.
+
+    Uses the existing MODELBYTES_ADMIN_CHAT_ID → send_ops_alert path. Does not
+    invent a destination. Returns True when the alert was delivered or logged.
+    """
+    since = rec.get("unhealthy_since") or ""
+    if ADMIN_CHAT_ID:
+        text = (
+            f"Source {source} has been {status} for 24h+ "
+            f"(since {since}; "
+            f"consecutive_failures={rec.get('consecutive_failures')}, "
+            f"consecutive_empties={rec.get('consecutive_empties')})."
+        )
+        try:
+            delivered = send_ops_alert(text)
+        except Exception as exc:
+            print(
+                "source_health ALERT WARN "
+                f"source={source} status={status} since={since} "
+                f"error={_short_source_error(exc)}",
+                file=sys.stderr,
+            )
+            return False
+        if not delivered:
+            print(
+                "source_health ALERT WARN "
+                f"source={source} status={status} since={since} error=undelivered",
+                file=sys.stderr,
+            )
+            return False
+        print(
+            f"source_health ALERT source={source} status={status} since={since}",
+            file=sys.stderr,
+        )
+        return True
+    print(
+        "source_health ALERT WARN "
+        f"source={source} status={status} since={since} "
+        f"consecutive_failures={rec.get('consecutive_failures')} "
+        f"consecutive_empties={rec.get('consecutive_empties')}",
+        file=sys.stderr,
+    )
+    return True
+
+
+def flush_source_health(rows, *, preview: bool = False, now: datetime = None,
+                        path: Path = None) -> list:
+    """Log one health line per row. Persist streaks and maybe alert unless preview."""
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    else:
+        now = now.astimezone(timezone.utc)
+    path = Path(path) if path is not None else SOURCE_HEALTH_PATH
+    lines = []
+    state = {} if preview else load_source_health(path)
+    dirty = False
+    for row in rows or []:
+        source = row.get("source") or "unknown"
+        items = int(row.get("items") or 0)
+        error = (row.get("error") or "").strip()
+        track = row.get("track", True)
+        if not track:
+            status = row.get("status") or "ok"
+            line = format_source_health_line(source, status, items, error or "disabled")
+            print(line, file=sys.stderr)
+            lines.append(line)
+            continue
+        status = classify_source_health(items, error)
+        line = format_source_health_line(source, status, items, error)
+        print(line, file=sys.stderr)
+        lines.append(line)
+        if preview:
+            continue
+        rec = _coerce_source_record(state.get(source))
+        _apply_source_status(rec, status, now)
+        if status != "ok" and _source_alert_due(rec, now):
+            if _fire_source_health_alert(source, status, rec):
+                rec["last_alert_at"] = now.isoformat()
+        state[source] = rec
+        dirty = True
+    if dirty and not preview:
+        save_source_health(state, path)
+    return lines
+
+
+def emit_writer_health(candidates: int, included: int) -> str:
+    """One line: candidates handed to the writer vs entries in the digest body."""
+    line = format_writer_health_line(
+        candidates, included, LAST_LINK_DROPPED, LAST_STALE_DROPPED,
+    )
+    print(line, file=sys.stderr)
+    return line
 
 
 def ping_heartbeat(ok: bool, message: str = "") -> None:
@@ -1565,7 +1845,8 @@ def fetch_openrouter_models() -> List[ModelRelease]:
                 unique_traits=traits,
             ))
     except Exception as e:
-        print(f"OpenRouter error: {e}", file=sys.stderr)
+        reason = _remember_source_error("OpenRouter", e)
+        print(f"OpenRouter error: {reason}", file=sys.stderr)
     return models
 
 
@@ -1587,7 +1868,8 @@ def fetch_ollama_models() -> List[ModelRelease]:
                 unique_traits=["local", "open_source"]
             ))
     except Exception as e:
-        print(f"Ollama error: {e}", file=sys.stderr)
+        reason = _remember_source_error("Ollama", e)
+        print(f"Ollama error: {reason}", file=sys.stderr)
     return models
 
 
@@ -1778,7 +2060,8 @@ def fetch_org_models(author: str) -> List[ModelRelease]:
                 likes=likes,
             ))
     except Exception as e:
-        print(f"HF org {author} error: {e}", file=sys.stderr)
+        reason = _remember_source_error("HuggingFace-Orgs", e)
+        print(f"HF org {author} error: {reason}", file=sys.stderr)
     return models
 
 
@@ -1829,7 +2112,8 @@ def fetch_hf_text_generation() -> List[ModelRelease]:
                 likes=likes,
             ))
     except Exception as e:
-        print(f"HF top text-gen error: {e}", file=sys.stderr)
+        reason = _remember_source_error("HuggingFace-Top-TextGen", e)
+        print(f"HF top text-gen error: {reason}", file=sys.stderr)
     return models
 
 
@@ -1923,7 +2207,8 @@ def fetch_huggingface_trending() -> List[ModelRelease]:
                 likes=likes,
             ))
     except Exception as e:
-        print(f"HF error: {e}", file=sys.stderr)
+        reason = _remember_source_error("HuggingFace-Trending", e)
+        print(f"HF error: {reason}", file=sys.stderr)
     return models
 
 
@@ -2290,9 +2575,10 @@ def discover_recent_releases(today: str = None, max_age_days: int = 14,
     with primary-source hits promoted to ModelRelease objects (the catalog-
     quiet-day salvage). Returns '' when disabled or on any failure (the
     pipeline falls back to fetcher-only). Never raises."""
-    global LAST_DISCOVERY_MODELS
+    global LAST_DISCOVERY_MODELS, _DISCOVERY_DISABLED
     LAST_DISCOVERY_MODELS = []
-    if not (DISCOVERY_ENABLED and PARALLEL_API_KEY):
+    _DISCOVERY_DISABLED = not (DISCOVERY_ENABLED and PARALLEL_API_KEY)
+    if _DISCOVERY_DISABLED:
         return ""
     ref = (datetime.strptime(today, "%Y-%m-%d").date() if today
            else datetime.now(timezone.utc).date())
@@ -2324,7 +2610,8 @@ def discover_recent_releases(today: str = None, max_age_days: int = 14,
         resp.raise_for_status()
         results = resp.json().get("results", []) or []
     except Exception as e:
-        print(_redact_secrets(f"Parallel discovery failed: {e}"), file=sys.stderr)
+        reason = _remember_source_error("Discovery", e)
+        print(f"Parallel discovery failed: {reason}", file=sys.stderr)
         return ""
 
     kept = []
@@ -3229,12 +3516,15 @@ def main():
     # the same process (the test suite).
     global LAST_WRITER_N_WRITTEN, LAST_LINK_DROPPED, LAST_STALE_DROPPED
     global LAST_DISCOVERY_MODELS, LAST_LLM_MODEL, LAST_SUMMARY_MODE
+    global _DISCOVERY_DISABLED
     LAST_WRITER_N_WRITTEN = 0
     LAST_LINK_DROPPED = 0
     LAST_STALE_DROPPED = 0
     LAST_DISCOVERY_MODELS = []
     LAST_LLM_MODEL = None
     LAST_SUMMARY_MODE = "template"
+    _DISCOVERY_DISABLED = False
+    _SOURCE_ERRORS.clear()
 
     if live_mode and not DATABASE_URL:
         # Degraded but not fatal yet: the curated fast-path doesn't need the DB
@@ -3266,6 +3556,7 @@ def main():
     print(f"Checking {today}... Tracking {len(seen_models)} models")
 
     all_new = []
+    fetched_sources = []
     for source_name, fetcher in [
         ("OpenRouter", fetch_openrouter_models),
         ("Ollama", fetch_ollama_models),
@@ -3274,12 +3565,20 @@ def main():
         ("HuggingFace-Top-TextGen", fetch_hf_text_generation),
     ]:
         print(f"Fetching {source_name}...")
-        for model in fetcher():
+        batch = list(fetcher() or [])
+        fetched_sources.append(
+            (source_name, batch, _consume_source_error(source_name)))
+        for model in batch:
             if model.name not in seen_models:
                 all_new.append(model)
                 # Don't add to seen_models yet — noise models should be
                 # re-evaluated next run with updated engagement data.
                 # Only posted/significant models get added later.
+    flush_source_health(
+        [{"source": name, "items": len(batch), "error": err}
+         for name, batch, err in fetched_sources],
+        preview=preview_mode,
+    )
 
     stale = [m for m in all_new if is_stale_release(m.release_date)]
     if stale:
@@ -3323,6 +3622,7 @@ def main():
             # blocked publish_run row + the ops alert are the complete record;
             # ping_heartbeat(/fail) still flags it for attention.
             ping_heartbeat(False, "empty state, seed not allowed")
+            emit_writer_health(0, 0)
             return 0
         print("First run — seeding, no digest sent")
         # Seed all current models so they won't be reported as "new" next time
@@ -3331,6 +3631,7 @@ def main():
         save_seen_models(seen_models)
         record_publish_run(today, "fallback", "seeded", models_found=len(all_new))
         ping_heartbeat(True, "seeded")
+        emit_writer_health(0, 0)
         return 0
 
     # Models passed the fetcher-level is_noise_model checks already; the prior
@@ -3347,6 +3648,20 @@ def main():
     # candidate set so a writer-0 day can still post via the template
     # (2026-08-24: 9 web sources, 0 catalog models, writer produced 0 entries).
     web_context = discover_recent_releases(today)
+    if _DISCOVERY_DISABLED:
+        flush_source_health(
+            [{"source": "Discovery", "items": 0, "error": "disabled", "track": False}],
+            preview=preview_mode,
+        )
+    else:
+        discovery_error = _consume_source_error("Discovery")
+        discovery_items = len(LAST_DISCOVERY_MODELS)
+        if discovery_items == 0 and (web_context or "").strip() and not discovery_error:
+            discovery_items = 1
+        flush_source_health(
+            [{"source": "Discovery", "items": discovery_items, "error": discovery_error}],
+            preview=preview_mode,
+        )
     recent_names = _recent_digest_names(today)
     n_disc = 0
     existing = {m.name for m in all_new}
@@ -3408,6 +3723,10 @@ def main():
             enrich_with_hf_cards(digest_models)
 
         message = summarize_models(digest_models, web_context, recent_names)
+        included = 0
+        if message and message.strip() != NO_MODELS_SENTINEL:
+            included = _count_surfaced_models(message)
+        emit_writer_health(len(digest_models), included)
         fallback_mode = f"fallback-{LAST_SUMMARY_MODE}"
 
         # The pipeline degrades to the bare NO_MODELS_SENTINEL when there is
@@ -3525,6 +3844,7 @@ def main():
         print("Digest sent")
 
     else:
+        emit_writer_health(0, 0)
         print("No new models")
         if not preview_mode:
             _record_no_publishable(today, "fallback", 0)

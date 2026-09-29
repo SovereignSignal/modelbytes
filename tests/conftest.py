@@ -15,7 +15,7 @@ import monitor
 
 
 @pytest.fixture(autouse=True)
-def _no_network_no_sleep(monkeypatch):
+def _no_network_no_sleep(monkeypatch, tmp_path):
     monkeypatch.setattr(monitor, "PENDING_GRACE_SECONDS", 0)
     monkeypatch.setattr(monitor, "_fetch_pending_from_github",
                         lambda today, attempts=3: None)
@@ -27,3 +27,7 @@ def _no_network_no_sleep(monkeypatch):
     monkeypatch.setattr(monitor, "HEARTBEAT_URL", "")
     monkeypatch.setattr(monitor, "DATABASE_URL", "")
     monkeypatch.setattr(monitor, "ALLOW_SEED", False)
+    # Source-health state must not leak across tests or into the repo tree.
+    monkeypatch.setattr(monitor, "SOURCE_HEALTH_PATH", tmp_path / "source_health.json")
+    monkeypatch.setattr(monitor, "_SOURCE_ERRORS", {})
+    monkeypatch.setattr(monitor, "_DISCOVERY_DISABLED", False)

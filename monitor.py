@@ -26,6 +26,8 @@ from ss_publish import (
     truncate_for_telegram as _ss_truncate_for_telegram,
 )
 
+import release_forwarding
+
 import psycopg2
 import requests
 
@@ -3386,6 +3388,25 @@ def _fix_dateline(body: str, today: str = None) -> str:
     return fixed
 
 
+def _forward_published_releases(models, message: str, today: str,
+                                qa_errors=None) -> None:
+    """Hand a published digest to the release-event seam.
+
+    Called only after validate_digest_for_publish returned no errors and
+    send_telegram_post succeeded. Preview never reaches this. Failures are
+    logged and swallowed so a receiver outage cannot dark the channel.
+    The curated fast-path has no ModelRelease rows; it calls this with an
+    empty list so the seam exists on that branch without inventing events.
+    """
+    try:
+        release_forwarding.forward_release_events(
+            models, message, preview=False, today=today, qa_errors=qa_errors,
+        )
+    except Exception as exc:
+        print(f"[WARN] release forwarding failed: {type(exc).__name__}",
+              file=sys.stderr)
+
+
 def try_post_pending_curated() -> bool:
     """Fast-path: post a pre-curated digest written by the curator routine.
 
@@ -3454,6 +3475,8 @@ def try_post_pending_curated() -> bool:
                            error="telegram send failed")
         return False
 
+    # No structured candidates on this branch — do not invent events from HTML.
+    _forward_published_releases([], body, today, qa_errors)
     mark_posted_digest(today, "curated", str(pending_path), body)
     # Keep the local file in sync with what was actually published (the body
     # usually came from GitHub raw, fresher than the baked-in copy) so anything
@@ -3525,6 +3548,20 @@ def main():
     LAST_SUMMARY_MODE = "template"
     _DISCOVERY_DISABLED = False
     _SOURCE_ERRORS.clear()
+
+    # Retry queued release events before every early return (already-posted
+    # curated day, seed, quiet day, no-models). Preview and a disabled flag
+    # do neither HTTP nor outbox writes. This does not scan historical
+    # digests — only rows an earlier armed run left pending.
+    if not preview_mode:
+        try:
+            if release_forwarding.forwarding_enabled():
+                release_forwarding.retry_pending_release_events()
+            else:
+                print("release forwarding: disabled", file=sys.stderr)
+        except Exception as exc:
+            print(f"[WARN] release outbox retry failed: {type(exc).__name__}",
+                  file=sys.stderr)
 
     if live_mode and not DATABASE_URL:
         # Degraded but not fatal yet: the curated fast-path doesn't need the DB
@@ -3796,6 +3833,10 @@ def main():
                                error="telegram send failed")
             ping_heartbeat(False, "fallback telegram send failed")
             return 1
+        # After QA passed and Telegram accepted the post. Surfaced-name
+        # filtering happens inside the seam; this call does not run on the
+        # preview, QA-block, or send-failure returns above.
+        _forward_published_releases(digest_models, message, today, qa_errors)
         # Record what we published so the Slack review report (which reads
         # pending/<today>.txt) reflects the latest digest instead of a stale file.
         # Safe re-post-wise: the posted_digests ledger short-circuits any rerun.

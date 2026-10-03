@@ -93,6 +93,9 @@ venv/bin/python -m pytest tests/ -v
 | `MODELBYTES_INLINE_PRIMARY` | Treat the inline writer as the everyday digest (no "curator absent" alert). Default: `1`. Set `0` only if a pre-written `pending/<date>.txt` is still the intended author. | ❌ |
 | `MODELBYTES_PENDING_GRACE_SECONDS` | How long to poll GitHub for a late hand-written `pending/<date>.txt` before the inline path. Default: `0` (no wait). Ignored when `MODELBYTES_INLINE_PRIMARY=1`. | ❌ |
 | `MODELBYTES_ALLOW_SEED` | Set to `1` to let the fallback path seed an empty `models` table (otherwise it refuses, to guard wiped/migrated state). | ❌ |
+| `MODELBYTES_RELEASE_FORWARDING` | Set to exactly `1` to forward qualified model releases after a successful post. Inert unless this is `1` and both `RELEASE_EVENTS_URL` and `RELEASE_EVENTS_TOKEN` are set. Leave unset until the receiver is deployed. | ❌ |
+| `RELEASE_EVENTS_URL` | Release Events v1 endpoint. Unused while forwarding is off. | ❌ |
+| `RELEASE_EVENTS_TOKEN` | Bearer token for that endpoint. Never commit it. | ❌ |
 
 These power the **inline writer**, which is the everyday digest path (the retired claude.ai curator layer did not use them). The writer has a primary + fallback model; if the primary (`MODELBYTES_LLM_MODEL`) returns empty, it tries `MODELBYTES_LLM_MODEL_FALLBACK` and alerts the operator that the primary was unavailable.
 

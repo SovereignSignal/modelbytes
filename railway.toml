@@ -3,7 +3,7 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "python modelbytes_runner.py"
+startCommand = "python monitor.py"
 cronSchedule = "0 16 * * *"
 # Capped: every exit-1 path now sends an ops alert + heartbeat /fail, so
 # unbounded ON_FAILURE restarts would re-fire alerts all day on deterministic

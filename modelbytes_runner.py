@@ -1,31 +1,16 @@
-#!/usr/bin/env python3
-"""ModelBytes runner with best-effort immediate Release Events forwarding."""
+"""Start shim.
+
+Production runs ``python monitor.py`` (railway.toml ``startCommand``) so
+monitor's ``__main__`` block can ops-alert, ping the heartbeat ``/fail``,
+and write a ``publish_runs`` crash row.
+
+This module remains so an old ``python modelbytes_runner.py`` command does
+the same thing. It must not wrap the digest writer or emit release events.
+That old path forwarded during ``--preview``, before QA.
+"""
 from __future__ import annotations
-import hashlib
-import monitor
-from release_events import emit_release_event
 
-_original=monitor.summarize_models
+import runpy
 
-def _event_id(m):
-    raw=f"{m.provider}|{m.name}|{m.release_date or ''}|{m.url}".lower()
-    return "model:"+hashlib.sha256(raw.encode()).hexdigest()[:32]
-
-def summarize_and_forward(models, *args, **kwargs):
-    for m in models or []:
-        try:
-            if not monitor.is_stale_release(m.release_date) and m.url:
-                emit_release_event({
-                    "id":_event_id(m),"kind":"model",
-                    "name":m.name.split("/")[-1],"version":m.release_date or "new",
-                    "source":"modelbytes","source_type":m.source,"url":m.canonical_url or m.url,
-                    "published_at":m.release_date,
-                    "summary":m.description or "",
-                    "metadata":{"provider":m.provider,"model_id":m.name},
-                })
-        except Exception as exc:
-            print(f"[WARN] release-event model forward failed: {type(exc).__name__}")
-    return _original(models,*args,**kwargs)
-
-monitor.summarize_models=summarize_and_forward
-raise SystemExit(monitor.main())
+if __name__ == "__main__":
+    runpy.run_module("monitor", run_name="__main__")

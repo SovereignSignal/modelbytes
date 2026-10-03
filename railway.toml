@@ -3,6 +3,8 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
+# monitor.py __main__ owns crash handling (ops alert, heartbeat /fail,
+# publish_runs). Do not point this at a wrapper that calls main() directly.
 startCommand = "python monitor.py"
 cronSchedule = "0 16 * * *"
 # Capped: every exit-1 path now sends an ops alert + heartbeat /fail, so

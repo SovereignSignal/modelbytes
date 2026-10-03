@@ -27,6 +27,11 @@ def _no_network_no_sleep(monkeypatch, tmp_path):
     monkeypatch.setattr(monitor, "HEARTBEAT_URL", "")
     monkeypatch.setattr(monitor, "DATABASE_URL", "")
     monkeypatch.setattr(monitor, "ALLOW_SEED", False)
+    # Release-event forwarding must stay inert in the suite even if a dev
+    # shell exported the production endpoint. Tests that exercise it opt in.
+    monkeypatch.delenv("MODELBYTES_RELEASE_FORWARDING", raising=False)
+    monkeypatch.delenv("RELEASE_EVENTS_URL", raising=False)
+    monkeypatch.delenv("RELEASE_EVENTS_TOKEN", raising=False)
     # Source-health state must not leak across tests or into the repo tree.
     monkeypatch.setattr(monitor, "SOURCE_HEALTH_PATH", tmp_path / "source_health.json")
     monkeypatch.setattr(monitor, "_SOURCE_ERRORS", {})

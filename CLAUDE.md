@@ -103,7 +103,10 @@ a figure published in the last 14 days) and a deterministic dateline rewrite.
 
 ## Key files
 
-- `monitor.py` — the entire publisher (single file, ~2,700 lines).
+- `monitor.py` — the publisher. Production `startCommand` is `python monitor.py` so `__main__` still runs `_handle_crash`.
+- `release_forwarding.py` — post-QA release-event qualification, identity, and the Postgres outbox. Inert unless `MODELBYTES_RELEASE_FORWARDING=1` and both `RELEASE_EVENTS_*` vars are set. Never runs in `--preview`.
+- `release_events.py` — Release Events v1 POST helper (`delivered` / `duplicate` / `retryable` / `rejected`).
+- `modelbytes_runner.py` — shim that runs monitor as `__main__`. It must not monkeypatch `summarize_models`.
 - `ss_publish/` — self-contained shared publish core (Telegram/Slack/ops), also
   vendored in clawbytes; mirror any cross-repo edits by hand.
 - `docs/architecture.md` — full design (read the "How we got here" note on the

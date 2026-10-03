@@ -1,9 +1,8 @@
 """Production cron must enter monitor.py as __main__.
 
-modelbytes_runner.py monkeypatches summarize_models (forwards release events
-before digest QA, including --preview) and calls monitor.main() directly,
-which skips the `if __name__ == "__main__"` crash handler (_handle_crash:
-ops alert, heartbeat /fail, publish_runs crash row).
+startCommand is `python monitor.py` so the `__main__` block runs
+_handle_crash (ops alert, heartbeat /fail, publish_runs crash row).
+The cron string stays `0 16 * * *`.
 """
 import tomllib
 from pathlib import Path

@@ -9,6 +9,7 @@ ModelBytes should use Postgres as the durable system of record for production st
 | `models` | implemented | Deduplicates model IDs already seen by the fallback pipeline. |
 | `posted_digests` | implemented | Records one posted digest per UTC date so reruns are idempotent. Also stores `body` (the published HTML) so fact-consistency and already-covered checks survive the ephemeral Railway cron. |
 | `publish_runs` | implemented | One audit row per `monitor.py` run, including failures. |
+| `release_event_outbox` | implemented | Durable queue for Release Events v1. Created and written only while forwarding is enabled. See `docs/release-events-v1.md`. |
 
 ### `posted_digests` schema
 
@@ -42,6 +43,19 @@ Shipped columns:
 - `error` (`text`)
 
 Why it matters: gives a daily audit trail without reading raw logs. It powers `fallback_streak()` (which drives escalating fallback alerts) and is the intended data source for a future re-enabled daily-health reader.
+
+### `release_event_outbox` schema
+
+Queued only after a digest is validated and Telegram accepts it, and only
+when `MODELBYTES_RELEASE_FORWARDING=1` plus `RELEASE_EVENTS_URL` and
+`RELEASE_EVENTS_TOKEN`. Pending rows are retried at the start of every
+non-preview run, including quiet days. There is no replay of older digests.
+
+- `id` (`text`, primary key) — `model:<org>/<normalized-base>`
+- `payload` (`jsonb`) — Release Events v1 body
+- `status` (`text`) — `pending`, `delivered`, `duplicate`, or `rejected`
+- `attempts` (`int`)
+- `updated_at` (`timestamptz`)
 
 ## Recommended Next Tables
 

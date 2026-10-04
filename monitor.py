@@ -4,7 +4,9 @@
 Posts new model releases to Telegram @modelbytes channel with tiered, LLM-summarized digest.
 """
 
+import gzip
 import hashlib
+import html
 import json
 import os
 import re
@@ -12,12 +14,14 @@ import socket
 import sys
 import time
 import traceback
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from ss_publish import (
     Publisher,
@@ -199,6 +203,11 @@ class ModelRelease:
     validation_notes: List[str] = None
     # Short benchmark/fact string pulled from the HF model card (inline path).
     card_facts: Optional[str] = None
+    # Which clock we treated as the release (lastModified, first_public_release,
+    # trending, createdAt). repo_created_at is the HF repo birth date, which is
+    # often days or months before the public launch.
+    recency_signal: Optional[str] = None
+    repo_created_at: Optional[str] = None
 
     def __post_init__(self):
         if self.performance_scores is None:
@@ -1559,7 +1568,8 @@ def _format_context(ctx: Optional[int]) -> str:
 
 
 def is_noise_model(model_id: str, author: str, tags: list,
-                   downloads: int = 0, likes: int = 0) -> bool:
+                   downloads: int = 0, likes: int = 0, *,
+                   engagement_floor: bool = True) -> bool:
     """Filter out noise. Returns True = skip this model."""
     # Defensive coercion: HF/fetchers occasionally hand back a string (or None)
     # for engagement counts. A TypeError here would crash the fallback publish
@@ -1652,8 +1662,10 @@ def is_noise_model(model_id: str, author: str, tags: list,
     if any(a in model_lower for a in non_llm_arch):
         return True
 
-    # Unknown orgs: strict engagement gate
-    if author_prefix not in KNOWN_ORGS:
+    # Unknown orgs: strict engagement gate. The new-on-HF pass passes
+    # engagement_floor=False and applies its own likes/downloads floor, so a
+    # mid-tier unknown org is not rejected here (Naive-N0.5-Flash, 165 likes).
+    if engagement_floor and author_prefix not in KNOWN_ORGS:
         # Numeric/throwaway usernames
         if author_lower and re.match(r'^[a-z]*\d{3,}', author_lower):
             return True
@@ -1700,6 +1712,335 @@ def is_stale_release(release_date, today: str = None, max_age_days: int = 14) ->
     ref = (datetime.strptime(today, "%Y-%m-%d").date() if today
            else datetime.now(timezone.utc).date())
     return (ref - released).days > max_age_days
+
+
+_MONTH_NUM = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+# How many HF commit lookups to spend on "repo is old, lastModified is fresh"
+# before the stale drop. Enough for a day's real launches (Kumo, AstaBrief)
+# without walking every org's back catalog.
+HF_RECENCY_COMMIT_BUDGET = 20
+HF_NEW_MIN_LIKES = 50
+HF_NEW_MIN_DOWNLOADS = 500
+HF_NEW_DETAIL_CAP = 40
+HF_NEW_TRENDING_LIMIT = 100
+_COMMIT_GAP_DAYS = 30
+
+
+def _day(value) -> Optional[str]:
+    """Best-effort calendar day (YYYY-MM-DD) from an ISO, RSS, or 'July 9, 2026' string."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        datetime.strptime(text[:10], "%Y-%m-%d")
+        return text[:10]
+    except ValueError:
+        pass
+    try:
+        parsed = parsedate_to_datetime(text)
+        if parsed is not None:
+            return parsed.date().isoformat()
+    except (TypeError, ValueError, IndexError, OverflowError):
+        pass
+    match = re.search(
+        r"\b(January|February|March|April|May|June|July|August|September|"
+        r"October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|"
+        r"Oct|Nov|Dec)\.?\s+(\d{1,2}),?\s+(20\d{2})\b",
+        text,
+        re.I,
+    )
+    if not match:
+        return None
+    month = _MONTH_NUM.get(match.group(1).lower()[:3])
+    if not month:
+        return None
+    try:
+        return datetime(int(match.group(3)), month, int(match.group(2))).date().isoformat()
+    except ValueError:
+        return None
+
+
+def _first_date_in(text: str) -> Optional[str]:
+    if not text:
+        return None
+    match = re.search(r"(20\d{2}-\d{2}-\d{2})", text)
+    if match:
+        return _day(match.group(1))
+    return _day(text)
+
+
+def _commit_is_substantive(title: str) -> bool:
+    """A commit that is more than a README/license touch or the empty initial commit."""
+    text = re.sub(r"\s+", " ", (title or "").strip())
+    if not text:
+        return False
+    if re.match(r"(?i)^initial commit$", text):
+        return False
+    if re.match(
+        r"(?i)^(?:(?:update|edit|fix|tweak|add|docs?)\s+)*"
+        r"(?:readme|license|citation|changelog)(?:\.md)?$",
+        text,
+    ):
+        return False
+    return True
+
+
+def _commit_clusters(commits, gap_days: int = _COMMIT_GAP_DAYS):
+    parsed = []
+    for row in commits or []:
+        if not isinstance(row, dict):
+            continue
+        day = _day(row.get("date"))
+        if not day:
+            continue
+        parsed.append((day, row.get("title") or ""))
+    parsed.sort()
+    if not parsed:
+        return []
+    clusters = [[parsed[0]]]
+    for prev, cur in zip(parsed, parsed[1:]):
+        gap = (
+            datetime.strptime(cur[0], "%Y-%m-%d").date()
+            - datetime.strptime(prev[0], "%Y-%m-%d").date()
+        ).days
+        if gap > gap_days:
+            clusters.append([cur])
+        else:
+            clusters[-1].append(cur)
+    return clusters
+
+
+def _signal_from_commits(commits):
+    """(YYYY-MM-DD, signal) for the latest meaningful commit cluster.
+
+    signal is first_public_release when the newest cluster contains a
+    substantive commit (weights, release notes, code), last_substantive_commit
+    when the newest cluster is README-only and an older cluster is real, or
+    ('', 'readme_only') when nothing substantive was ever committed.
+    """
+    clusters = _commit_clusters(commits)
+    if not clusters:
+        return None, ""
+
+    def _substantive(cluster) -> bool:
+        return any(_commit_is_substantive(title) for _day, title in cluster)
+
+    latest = clusters[-1]
+    if _substantive(latest):
+        return latest[0][0], "first_public_release"
+    for cluster in reversed(clusters[:-1]):
+        if _substantive(cluster):
+            return cluster[0][0], "last_substantive_commit"
+    return None, "readme_only"
+
+
+def hf_model_release_date(payload, *, today: str = None, trending: bool = False,
+                          commits=None):
+    """Pick the release day for one HF repo.
+
+    Returns (YYYY-MM-DD or None, signal, repo_created_at).
+
+    Repo createdAt is the weakest clock: labs open the repo before the public
+    launch (Kumo Tabular created Sep 1, released Sep 28; AstaBrief created
+    Feb 9, weights Oct 2). Preference:
+
+    1. Start of the latest substantive commit cluster (first public release /
+       first weights commit), when commits are provided.
+    2. lastModified, when the repo actually changed.
+    3. The day we first observed it on HF trending, when no other clock exists.
+    4. createdAt, only when nothing more relevant is present.
+
+    A README-only follow-up does not count as a release: the date stays the
+    repo birth (or the previous substantive cluster), so the stale filter
+    still drops back-catalog doc bumps.
+    """
+    payload = payload or {}
+    created = _day(payload.get("createdAt"))
+    modified = _day(payload.get("lastModified"))
+    if commits:
+        commit_day, commit_signal = _signal_from_commits(commits)
+        if commit_day and commit_signal in (
+            "first_public_release", "last_substantive_commit",
+        ):
+            return commit_day, commit_signal, created
+        if commit_signal == "readme_only":
+            return created, "createdAt", created
+    if modified:
+        return modified, "lastModified", created
+    if trending:
+        day = today or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return day, "trending", created
+    if created:
+        return created, "createdAt", created
+    return None, "unknown", created
+
+
+def log_dropped_candidate(kind: str, name: str, reason: str) -> None:
+    """One stderr line per candidate that did not make the digest.
+
+    kind is 'filter' (stale, noise, no card, serving sku) or 'writer_exclusion'.
+    """
+    if kind not in ("filter", "writer_exclusion"):
+        kind = "filter"
+    name = " ".join(str(name or "unknown").split())
+    reason = " ".join(str(reason or "").split())
+    print(
+        f"dropped candidate kind={kind} name={name} reason={reason}",
+        file=sys.stderr,
+    )
+
+
+def stale_drop_reason(model, today: str = None, max_age_days: int = 14) -> Optional[str]:
+    """Why this first-seen model is too old to publish, or None to keep it.
+
+    A fresh lastModified / release commit / trending date keeps the model even
+    when repo createdAt is outside the window. createdAt alone is a drop only
+    when no stronger clock exists.
+    """
+    if model is None:
+        return None
+    release = getattr(model, "release_date", None)
+    if not is_stale_release(release, today=today, max_age_days=max_age_days):
+        return None
+    signal = getattr(model, "recency_signal", None) or "createdAt"
+    created = getattr(model, "repo_created_at", None) or ""
+    date = str(release)[:10]
+    if signal == "createdAt":
+        return (
+            f"stale signal=createdAt date={date} repo_created={created or date}; "
+            f"no lastModified, first public release, weights commit, or trending "
+            f"date inside {max_age_days}d"
+        )
+    return f"stale signal={signal} date={date} repo_created={created or 'unknown'}"
+
+
+def drop_stale_models(models, seen, today: str = None):
+    """Remove back-catalog rows. Log each reason. Mark dropped ids seen."""
+    kept, dropped = [], []
+    for model in models or []:
+        reason = stale_drop_reason(model, today=today)
+        if not reason:
+            kept.append(model)
+            continue
+        log_dropped_candidate("filter", getattr(model, "name", None), reason)
+        dropped.append(model)
+        if seen is not None and getattr(model, "name", None):
+            seen.add(model.name)
+    if dropped:
+        print(
+            f"Dropping {len(dropped)} stale back-catalog model(s): "
+            + ", ".join(m.name for m in dropped[:5])
+            + ("…" if len(dropped) > 5 else ""),
+            file=sys.stderr,
+        )
+    return kept
+
+
+def _fetch_hf_commits(model_id: str):
+    """Commit list for one HF model, or [] on any failure. Never raises."""
+    if not model_id or "/" not in model_id:
+        return []
+    try:
+        resp = _http_get(
+            f"https://huggingface.co/api/models/{model_id}/commits/main",
+            "HF commits",
+            timeout=15,
+        )
+        rows = resp.json()
+    except Exception:
+        return []
+    if not isinstance(rows, list):
+        return []
+    out = []
+    for row in rows:
+        if isinstance(row, dict) and row.get("date"):
+            out.append({"date": row.get("date"), "title": row.get("title") or ""})
+    return out
+
+
+def refine_stale_repo_dates(models, today: str = None, budget: int = None):
+    """For repos born before the window but modified inside it, prefer the
+    commit cluster (first public release / first weights) over lastModified.
+
+    A README-only bump falls back to createdAt so the stale filter can drop it.
+    Bounded so a busy org list cannot turn into hundreds of commit requests.
+    """
+    if budget is None:
+        budget = HF_RECENCY_COMMIT_BUDGET
+    suspects = []
+    for model in models or []:
+        if not (getattr(model, "source", "") or "").startswith("huggingface"):
+            continue
+        if getattr(model, "recency_signal", None) != "lastModified":
+            continue
+        created = getattr(model, "repo_created_at", None)
+        if not created or not is_stale_release(created, today=today):
+            continue
+        if is_stale_release(getattr(model, "release_date", None), today=today):
+            continue
+        suspects.append(model)
+    suspects.sort(
+        key=lambda m: ((m.likes or 0), (m.downloads or 0)),
+        reverse=True,
+    )
+    for model in suspects[: max(0, budget)]:
+        commits = _fetch_hf_commits(model.name)
+        if not commits:
+            continue
+        date, signal, created = hf_model_release_date(
+            {"createdAt": model.repo_created_at, "lastModified": model.release_date},
+            today=today,
+            commits=commits,
+        )
+        if date == model.release_date and signal == model.recency_signal:
+            continue
+        model.release_date = date
+        model.recency_signal = signal
+        if created:
+            model.repo_created_at = created
+    return list(models or [])
+
+
+def _alnum(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
+
+
+def candidate_in_digest(model, summary: str) -> bool:
+    """True when the published body still mentions this candidate."""
+    summary = summary or ""
+    if not summary.strip() or summary.strip() == NO_MODELS_SENTINEL:
+        return False
+    for url in (
+        getattr(model, "url", None),
+        getattr(model, "canonical_url", None),
+    ):
+        if url and url in summary:
+            return True
+    name = getattr(model, "name", "") or ""
+    if name and name in summary:
+        return True
+    key = _alnum(name.split("/")[-1] if name else "")
+    if len(key) >= 6 and key in _alnum(summary):
+        return True
+    return False
+
+
+def log_writer_exclusions(models, summary: str) -> List[str]:
+    """Log candidates handed to the writer that are absent from the digest."""
+    omitted = []
+    for model in models or []:
+        if model is None or not getattr(model, "name", None):
+            continue
+        if candidate_in_digest(model, summary):
+            continue
+        log_dropped_candidate("writer_exclusion", model.name, "omitted by writer")
+        omitted.append(model.name)
+    return omitted
 
 
 def is_significant_release(model_id: str, author: str, tags: list,
@@ -2044,7 +2385,7 @@ def fetch_org_models(author: str) -> List[ModelRelease]:
             if is_noise_model(model_id, author, tags, downloads, likes):
                 continue
 
-            rd = m.get("createdAt", "")[:10] or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            rd, recency_signal, repo_created = hf_model_release_date(m)
             desc = _smart_truncate(
                 f"{pipeline} model" if pipeline else "ML model", 200)
 
@@ -2055,6 +2396,8 @@ def fetch_org_models(author: str) -> List[ModelRelease]:
                 url=f"https://huggingface.co/{model_id}",
                 description=desc,
                 release_date=rd,
+                recency_signal=recency_signal,
+                repo_created_at=repo_created,
                 architecture=tags[0] if tags else None,
                 is_open_source=True,
                 unique_traits=["hf_hub"] + tags[:3],
@@ -2095,7 +2438,7 @@ def fetch_hf_text_generation() -> List[ModelRelease]:
             if is_noise_model(model_id, author, tags, downloads, likes):
                 continue
 
-            rd = m.get("createdAt", "")[:10] or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            rd, recency_signal, repo_created = hf_model_release_date(m)
             pipeline = m.get("pipeline_tag", "")
             desc = _smart_truncate(
                 f"{pipeline} model" if pipeline else "LLM", 200)
@@ -2107,6 +2450,8 @@ def fetch_hf_text_generation() -> List[ModelRelease]:
                 url=f"https://huggingface.co/{model_id}",
                 description=desc,
                 release_date=rd,
+                recency_signal=recency_signal,
+                repo_created_at=repo_created,
                 architecture=tags[0] if tags else None,
                 is_open_source=True,
                 unique_traits=["hf_hub"] + tags[:3],
@@ -2147,7 +2492,7 @@ def fetch_huggingface_trending() -> List[ModelRelease]:
                     or downloads >= 1000 and likes >= 30):
                 continue
 
-            rd = m.get("createdAt", "")[:10] or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            rd, recency_signal, repo_created = hf_model_release_date(m)
             desc = _smart_truncate(
                 f"{pipeline} model" if pipeline else m.get("cardData", {}).get("model_summary", "ML model"),
                 200)
@@ -2159,6 +2504,8 @@ def fetch_huggingface_trending() -> List[ModelRelease]:
                 url=f"https://huggingface.co/{model_id}",
                 description=desc,
                 release_date=rd,
+                recency_signal=recency_signal,
+                repo_created_at=repo_created,
                 architecture=tags[0] if tags else None,
                 is_open_source=True,
                 unique_traits=["hf_hub"] + tags[:3],
@@ -2190,7 +2537,7 @@ def fetch_huggingface_trending() -> List[ModelRelease]:
                     or downloads >= 1000 and likes >= 30):
                 continue
 
-            rd = m.get("createdAt", "")[:10] or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            rd, recency_signal, repo_created = hf_model_release_date(m)
             pipeline = m.get("pipeline_tag", "")
             desc = _smart_truncate(
                 f"{pipeline} model" if pipeline else "ML model", 200)
@@ -2202,6 +2549,8 @@ def fetch_huggingface_trending() -> List[ModelRelease]:
                 url=f"https://huggingface.co/{model_id}",
                 description=desc,
                 release_date=rd,
+                recency_signal=recency_signal,
+                repo_created_at=repo_created,
                 architecture=tags[0] if tags else None,
                 is_open_source=True,
                 unique_traits=["hf_hub"] + tags[:3],
@@ -2211,6 +2560,170 @@ def fetch_huggingface_trending() -> List[ModelRelease]:
     except Exception as e:
         reason = _remember_source_error("HuggingFace-Trending", e)
         print(f"HF error: {reason}", file=sys.stderr)
+    try:
+        extra = fetch_hf_new_models()
+    except Exception as e:
+        print(f"HF new pass error: {_short_source_error(e)}", file=sys.stderr)
+        extra = []
+    seen_ids = {m.name for m in models}
+    for model in extra:
+        if model.name not in seen_ids:
+            models.append(model)
+            seen_ids.add(model.name)
+    return models
+
+
+def _has_model_card(payload) -> bool:
+    card = (payload or {}).get("cardData")
+    return isinstance(card, dict) and bool(card)
+
+
+def _hf_new_prefilter(row) -> Optional[str]:
+    """None queues a card lookup. '' skips quietly. Any other string is logged."""
+    model_id = row.get("id") or ""
+    author = row.get("author") or (model_id.split("/")[0] if "/" in model_id else "")
+    tags = list(row.get("tags") or [])
+    if row.get("pipeline_tag"):
+        tags.append(row.get("pipeline_tag"))
+    try:
+        likes = int(row.get("likes") or 0)
+    except (TypeError, ValueError):
+        likes = 0
+    try:
+        downloads = int(row.get("downloads") or 0)
+    except (TypeError, ValueError):
+        downloads = 0
+    if likes < HF_NEW_MIN_LIKES and downloads < HF_NEW_MIN_DOWNLOADS:
+        return ""
+    if is_noise_model(
+        model_id, author, tags, downloads, likes, engagement_floor=False,
+    ):
+        pipe = row.get("pipeline_tag") or "-"
+        return f"noise filter (pipeline={pipe})"
+    return None
+
+
+def fetch_hf_new_models(today: str = None) -> List[ModelRelease]:
+    """Models new on Hugging Face, whatever the org.
+
+    trendingScore plus the trending endpoint, then a likes/downloads floor and
+    a real model card. Not limited to KNOWN_ORGS — that list is why
+    NaiveAI/Naive-N0.5-Flash never became a candidate. Repo createdAt is not
+    the launch date; lastModified / the commit cluster is.
+    """
+    today = today or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    rows = []
+    try:
+        resp = _http_get(
+            "https://huggingface.co/api/models"
+            f"?sort=trendingScore&direction=-1&limit={HF_NEW_TRENDING_LIMIT}",
+            "HF new",
+            timeout=30,
+        )
+        payload = resp.json()
+        if isinstance(payload, list):
+            rows.extend(row for row in payload if isinstance(row, dict))
+    except Exception as e:
+        print(f"HF new trendingScore error: {_short_source_error(e)}", file=sys.stderr)
+    try:
+        resp = _http_get(
+            "https://huggingface.co/api/trending", "HF new trending", timeout=30)
+        body = resp.json() or {}
+        for item in body.get("recentlyTrending", []) or []:
+            if not isinstance(item, dict) or item.get("repoType") != "model":
+                continue
+            repo = dict(item.get("repoData") or {})
+            if repo.get("id"):
+                repo["_on_trending"] = True
+                rows.append(repo)
+    except Exception as e:
+        print(f"HF new trending error: {_short_source_error(e)}", file=sys.stderr)
+
+    deduped, seen = [], set()
+    for row in rows:
+        model_id = row.get("id") or ""
+        if not model_id or model_id in seen or row.get("private"):
+            continue
+        seen.add(model_id)
+        deduped.append(row)
+
+    queued = []
+    for row in deduped:
+        reason = _hf_new_prefilter(row)
+        if reason is None:
+            queued.append(row)
+        elif reason:
+            log_dropped_candidate("filter", row.get("id") or "unknown", reason)
+
+    def _rank(row):
+        created = _day(row.get("createdAt"))
+        fresh = 0
+        if created and not is_stale_release(created, today=today, max_age_days=21):
+            fresh = 1
+        try:
+            likes = int(row.get("likes") or 0)
+        except (TypeError, ValueError):
+            likes = 0
+        return (fresh, likes)
+
+    queued.sort(key=_rank, reverse=True)
+    models = []
+    for row in queued[:HF_NEW_DETAIL_CAP]:
+        model_id = row["id"]
+        detail = dict(row)
+        if not _has_model_card(detail) or not _day(detail.get("lastModified")):
+            try:
+                resp = _http_get(
+                    f"https://huggingface.co/api/models/{model_id}",
+                    f"HF new card {model_id}",
+                    timeout=20,
+                )
+                fetched = resp.json()
+                if isinstance(fetched, dict):
+                    detail.update(fetched)
+            except Exception as e:
+                log_dropped_candidate(
+                    "filter", model_id,
+                    f"model card lookup failed: {_short_source_error(e)}",
+                )
+                continue
+        if not _has_model_card(detail):
+            log_dropped_candidate("filter", model_id, "no model card")
+            continue
+        author = detail.get("author") or model_id.split("/")[0]
+        rd, signal, created = hf_model_release_date(
+            detail, today=today, trending=bool(row.get("_on_trending")))
+        tags = list(detail.get("tags") or [])
+        pipeline = detail.get("pipeline_tag") or ""
+        try:
+            downloads = int(detail.get("downloads") or 0)
+        except (TypeError, ValueError):
+            downloads = 0
+        try:
+            likes = int(detail.get("likes") or 0)
+        except (TypeError, ValueError):
+            likes = 0
+        model = ModelRelease(
+            name=model_id,
+            provider=_resolve_provider(author),
+            source="huggingface-new",
+            url=f"https://huggingface.co/{model_id}",
+            description=_smart_truncate(
+                f"{pipeline} model" if pipeline else "ML model", 200),
+            release_date=rd,
+            recency_signal=signal,
+            repo_created_at=created,
+            architecture=tags[0] if tags else None,
+            is_open_source=True,
+            unique_traits=["hf_hub", "hf_new"] + tags[:3],
+            downloads=downloads,
+            likes=likes,
+        )
+        reason = stale_drop_reason(model, today=today)
+        if reason:
+            log_dropped_candidate("filter", model_id, reason)
+            continue
+        models.append(model)
     return models
 
 
@@ -2467,7 +2980,8 @@ _ROUNDUP_TITLE_RE = re.compile(
     r"(?i)\b("
     r"this week|round-?up|release tracker|weekly(?: ai| llm)?|"
     r"daily update|new models today|llm updates|"
-    r"top \d+|best llms|every llm|what.?s new in (?:ai|llms)|"
+    r"top \d+|best llms|best (?:ai |llm )models|every llm|"
+    r"what.?s new in (?:ai|llms)|"
     r"latest (?:ai |llm )?models"
     r")\b")
 
@@ -2570,56 +3084,377 @@ def _filter_discovery_models(models: List[ModelRelease],
     return out
 
 
+def _discovery_search_queries(month: str) -> List[str]:
+    """Web-search slots that used to be generic '{month} model release' queries.
+
+    Those queries returned listicle and aggregator pages ('Best AI Models in
+    October 2026', Manifold Markets, Use.ai). Lab RSS and news pages replaced
+    them. The list stays empty so Parallel is not asked for a roundup.
+    `month` is kept so a future primary-source query has one argument.
+    """
+    return []
+
+
+# First-party lab blogs and news pages. Whichever had a working RSS or a
+# stable dated page on 2026-10-04. Qwen's published RSS is the GitHub Pages
+# feed (quiet since 2025-09; qwen.ai's blog is a JS shell with no feed).
+LAB_NEWS_FEEDS = (
+    {"lab": "OpenAI", "url": "https://openai.com/news/rss.xml", "kind": "rss"},
+    {"lab": "Anthropic", "url": "https://www.anthropic.com/sitemap.xml",
+     "kind": "sitemap", "path_contains": "/news/"},
+    {"lab": "Google DeepMind", "url": "https://deepmind.google/blog/rss.xml",
+     "kind": "rss"},
+    {"lab": "Meta AI", "url": "https://ai.meta.com/blog/", "kind": "html_meta"},
+    {"lab": "Mistral", "url": "https://mistral.ai/news/rss", "kind": "rss"},
+    {"lab": "DeepSeek", "url": "https://api-docs.deepseek.com/sitemap.xml",
+     "kind": "sitemap", "path_contains": "/news/news", "slug_date": True},
+    {"lab": "Qwen", "url": "https://qwenlm.github.io/blog/index.xml", "kind": "rss"},
+    {"lab": "Moonshot/Kimi", "url": "https://www.kimi.ai/blog/", "kind": "html_kimi"},
+    {"lab": "Zhipu/GLM", "url": "https://www.zhipuai.cn/en/news", "kind": "html_zhipu"},
+    {"lab": "xAI", "url": "https://x.ai/news", "kind": "html_xai"},
+)
+
+
+def _feed_bytes_to_text(raw: bytes) -> str:
+    """Decode a feed body. Gunzip when the bytes are gzip (DeepMind has served
+    a gzip body that a utf-8 decode rejects)."""
+    if raw[:2] == b"\x1f\x8b":
+        raw = gzip.decompress(raw)
+    return raw.decode("utf-8", "replace")
+
+
+def _response_feed_text(resp) -> str:
+    raw = getattr(resp, "content", None)
+    if isinstance(raw, str):
+        raw = raw.encode("utf-8")
+    if isinstance(raw, (bytes, bytearray)) and raw:
+        return _feed_bytes_to_text(bytes(raw))
+    return getattr(resp, "text", "") or ""
+
+
+def _lab_feed_get(url: str, source_name: str):
+    """One GET for a lab feed. No retry loop — a dead host must not stall the cron."""
+    resp = requests.get(
+        url,
+        timeout=12,
+        headers={
+            "User-Agent": HTTP_USER_AGENT,
+            "Accept": "application/rss+xml, application/atom+xml, application/xml, text/html;q=0.9, */*;q=0.8",
+        },
+    )
+    resp.raise_for_status()
+    return resp
+
+
+def _clean_title(title: str) -> str:
+    return re.sub(r"\s+", " ", html.unescape(title or "")).strip()
+
+
+def _title_from_url(url: str) -> str:
+    path = unquote(urlparse(url).path or "").rstrip("/").split("/")[-1]
+    path = re.sub(r"[-_]+", " ", path).strip()
+    return path[:140] or url
+
+
+def _lab_item(lab: str, title: str, url: str, publish_date: str, excerpt: str = ""):
+    title = _clean_title(title) or _title_from_url(url)
+    return {
+        "lab": lab,
+        "title": title,
+        "url": url,
+        "publish_date": publish_date or "",
+        "excerpts": [excerpt] if excerpt else [],
+        "require_date": True,
+    }
+
+
+def _xml_local(tag) -> str:
+    if not isinstance(tag, str):
+        return ""
+    return tag.rsplit("}", 1)[-1]
+
+
+def _xml_text(el) -> str:
+    return "".join(el.itertext()).strip()
+
+
+def parse_rss_items(text: str, lab: str) -> list:
+    """RSS or Atom items as discovery rows. [] on empty or unparseable input."""
+    text = (text or "").strip()
+    if not text:
+        return []
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return []
+    items = []
+    for el in root.iter():
+        if _xml_local(el.tag) not in ("item", "entry"):
+            continue
+        title = ""
+        excerpt = ""
+        date = ""
+        link = ""
+        for child in list(el):
+            name = _xml_local(child.tag)
+            if name == "title" and not title:
+                title = _xml_text(child)
+            elif name in ("description", "summary") and not excerpt:
+                excerpt = _xml_text(child)
+            elif name in ("pubDate", "published", "updated", "date") and not date:
+                date = _xml_text(child)
+            elif name == "link" and not link:
+                href = (child.get("href") or "").strip()
+                text_link = _xml_text(child)
+                rel = (child.get("rel") or "").lower()
+                candidate = text_link or href
+                if candidate.startswith("http") and rel in ("", "alternate"):
+                    link = candidate
+                elif candidate.startswith("http") and not link:
+                    link = candidate
+        if not link or not (title or excerpt):
+            continue
+        items.append(_lab_item(lab, title, link, _day(date) or "", excerpt))
+    return items
+
+
+def _deepseek_slug_date(url: str) -> Optional[str]:
+    """news260910 → 2026-09-10. Four-digit legacy slugs are left to lastmod."""
+    match = re.search(r"news(\d{2})(\d{2})(\d{2})(?:/|$)", url or "")
+    if not match:
+        return None
+    try:
+        return datetime(
+            2000 + int(match.group(1)), int(match.group(2)), int(match.group(3)),
+        ).date().isoformat()
+    except ValueError:
+        return None
+
+
+def parse_sitemap_items(text: str, lab: str, path_contains: str = "",
+                        slug_date: bool = False) -> list:
+    text = (text or "").strip()
+    if not text:
+        return []
+    items = []
+    for block in re.findall(r"<url>(.*?)</url>", text, re.S):
+        loc = re.search(r"<loc>\s*([^<\s]+)\s*</loc>", block)
+        if not loc:
+            continue
+        url = loc.group(1).strip()
+        if path_contains and path_contains not in url:
+            continue
+        lastmod = re.search(r"<lastmod>\s*([^<]+)\s*</lastmod>", block)
+        date = _deepseek_slug_date(url) if slug_date else None
+        if not date and lastmod:
+            date = _day(lastmod.group(1))
+        if not date:
+            continue
+        items.append(_lab_item(lab, _title_from_url(url), url, date, ""))
+    return items
+
+
+def _parse_html_xai(text: str, lab: str) -> list:
+    items, seen = [], set()
+    for match in re.finditer(r'<time\s+dateTime="(\d{4}-\d{2}-\d{2})"', text or ""):
+        before = text[max(0, match.start() - 1200):match.start()]
+        after = text[match.end():match.end() + 800]
+        hrefs = re.findall(r'href="(/news/[^"]+)"', before)
+        if not hrefs:
+            continue
+        path = hrefs[-1]
+        if path.rstrip("/") in ("", "/news"):
+            continue
+        title_match = re.search(r"<h3[^>]*>([^<]+)", after)
+        title = title_match.group(1).strip() if title_match else _title_from_url(path)
+        url = "https://x.ai" + path
+        if url in seen:
+            continue
+        seen.add(url)
+        items.append(_lab_item(lab, title, url, match.group(1), ""))
+    return items
+
+
+def _parse_html_meta(text: str, lab: str) -> list:
+    items, seen = [], set()
+    pattern = re.compile(
+        r'href="(https://ai\.meta\.com/blog/[^"]+)"[^>]*>([^<]{3,180})</a>',
+        re.I,
+    )
+    for match in pattern.finditer(text or ""):
+        url = match.group(1).split("?")[0]
+        if url.rstrip("/").endswith("/blog"):
+            continue
+        if url in seen:
+            continue
+        window = (text or "")[match.end():match.end() + 500]
+        date = _first_date_in(window)
+        if not date:
+            continue
+        seen.add(url)
+        items.append(_lab_item(lab, match.group(2), url, date, ""))
+    return items
+
+
+def _parse_html_kimi(text: str, lab: str) -> list:
+    items, seen = [], set()
+    pattern = re.compile(r'href="(/blog/[^"]+)"\s+aria-label="([^"]+)"')
+    for match in pattern.finditer(text or ""):
+        path = match.group(1).split("?")[0]
+        if path.rstrip("/") in ("", "/blog"):
+            continue
+        url = "https://www.kimi.ai" + path
+        if url in seen:
+            continue
+        window = (text or "")[match.start():match.start() + 1500]
+        date = _first_date_in(window)
+        if not date:
+            continue
+        seen.add(url)
+        items.append(_lab_item(lab, match.group(2), url, date, ""))
+    return items
+
+
+def _parse_html_zhipu(text: str, lab: str) -> list:
+    items, seen = [], set()
+    for match in re.finditer(r'href="([^"]*?/en/news/\d+)"', text or ""):
+        href = match.group(1)
+        url = href if href.startswith("http") else "https://www.zhipuai.cn" + href
+        if url in seen:
+            continue
+        window = (text or "")[max(0, match.start() - 400):match.end() + 600]
+        date = _first_date_in(window)
+        if not date:
+            continue
+        title_match = re.search(
+            r'href="' + re.escape(href) + r'"[^>]*>([^<]{4,160})</a>',
+            window,
+        )
+        title = title_match.group(1).strip() if title_match else _title_from_url(url)
+        seen.add(url)
+        items.append(_lab_item(lab, title, url, date, ""))
+    return items
+
+
+_HTML_NEWS_PARSERS = {
+    "html_xai": _parse_html_xai,
+    "html_meta": _parse_html_meta,
+    "html_kimi": _parse_html_kimi,
+    "html_zhipu": _parse_html_zhipu,
+}
+
+
+def parse_html_news_items(text: str, lab: str, kind: str) -> list:
+    parser = _HTML_NEWS_PARSERS.get(kind)
+    if parser is None:
+        return []
+    return parser(text or "", lab)
+
+
+def _lab_item_is_fresh(item, ref, max_age_days: int) -> bool:
+    day = _day(item.get("publish_date"))
+    if not day:
+        return False
+    age = (ref - datetime.strptime(day, "%Y-%m-%d").date()).days
+    return -2 <= age <= max_age_days
+
+
+def _cap_lab_rows(rows, per_lab: int = 3, limit: int = 10) -> list:
+    rows = sorted(rows, key=lambda row: row.get("publish_date") or "", reverse=True)
+    counts, out = {}, []
+    for row in rows:
+        lab = row.get("lab") or ""
+        if counts.get(lab, 0) >= per_lab:
+            continue
+        counts[lab] = counts.get(lab, 0) + 1
+        out.append(row)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _collect_lab_feed_rows(ref, max_age_days: int) -> list:
+    """Fresh items from every configured lab feed. One failure does not blank the rest."""
+    rows = []
+    for feed in LAB_NEWS_FEEDS:
+        lab = feed["lab"]
+        try:
+            resp = _lab_feed_get(feed["url"], lab)
+            text = _response_feed_text(resp)
+        except Exception as exc:
+            _remember_source_error("Discovery", exc)
+            print(f"lab feed {lab} failed: {_short_source_error(exc)}", file=sys.stderr)
+            continue
+        kind = feed.get("kind")
+        try:
+            if kind == "rss":
+                items = parse_rss_items(text, lab)
+            elif kind == "sitemap":
+                items = parse_sitemap_items(
+                    text, lab,
+                    path_contains=feed.get("path_contains") or "",
+                    slug_date=bool(feed.get("slug_date")),
+                )
+            else:
+                items = parse_html_news_items(text, lab, kind)
+        except Exception as exc:
+            _remember_source_error("Discovery", exc)
+            print(f"lab feed {lab} parse failed: {_short_source_error(exc)}",
+                  file=sys.stderr)
+            continue
+        for item in items:
+            if _lab_item_is_fresh(item, ref, max_age_days):
+                rows.append(item)
+    return _cap_lab_rows(rows)
+
+
 def discover_recent_releases(today: str = None, max_age_days: int = 14,
                              timeout: int = 60) -> str:
-    """Query Parallel.ai for genuinely-new model releases → a compact, cited
-    web-research block for the writer model. Also fills LAST_DISCOVERY_MODELS
-    with primary-source hits promoted to ModelRelease objects (the catalog-
-    quiet-day salvage). Returns '' when disabled or on any failure (the
-    pipeline falls back to fetcher-only). Never raises."""
+    """Lab blogs/news first, then any remaining primary-source web search.
+
+    The generic '{month} AI model release' Parallel slots returned listicle
+    pages (2026-10-04 audit). Those slots are now the lab feeds in
+    LAB_NEWS_FEEDS, which run even when Parallel is disabled. Also fills
+    LAST_DISCOVERY_MODELS. Returns '' when nothing fresh survived. Never raises.
+    """
     global LAST_DISCOVERY_MODELS, _DISCOVERY_DISABLED
     LAST_DISCOVERY_MODELS = []
     _DISCOVERY_DISABLED = not (DISCOVERY_ENABLED and PARALLEL_API_KEY)
-    if _DISCOVERY_DISABLED:
-        return ""
     ref = (datetime.strptime(today, "%Y-%m-%d").date() if today
            else datetime.now(timezone.utc).date())
     month = ref.strftime("%B %Y")
-    body = {
-        "objective": (
-            f"Find AI models newly released or updated within {max_age_days} days "
-            f"of {ref.isoformat()}: open-weight and API models across text, reasoning, "
-            "coding, multimodal, and audio. Prefer primary sources (vendor blogs, "
-            "model cards, release notes) stating the release date and specs."),
-        # Diverse angles → broader recall across tiers (frontier/open/coding/
-        # multimodal/audio/local), not just one obvious release. Named labs
-        # raise precision vs generic "new AI model {month}" aggregator hits.
-        "search_queries": [
-            f"new AI model release {month}",
-            f"new open-weight LLM released {month}",
-            "Anthropic Claude OpenAI GPT Google Gemini xAI Grok model launch this week",
-            "DeepSeek Qwen GLM Kimi MiniMax Mistral model release this week",
-            f"new coding model release {month}",
-            f"new multimodal or audio model released {month}",
-            "Hugging Face newly released model this week",
-        ],
-    }
-    try:
-        resp = requests.post(PARALLEL_SEARCH_URL, json=body,
-                             headers={"x-api-key": PARALLEL_API_KEY,
-                                      "Content-Type": "application/json"},
-                             timeout=timeout)
-        resp.raise_for_status()
-        results = resp.json().get("results", []) or []
-    except Exception as e:
-        reason = _remember_source_error("Discovery", e)
-        print(f"Parallel discovery failed: {reason}", file=sys.stderr)
+    results = list(_collect_lab_feed_rows(ref, max_age_days))
+    queries = _discovery_search_queries(month)
+    if queries and not _DISCOVERY_DISABLED:
+        body = {
+            "objective": (
+                f"Find AI models newly released or updated within {max_age_days} days "
+                f"of {ref.isoformat()}: open-weight and API models across text, reasoning, "
+                "coding, multimodal, and audio. Prefer primary sources (vendor blogs, "
+                "model cards, release notes) stating the release date and specs."),
+            "search_queries": queries,
+        }
+        try:
+            resp = requests.post(PARALLEL_SEARCH_URL, json=body,
+                                 headers={"x-api-key": PARALLEL_API_KEY,
+                                          "Content-Type": "application/json"},
+                                 timeout=timeout)
+            resp.raise_for_status()
+            results.extend(resp.json().get("results", []) or [])
+        except Exception as e:
+            reason = _remember_source_error("Discovery", e)
+            print(f"Parallel discovery failed: {reason}", file=sys.stderr)
+            if not results:
+                return ""
+    if not results:
         return ""
 
     kept = []
     models = []
     for r in results:
         pd = (r.get("publish_date") or "").strip()
+        if r.get("require_date") and not pd:
+            continue
         if pd:
             try:
                 age = (ref - datetime.strptime(pd[:10], "%Y-%m-%d").date()).days
@@ -2647,7 +3482,7 @@ def discover_recent_releases(today: str = None, max_age_days: int = 14,
     LAST_DISCOVERY_MODELS = models
     if not kept:
         return ""
-    print(f"Parallel discovery: {len(kept)} recent web source(s)"
+    print(f"Discovery: {len(kept)} recent source(s)"
           f" ({len(models)} candidate model(s)).", file=sys.stderr)
     return "\n".join(kept)
 
@@ -3593,6 +4428,7 @@ def main():
     print(f"Checking {today}... Tracking {len(seen_models)} models")
 
     all_new = []
+    queued_names = set()
     fetched_sources = []
     for source_name, fetcher in [
         ("OpenRouter", fetch_openrouter_models),
@@ -3606,26 +4442,24 @@ def main():
         fetched_sources.append(
             (source_name, batch, _consume_source_error(source_name)))
         for model in batch:
-            if model.name not in seen_models:
-                all_new.append(model)
-                # Don't add to seen_models yet — noise models should be
-                # re-evaluated next run with updated engagement data.
-                # Only posted/significant models get added later.
+            if model.name in seen_models or model.name in queued_names:
+                continue
+            all_new.append(model)
+            queued_names.add(model.name)
+            # Don't add to seen_models yet — noise models should be
+            # re-evaluated next run with updated engagement data.
+            # Only posted/significant models get added later.
     flush_source_health(
         [{"source": name, "items": len(batch), "error": err}
          for name, batch, err in fetched_sources],
         preview=preview_mode,
     )
 
-    stale = [m for m in all_new if is_stale_release(m.release_date)]
-    if stale:
-        print(f"Dropping {len(stale)} stale back-catalog model(s): "
-              + ", ".join(m.name for m in stale[:5])
-              + ("…" if len(stale) > 5 else ""))
-        # Mark them seen so they stop resurfacing on every future run.
-        for m in stale:
-            seen_models.add(m.name)
-        all_new = [m for m in all_new if not is_stale_release(m.release_date)]
+    # Commit cluster before the stale drop: a repo created before launch
+    # (Kumo, AstaBrief) keeps lastModified here, then the cluster date when
+    # the commits say the public release is inside the window.
+    all_new = refine_stale_repo_dates(all_new, today)
+    all_new = drop_stale_models(all_new, seen_models, today)
 
     serving = [m for m in all_new if is_openrouter_serving_sku(m.name)]
     if serving:
@@ -3634,6 +4468,7 @@ def main():
               + ("…" if len(serving) > 5 else ""))
         # Same as stale: mark seen so a fetcher leak cannot retry daily.
         for m in serving:
+            log_dropped_candidate("filter", m.name, "openrouter serving sku")
             seen_models.add(m.name)
         all_new = [m for m in all_new if not is_openrouter_serving_sku(m.name)]
 
@@ -3685,11 +4520,21 @@ def main():
     # candidate set so a writer-0 day can still post via the template
     # (2026-08-24: 9 web sources, 0 catalog models, writer produced 0 entries).
     web_context = discover_recent_releases(today)
-    if _DISCOVERY_DISABLED:
-        flush_source_health(
-            [{"source": "Discovery", "items": 0, "error": "disabled", "track": False}],
-            preview=preview_mode,
-        )
+    # Lab feeds run even when Parallel is off. "disabled" is only the empty
+    # no-key case; a feed that actually returned items is a live source.
+    discovery_has_items = bool((web_context or "").strip() or LAST_DISCOVERY_MODELS)
+    if _DISCOVERY_DISABLED and not discovery_has_items:
+        discovery_error = _consume_source_error("Discovery")
+        if discovery_error:
+            flush_source_health(
+                [{"source": "Discovery", "items": 0, "error": discovery_error}],
+                preview=preview_mode,
+            )
+        else:
+            flush_source_health(
+                [{"source": "Discovery", "items": 0, "error": "disabled", "track": False}],
+                preview=preview_mode,
+            )
     else:
         discovery_error = _consume_source_error("Discovery")
         discovery_items = len(LAST_DISCOVERY_MODELS)
@@ -3760,6 +4605,7 @@ def main():
             enrich_with_hf_cards(digest_models)
 
         message = summarize_models(digest_models, web_context, recent_names)
+        log_writer_exclusions(digest_models, message or "")
         included = 0
         if message and message.strip() != NO_MODELS_SENTINEL:
             included = _count_surfaced_models(message)

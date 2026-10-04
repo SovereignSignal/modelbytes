@@ -16,18 +16,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import monitor
 
 
-_PARALLEL_RESP = {
-    "results": [
-        {"url": "https://vendor.ai/blog/x2", "title": "Acme X-2 released",
-         "publish_date": "2026-06-15", "excerpts": ["Acme released X-2, a 70B open model."]},
-        {"url": "https://old.example/y", "title": "Old model from last year",
-         "publish_date": "2025-01-01", "excerpts": ["ancient"]},
-        {"url": "https://huggingface.co/z", "title": "Z model card",
-         "publish_date": "", "excerpts": ["Z is a 7B coder."]},
-    ]
-}
-
-
 def _resp(payload):
     r = MagicMock(); r.raise_for_status = lambda: None
     r.json.return_value = payload
@@ -46,12 +34,54 @@ def test_discovery_disabled_without_key(monkeypatch):
     assert monitor.discover_recent_releases(today="2026-06-16") == ""
 
 
+_LAB_RSS = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <item>
+    <title>Acme X-2 released</title>
+    <link>https://vendor.ai/blog/x2</link>
+    <pubDate>Mon, 15 Jun 2026 00:00:00 GMT</pubDate>
+    <description>Acme released X-2, a 70B open model.</description>
+  </item>
+  <item>
+    <title>Old model from last year</title>
+    <link>https://old.example/y</link>
+    <pubDate>Wed, 01 Jan 2025 00:00:00 GMT</pubDate>
+    <description>ancient</description>
+  </item>
+  <item>
+    <title>Z model card</title>
+    <link>https://huggingface.co/z</link>
+    <description>Z is a 7B coder.</description>
+  </item>
+</channel></rss>
+"""
+
+
+class _Feed:
+    def __init__(self, text):
+        self.text = text
+        self.content = text.encode("utf-8")
+
+    def raise_for_status(self):
+        return None
+
+
+def _one_lab(text):
+    def get(url, source_name):
+        if "openai.com" in url:
+            return _Feed(text)
+        return _Feed("")
+    return get
+
+
 def test_discovery_filters_stale_and_formats(_discovery_on, monkeypatch):
-    monkeypatch.setattr(monitor.requests, "post", lambda url, **k: _resp(_PARALLEL_RESP))
+    # Lab feeds require a date. An undated item is not "let the writer judge"
+    # anymore — that is how stale blog indexes leaked in.
+    monkeypatch.setattr(monitor, "_lab_feed_get", _one_lab(_LAB_RSS))
     block = monitor.discover_recent_releases(today="2026-06-16", max_age_days=14)
     assert "Acme X-2 released" in block           # recent → kept
     assert "https://vendor.ai/blog/x2" in block
-    assert "Z model card" in block                # undated → kept (writer judges)
+    assert "Z model card" not in block            # undated lab item → dropped
     assert "Old model from last year" not in block  # >14 days → dropped
 
 
@@ -60,16 +90,24 @@ def test_discovery_upgrades_http_urls(_discovery_on, monkeypatch):
     # http://, that scheme lands in the digest and (before 2026-08-13) blocked
     # the whole fallback post. Normalize at the source. Aggregator hosts are
     # dropped entirely — they are how roundup pages reached the writer and
-    # zeroed catalog-quiet days (2026-08-24).
-    payload = {
-        "results": [
-            {"url": "http://aireleasetracker.com/", "title": "Tracker dump",
-             "publish_date": "2026-06-15", "excerpts": ["new models today"]},
-            {"url": "http://vendor.ai/blog/x2", "title": "Acme X-2 released",
-             "publish_date": "2026-06-15", "excerpts": ["70B open model"]},
-        ]
-    }
-    monkeypatch.setattr(monitor.requests, "post", lambda url, **k: _resp(payload))
+    #     zeroed catalog-quiet days (2026-08-24).
+    rss = """<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0"><channel>
+      <item>
+        <title>Tracker dump</title>
+        <link>http://aireleasetracker.com/</link>
+        <pubDate>Mon, 15 Jun 2026 00:00:00 GMT</pubDate>
+        <description>new models today</description>
+      </item>
+      <item>
+        <title>Acme X-2 released</title>
+        <link>http://vendor.ai/blog/x2</link>
+        <pubDate>Mon, 15 Jun 2026 00:00:00 GMT</pubDate>
+        <description>70B open model</description>
+      </item>
+    </channel></rss>
+    """
+    monkeypatch.setattr(monitor, "_lab_feed_get", _one_lab(rss))
     block = monitor.discover_recent_releases(today="2026-06-16", max_age_days=14)
     assert "aireleasetracker" not in block
     assert "https://vendor.ai/blog/x2" in block
@@ -77,9 +115,9 @@ def test_discovery_upgrades_http_urls(_discovery_on, monkeypatch):
 
 
 def test_discovery_graceful_on_failure(_discovery_on, monkeypatch):
-    def boom(url, **k):
-        raise RuntimeError("parallel 500")
-    monkeypatch.setattr(monitor.requests, "post", boom)
+    def boom(url, source_name):
+        raise RuntimeError("feed down")
+    monkeypatch.setattr(monitor, "_lab_feed_get", boom)
     assert monitor.discover_recent_releases(today="2026-06-16") == ""
 
 
@@ -201,7 +239,7 @@ def test_strip_keeps_provided_url_with_path_or_query_suffix():
 
 
 def test_discovery_emits_model_releases_for_primary_sources(_discovery_on, monkeypatch):
-    monkeypatch.setattr(monitor.requests, "post", lambda url, **k: _resp(_PARALLEL_RESP))
+    monkeypatch.setattr(monitor, "_lab_feed_get", _one_lab(_LAB_RSS))
     monitor.discover_recent_releases(today="2026-06-16", max_age_days=14)
     names = [m.name for m in monitor.LAST_DISCOVERY_MODELS]
     urls = [m.url for m in monitor.LAST_DISCOVERY_MODELS]

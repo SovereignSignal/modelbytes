@@ -101,7 +101,7 @@ def test_discovery_failure_returns_empty_and_records_redacted_reason(monkeypatch
     def boom(*_a, **_k):
         raise RuntimeError("parallel-key-secret boom")
 
-    monkeypatch.setattr(monitor.requests, "post", boom)
+    monkeypatch.setattr(monitor, "_lab_feed_get", boom)
     assert monitor.discover_recent_releases("2026-09-29") == ""
     assert monitor.LAST_DISCOVERY_MODELS == []
     reason = monitor._consume_source_error("Discovery")

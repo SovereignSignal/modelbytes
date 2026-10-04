@@ -36,3 +36,16 @@ def _no_network_no_sleep(monkeypatch, tmp_path):
     monkeypatch.setattr(monitor, "SOURCE_HEALTH_PATH", tmp_path / "source_health.json")
     monkeypatch.setattr(monitor, "_SOURCE_ERRORS", {})
     monkeypatch.setattr(monitor, "_DISCOVERY_DISABLED", False)
+
+    class _EmptyLabFeed:
+        text = ""
+        content = b""
+
+        def raise_for_status(self):
+            return None
+
+    # Lab feeds and HF commit lookups are network. Tests that exercise them
+    # monkeypatch these back. Empty feeds keep discover_recent_releases quiet.
+    monkeypatch.setattr(
+        monitor, "_lab_feed_get", lambda url, source_name: _EmptyLabFeed())
+    monkeypatch.setattr(monitor, "_fetch_hf_commits", lambda model_id: [])

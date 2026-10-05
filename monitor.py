@@ -1567,6 +1567,77 @@ def _format_context(ctx: Optional[int]) -> str:
     return f"{ctx:,}"
 
 
+# Classical-ML task tags. These are fine-tune and embedder spam, not a
+# release a builder would miss. Image / video / audio / speech tags are
+# absent on purpose — see _RELEASE_MODALITY_TAGS.
+_COMMODITY_TASKS = frozenset({
+    "image-classification",
+    "object-detection",
+    "audio-classification",
+    "video-classification",
+    "table-to-text",
+    "fill-mask",
+    "feature-extraction",
+    "sentence-similarity",
+    "zero-shot-classification",
+    "token-classification",
+    "translation",
+    "summarization",
+    "depth-estimation",
+})
+
+# Generative and multimodal releases. HF often stamps one of these beside
+# a commodity tag (facebook/sam3 is mask-generation and feature-extraction).
+# The release tag wins; GGUF / quant / LoRA name rules still run first.
+_RELEASE_MODALITY_TAGS = frozenset({
+    "text-to-image",
+    "image-to-image",
+    "image-text-to-image",
+    "image-to-text",
+    "image-text-to-text",
+    "visual-question-answering",
+    "document-question-answering",
+    "unconditional-image-generation",
+    "mask-generation",
+    "image-segmentation",
+    "zero-shot-image-classification",
+    "image-to-3d",
+    "text-to-3d",
+    "text-to-video",
+    "image-to-video",
+    "video-to-video",
+    "image-text-to-video",
+    "text-to-audio-video",
+    "image-to-audio-video",
+    "image-text-to-audio-video",
+    "video-to-audio-video",
+    "audio-to-audio-video",
+    "audio-to-video",
+    "text-to-speech",
+    "text-to-audio",
+    "automatic-speech-recognition",
+    "music-generation",
+    "audio-to-audio",
+    "voice",
+    "any-to-any",
+    "video-text-to-text",
+})
+
+# Substring bans for classical CV / encoder spam. Audio and multimodal
+# architectures (whisper, sam, clip, vits, wav2vec) are not in this list —
+# "sam" was dropping facebook/sam3 and "vit" is scrubbed out of "vits"
+# below so a TTS model is not classified as a ViT.
+_SPAM_ARCHITECTURES = (
+    "resnet", "efficientnet", "mobilenet", "yolo", "detr",
+    "bert", "roberta", "distilbert", "albert", "vit",
+)
+
+
+def _spam_architecture(model_lower: str) -> bool:
+    scrubbed = model_lower.replace("vits", "")
+    return any(arch in scrubbed for arch in _SPAM_ARCHITECTURES)
+
+
 def is_noise_model(model_id: str, author: str, tags: list,
                    downloads: int = 0, likes: int = 0, *,
                    engagement_floor: bool = True) -> bool:
@@ -1621,12 +1692,11 @@ def is_noise_model(model_id: str, author: str, tags: list,
             "-local", "-dev", "-dev1", "-dev2", "-exp", "-exp1", "-exp2",
             "-draft", "-wip", "-wip1", "-wip2", "-wip3"]
     
-    # GGUF is a quant repackage, never a primary "new model" for this digest —
-    # always noise, even from known orgs (unsloth/bartowski's whole output is
-    # GGUF repackages of other people's models). Previously allowed for known
-    # orgs, which leaked e.g. unsloth/diffusiongemma-…-GGUF into the candidate
-    # set, where the publish-QA quant gate then blocked the entire digest.
-    if "-gguf" in model_lower or "_gguf" in model_lower:
+    # GGUF is a quant repackage, never a primary release — even from known
+    # orgs, and even when the name hides it and only the HF tag says gguf
+    # (image turbo packs). A known-org GGUF used to reach publish-QA and
+    # block the whole digest (unsloth/diffusiongemma-…-GGUF).
+    if "-gguf" in model_lower or "_gguf" in model_lower or "gguf" in tags_lower:
         return True
 
     # '-base' as standalone suffix = classifier noise, but 'X-2-base' = real model
@@ -1641,25 +1711,13 @@ def is_noise_model(model_id: str, author: str, tags: list,
     if any(p in model_lower for p in junk):
         return True
 
-    # Non-LLM task types
-    non_llm_tasks = [
-        "image-classification", "object-detection", "image-segmentation",
-        "audio-classification", "automatic-speech-recognition", "table-to-text",
-        "fill-mask", "feature-extraction", "sentence-similarity",
-        "zero-shot-classification", "token-classification",
-        "translation", "summarization", "text-to-image", "image-to-text",
-        "depth-estimation", "video-classification", "text-to-video",
-        "text-to-speech", "music-generation", "voice",
-    ]
-    if any(t in tags_lower for t in non_llm_tasks):
-        return True
+    # Commodity tasks only. A release-modality tag on the same card wins
+    # (mask-generation + feature-extraction, text-to-video + a side tag).
+    if not any(t in _RELEASE_MODALITY_TAGS for t in tags_lower):
+        if any(t in _COMMODITY_TASKS for t in tags_lower):
+            return True
 
-    # Non-LLM architectures
-    non_llm_arch = ["resnet", "vit", "efficientnet", "bert", "roberta",
-                     "distilbert", "albert", "wav2vec", "whisper",
-                     "soundstream", "encodec", "vits", "mobilenet",
-                     "yolo", "detr", "sam", "clip"]
-    if any(a in model_lower for a in non_llm_arch):
+    if _spam_architecture(model_lower):
         return True
 
     # Unknown orgs: strict engagement gate. The new-on-HF pass passes

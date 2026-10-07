@@ -208,6 +208,11 @@ class ModelRelease:
     # often days or months before the public launch.
     recency_signal: Optional[str] = None
     repo_created_at: Optional[str] = None
+    # Optional structured facts. Empty on catalog rows that did not supply
+    # them. The code-built details line reads these; the writer prompt does not.
+    creator: Optional[str] = None
+    modality: Optional[str] = None
+    credit_url: Optional[str] = None
 
     def __post_init__(self):
         if self.performance_scores is None:
@@ -580,6 +585,8 @@ def _redact_secrets(text: str) -> str:
         out = out.replace(DATABASE_PUBLIC_URL, "<database-url>")
     if SLACK_BOT_TOKEN:
         out = out.replace(SLACK_BOT_TOKEN, "<token>")
+    if ARTIFICIAL_ANALYSIS_API_KEY:
+        out = out.replace(ARTIFICIAL_ANALYSIS_API_KEY, "<redacted>")
     return out
 
 
@@ -617,6 +624,7 @@ def _short_source_error(exc: BaseException) -> str:
     text = _redact_secrets(f"{type(exc).__name__}: {exc}")
     for secret in (
         PARALLEL_API_KEY,
+        ARTIFICIAL_ANALYSIS_API_KEY,
         LLM_API_KEY,
         TELEGRAM_BOT_TOKEN,
         SLACK_BOT_TOKEN,
@@ -2130,6 +2138,11 @@ def log_writer_exclusions(models, summary: str) -> List[str]:
 def is_significant_release(model_id: str, author: str, tags: list,
                            downloads: int = 0) -> bool:
     """Check if this is a significant release worth reporting."""
+    tag_set = {str(t).lower() for t in (tags or [])}
+    # AA and TestingCatalog rows are already release-filtered. A non-matching
+    # family name must not lose them to the noise-overflow seen mark.
+    if "aa-release" in tag_set or "tc-release" in tag_set:
+        return True
     model_lower = model_id.lower()
 
     significant_families = [
@@ -2325,6 +2338,10 @@ ENRICH_HF_CARDS = os.environ.get("MODELBYTES_ENRICH_HF_CARDS", "1") == "1"
 # the static fetchers miss (the dedup table drains to 0-new after a few days).
 # Web research + cited sources, fed to the writer model. No Claude.
 PARALLEL_API_KEY = os.environ.get("MODELBYTES_PARALLEL_API_KEY", "")
+# Optional. Unset skips the Artificial Analysis catalog with one info log.
+# Free tier is 100 requests / 24h (AA docs, 2026-10); a daily run is about 6–18.
+ARTIFICIAL_ANALYSIS_API_KEY = os.environ.get(
+    "MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY", "")
 DISCOVERY_ENABLED = os.environ.get(
     "MODELBYTES_DISCOVERY", "1" if PARALLEL_API_KEY else "0") == "1"
 PARALLEL_SEARCH_URL = "https://api.parallel.ai/v1/search"
@@ -2815,6 +2832,17 @@ def categorize_model(model: ModelRelease) -> str:
     name = model.name.lower()
     provider = (model.provider or "").lower()
     traits = [t.lower() for t in (model.unique_traits or [])]
+    modality = (getattr(model, "modality", None) or "").lower()
+    # Media lanes are specialized even when the creator is a frontier lab
+    # (Alibaba / Qwen image models would otherwise hit the org shortcut).
+    if modality and modality not in ("text", "multimodal", "language"):
+        return "specialized"
+    if (model.source or "") == "artificial-analysis":
+        if model.is_open_source is False:
+            return "closed_frontier"
+        return "open_frontier"
+    if (model.source or "") == "testingcatalog":
+        return "specialized"
 
     premier = ["llama-3.3", "llama-3.2", "mistral-large", "mixtral",
                "qwen2.5-72b", "qwen3", "qwen3.6", "deepseek-v3", "deepseek-v4",
@@ -2875,6 +2903,10 @@ def _availability_tag(m: ModelRelease) -> str:
         return "📦 Ollama pull-ready"
     if m.source == "discovery":
         return "🔗 Cited source"
+    # AA's host link already says "Artificial Analysis". A second tag repeats it.
+    # TestingCatalog is labeled by the link host (HF, the lab, testingcatalog.com).
+    if m.source in ("artificial-analysis", "testingcatalog"):
+        return ""
     return "📦 Open weights · HF"
 
 
@@ -2892,6 +2924,7 @@ _HOST_LINK_LABELS = (
     ("hf.co", "HF"),
     ("openrouter.ai", "OpenRouter"),
     ("ollama.com", "Ollama"),
+    ("artificialanalysis.ai", "Artificial Analysis"),
 )
 # Sentence-initial and ordinary words. A capitalized token outside this set
 # must match a listed model, its provider, or its license — otherwise the
@@ -3041,6 +3074,8 @@ def metadata_line(model: ModelRelease) -> str:
         _display_license(getattr(model, "license", None)),
         _price_fragment(model),
         _released_fragment(getattr(model, "release_date", None)),
+        (getattr(model, "creator", None) or "").strip(),
+        (getattr(model, "modality", None) or "").strip(),
     ]
     return " · ".join(bit for bit in bits if bit)
 
@@ -3174,7 +3209,32 @@ def _is_fact_fragment(part: str, model: ModelRelease) -> bool:
         return True
     if raw and text.lower() == raw.lower():
         return True
+    if _is_restated_source_fact(text, model):
+        return True
     return False
+
+
+def _is_restated_source_fact(part: str, model: ModelRelease) -> bool:
+    """True when a clause only repeats creator, modality, or release date.
+
+    Those belong on the code-built details line. A clause that still says
+    something after the facts are removed is kept.
+    """
+    creator = (getattr(model, "creator", None) or "").strip()
+    modality = (getattr(model, "modality", None) or "").strip()
+    if not creator and not modality:
+        return False
+    text = part or ""
+    text = re.sub(
+        r"(?i)\breleased:?\s+(?:\d{4}-\d{2}-\d{2}|[a-z]+\.?\s+\d{1,2})\b",
+        " ", text)
+    if creator:
+        text = re.sub(rf"(?i)\b{re.escape(creator)}\b", " ", text)
+    if modality:
+        text = re.sub(rf"(?i)\b{re.escape(modality)}\b", " ", text)
+        text = re.sub(r"(?i)\bmodels?\b", " ", text)
+    text = re.sub(r"(?i)\b(by|a|an|the|and)\b", " ", text)
+    return re.sub(r"[^a-z0-9]+", "", text, flags=re.I) == ""
 
 
 def _strip_inline_facts(text: str, model: ModelRelease) -> str:
@@ -3259,6 +3319,11 @@ def render_model_entry(model: ModelRelease, prose: str = "",
     if url:
         label = html.escape(link_label(url), quote=False)
         href = html.escape(url, quote=True)
+        line += f' <a href="{href}">→ {label}</a>'
+    credit = (getattr(model, "credit_url", None) or "").strip()
+    if credit and _url_host(credit) and _upgrade_http_url(credit).rstrip("/") != (url or "").rstrip("/"):
+        label = html.escape(link_label(credit), quote=False)
+        href = html.escape(_upgrade_http_url(credit), quote=True)
         line += f' <a href="{href}">→ {label}</a>'
     return line
 
@@ -3682,6 +3747,16 @@ LAST_LINK_DROPPED = 0
 # catalog-quiet day can still post via the template when the writer emits
 # nothing. Reset at the start of each discover_recent_releases() call.
 LAST_DISCOVERY_MODELS: List[ModelRelease] = []
+# Artificial Analysis catalog ids observed this run (`aa/<slug>`), and the
+# subset returned as digest candidates. main() persists catalog-minus-emitted
+# into the existing models table so the next run diffs new ids. Preview does
+# not write them.
+LAST_AA_CATALOG_IDS: Set[str] = set()
+LAST_AA_EMITTED_IDS: Set[str] = set()
+_AA_SKIPPED = False
+# TestingCatalog items inside the digest window before the release filter.
+# A feed full of leaks is still a live source.
+LAST_TC_PARSED = 0
 
 
 def _recent_digest_names(today: str = None, days: int = 10,
@@ -5097,6 +5172,556 @@ def _record_no_publishable(today: str, mode: str, models_found: int,
             f"{n_stale}. Nothing survived verification. Nothing posted.")
 
 
+# Artificial Analysis free Data API (docs: artificialanalysis.ai/data-api/docs).
+# Legacy `/api/v2/data/*` retires 2026-11-04. These `/free` paths accept a free
+# key and return identity, creator, and (on language) release date. Media
+# release dates are included when the payload has them; the free media shape
+# often omits the date, so a first armed run only publishes dated rows inside
+# the digest window and records every id. Later runs publish ids that were
+# not on that baseline.
+_AA_API = "https://artificialanalysis.ai"
+_AA_ENDPOINTS = (
+    ("language", "text",
+     _AA_API + "/api/v2/language/models/free",
+     _AA_API + "/models/{slug}"),
+    ("text-to-image", "text-to-image",
+     _AA_API + "/api/v2/media/text-to-image/models/free",
+     _AA_API + "/image/models/{slug}"),
+    ("image-editing", "image-editing",
+     _AA_API + "/api/v2/media/image-editing/models/free",
+     _AA_API + "/image/leaderboard/editing"),
+    ("text-to-speech", "text-to-speech",
+     _AA_API + "/api/v2/media/text-to-speech/models/free",
+     _AA_API + "/text-to-speech/models/{slug}"),
+    ("text-to-video", "text-to-video",
+     _AA_API + "/api/v2/media/text-to-video/models/free",
+     _AA_API + "/video/leaderboard/text-to-video"),
+    ("image-to-video", "image-to-video",
+     _AA_API + "/api/v2/media/image-to-video/models/free",
+     _AA_API + "/video/leaderboard/image-to-video"),
+)
+_AA_PAGE_CAP = 3
+_AA_EFFORT_RE = re.compile(
+    r"(?i)\((?:high|medium|low|xhigh|none|fast)\)\s*$")
+TESTINGCATALOG_FEED_URL = "https://testingcatalog.com/rss/"
+_TC_SKIP_CATEGORIES = frozenset({
+    "sponsored", "ai rumours", "ai rumors", "rumours", "rumors", "leaks", "leak",
+})
+_TC_LEAK_RE = re.compile(
+    r"(?i)\b("
+    r"prepares|preparing|plans to|reportedly|rumours?|rumors?|leaks?|"
+    r"spotted|coming soon|expected to|will release|will launch|set to|"
+    r"pre-release|unreleased|in testing|internally"
+    r")\b")
+_TC_RELEASE_RE = re.compile(
+    r"(?i)\b("
+    r"launches|launched|releases|released|unveils|unveiled|"
+    r"announces|announced|introduces|introduced|open-weights?|open weights"
+    r")\b")
+_TC_MODEL_RE = re.compile(
+    r"(?i)\b(models?|weights|parameters|multimodal|llm|open-weights?)\b|"
+    r"\b[A-Z][A-Za-z0-9.+-]*[- ]\d")
+_TC_PRODUCT_RE = re.compile(
+    r"(?i)\b(agents?|apps?|desktop|docs|glasses|wallet|programs?|"
+    r"permissions|sidebar)\b")
+
+
+def _aa_seen_key(slug: str) -> str:
+    return "aa/" + (slug or "").strip()
+
+
+def _aa_id_from_model(model) -> Optional[str]:
+    for trait in getattr(model, "unique_traits", None) or []:
+        text = str(trait)
+        if text.startswith("aa-id:"):
+            return _aa_seen_key(text.split(":", 1)[1])
+    return None
+
+
+def _note_aa_baseline(seen: Set[str], *, preview: bool, seed: bool = False) -> None:
+    """Record AA ids in the existing seen set. Preview never writes.
+
+    `seed` records the whole catalog (first-run seed, nothing is posted).
+    Otherwise emitted candidates stay out until a post marks them, so a
+    held release is not forgotten.
+    """
+    if preview or seen is None:
+        return
+    catalog = set(LAST_AA_CATALOG_IDS or ())
+    if not seed:
+        catalog -= set(LAST_AA_EMITTED_IDS or ())
+    seen.update(catalog)
+
+
+def _aa_baseline_established(seen: Set[str]) -> bool:
+    return any(str(item).startswith("aa/") for item in (seen or ()))
+
+
+def _aa_param_label(value) -> Optional[str]:
+    """AA `parameters.total` is billions (21 → 21B), not a raw weight count."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number <= 0:
+        return None
+    if number >= 10000:
+        return _format_param_count(int(number))
+    if number >= 1000:
+        collapsed = number / 1000
+        text = f"{collapsed:.1f}".rstrip("0").rstrip(".")
+        return f"{text}T"
+    text = f"{number:.1f}".rstrip("0").rstrip(".")
+    return f"{text}B"
+
+
+def _aa_language_modality(row: dict) -> str:
+    mods = row.get("modalities") if isinstance(row, dict) else None
+    if not isinstance(mods, dict):
+        return "text"
+    extra = False
+    for side in ("input", "output"):
+        block = mods.get(side) or {}
+        if isinstance(block, dict) and any(
+                key != "text" and value for key, value in block.items()):
+            extra = True
+    return "multimodal" if extra else "text"
+
+
+def _aa_cite_url(template: str, slug: str) -> str:
+    if "{slug}" in template:
+        return template.format(slug=slug)
+    return template
+
+
+def _aa_rows(body) -> Tuple[list, bool]:
+    if isinstance(body, list):
+        return body, False
+    if not isinstance(body, dict):
+        return [], False
+    data = body.get("data")
+    if isinstance(data, dict):
+        data = data.get("models") or data.get("data") or []
+    if not isinstance(data, list):
+        data = []
+    pagination = body.get("pagination") if isinstance(body.get("pagination"), dict) else {}
+    return data, bool(pagination.get("has_more"))
+
+
+def _aa_primary_url(row: dict, cite: str) -> Tuple[str, Optional[str]]:
+    hf = (row.get("huggingface_url") or row.get("open_weights_url") or "").strip()
+    if hf.startswith("http"):
+        return hf, cite
+    or_id = (row.get("openrouter_api_id") or "").strip()
+    if or_id:
+        return f"https://openrouter.ai/models/{or_id}", cite
+    return cite, cite
+
+
+def _aa_row_to_model(row: dict, modality: str, cite_template: str,
+                     ) -> Optional[ModelRelease]:
+    if not isinstance(row, dict):
+        return None
+    slug = str(row.get("slug") or "").strip()
+    name = str(row.get("name") or slug).strip()
+    if not slug or not name:
+        return None
+    if _AA_EFFORT_RE.search(name):
+        return None
+    creator_obj = row.get("model_creator") if isinstance(row.get("model_creator"), dict) else {}
+    creator = str(creator_obj.get("name") or "").strip() or None
+    if modality == "text":
+        modality = _aa_language_modality(row)
+    cite = _aa_cite_url(cite_template, slug)
+    url, credit = _aa_primary_url(row, cite)
+    canonical = url if url != cite else None
+    pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
+    try:
+        pin = float(pricing["price_1m_input_tokens"]) if pricing.get("price_1m_input_tokens") is not None else None
+    except (TypeError, ValueError):
+        pin = None
+    try:
+        pout = float(pricing["price_1m_output_tokens"]) if pricing.get("price_1m_output_tokens") is not None else None
+    except (TypeError, ValueError):
+        pout = None
+    params = row.get("parameters") if isinstance(row.get("parameters"), dict) else {}
+    total = _aa_param_label(params.get("total")) if params else None
+    active = _aa_param_label(params.get("active")) if params else None
+    ctx = row.get("context_window_tokens")
+    try:
+        ctx = int(ctx) if ctx else None
+    except (TypeError, ValueError):
+        ctx = None
+    licensing = row.get("licensing") if isinstance(row.get("licensing"), dict) else {}
+    is_open = licensing.get("is_open_weights") if "is_open_weights" in licensing else None
+    return ModelRelease(
+        name=name,
+        provider=creator or "unknown",
+        source="artificial-analysis",
+        url=url,
+        description="",
+        context_window=ctx,
+        pricing_input=pin,
+        pricing_output=pout,
+        release_date=_day(row.get("release_date")),
+        is_open_source=is_open if isinstance(is_open, bool) else None,
+        total_parameters=total,
+        active_parameters=active,
+        canonical_url=canonical,
+        creator=creator,
+        modality=modality,
+        credit_url=credit,
+        confidence="medium" if row.get("release_date") else "low",
+        unique_traits=["aa-release", f"aa-id:{slug}"],
+    )
+
+
+def _aa_fetch_endpoint(url: str) -> list:
+    rows = []
+    for page in range(1, _AA_PAGE_CAP + 1):
+        resp = _http_get(
+            url, "ArtificialAnalysis", timeout=30,
+            headers={"x-api-key": ARTIFICIAL_ANALYSIS_API_KEY},
+            params={"page": page},
+        )
+        batch, more = _aa_rows(resp.json())
+        rows.extend(batch)
+        if not more:
+            break
+    return rows
+
+
+def fetch_artificial_analysis_models(seen: Set[str] = None,
+                                     today: str = None) -> List[ModelRelease]:
+    """New AA models since the last seen-id baseline. [] when the key is unset.
+
+    Never raises. One failed lane does not drop the others.
+    """
+    global LAST_AA_CATALOG_IDS, LAST_AA_EMITTED_IDS, _AA_SKIPPED
+    LAST_AA_CATALOG_IDS = set()
+    LAST_AA_EMITTED_IDS = set()
+    seen = seen or set()
+    if not ARTIFICIAL_ANALYSIS_API_KEY:
+        _AA_SKIPPED = True
+        print(
+            "Artificial Analysis skipped: "
+            "MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY is unset",
+            file=sys.stderr,
+        )
+        return []
+    _AA_SKIPPED = False
+    baselined = _aa_baseline_established(seen)
+    emitted = []
+    seen_slugs = set()
+    for _lane, modality, url, cite in _AA_ENDPOINTS:
+        try:
+            rows = _aa_fetch_endpoint(url)
+        except Exception as exc:
+            _remember_source_error("ArtificialAnalysis", exc)
+            print(
+                f"Artificial Analysis {_lane} failed: {_short_source_error(exc)}",
+                file=sys.stderr,
+            )
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            slug = str(row.get("slug") or "").strip()
+            if not slug or slug in seen_slugs:
+                continue
+            seen_slugs.add(slug)
+            key = _aa_seen_key(slug)
+            LAST_AA_CATALOG_IDS.add(key)
+            if _AA_EFFORT_RE.search(str(row.get("name") or "")):
+                continue
+            model = _aa_row_to_model(row, modality, cite)
+            if model is None:
+                continue
+            if key in seen or model.name in seen:
+                continue
+            dated = model.release_date
+            if dated and digest_release_is_stale(dated, today=today):
+                continue
+            if not dated and not baselined:
+                continue
+            emitted.append(model)
+            LAST_AA_EMITTED_IDS.add(key)
+    return emitted
+
+
+def _compact_model_key(name: str) -> str:
+    return _compact_match_text((name or "").split("/")[-1])
+
+
+def _apply_aa_facts(dest: ModelRelease, src: ModelRelease, today: str = None) -> None:
+    """Copy missing AA facts onto a primary-source row. Do not replace its URL."""
+    if (not dest.release_date and src.release_date
+            and not digest_release_is_stale(src.release_date, today=today)):
+        dest.release_date = src.release_date
+    if not getattr(dest, "creator", None) and src.creator:
+        dest.creator = src.creator
+    if not getattr(dest, "modality", None) and src.modality:
+        dest.modality = src.modality
+    if not dest.total_parameters and src.total_parameters:
+        dest.total_parameters = src.total_parameters
+    if not dest.active_parameters and src.active_parameters:
+        dest.active_parameters = src.active_parameters
+    if dest.context_window is None and src.context_window:
+        dest.context_window = src.context_window
+    if dest.pricing_input is None and src.pricing_input is not None:
+        dest.pricing_input = src.pricing_input
+        dest.pricing_output = src.pricing_output
+    credit = (src.credit_url or "").strip()
+    if credit and not getattr(dest, "credit_url", None):
+        if _url_host(credit) == "artificialanalysis.ai":
+            dest.credit_url = credit
+    # Keep the stable AA id on the primary row so a successful post records
+    # it. If this row is not posted, the id stays unpersisted and the merge
+    # runs again next time instead of publishing a second AA entry.
+    for trait in src.unique_traits or []:
+        if str(trait).startswith("aa-id:") and trait not in (dest.unique_traits or []):
+            dest.unique_traits.append(trait)
+
+
+def absorb_extra_source(incoming: ModelRelease, existing: List[ModelRelease],
+                        today: str = None) -> bool:
+    """True when `incoming` is the same release as a row already queued.
+
+    Artificial Analysis facts fill empty structured fields. TestingCatalog
+    yields to the earlier row (vendor / HF / OpenRouter) and does not
+    replace that URL.
+    """
+    if incoming is None:
+        return False
+    blob = _compact_match_text(
+        f"{getattr(incoming, 'name', '')} {getattr(incoming, 'description', '')}")
+    match = None
+    for model in existing or []:
+        if model is incoming:
+            continue
+        left = _compact_model_key(getattr(incoming, "name", ""))
+        right = _compact_model_key(getattr(model, "name", ""))
+        if len(left) >= 8 and len(right) >= 8 and (
+                left == right or left in right or right in left):
+            match = model
+            break
+        if len(right) >= 8 and right in blob:
+            match = model
+            break
+    if match is None:
+        return False
+    if (incoming.source or "") == "artificial-analysis":
+        _apply_aa_facts(match, incoming, today=today)
+    return True
+
+
+def _testingcatalog_get(url: str):
+    """One GET for the TestingCatalog feed. No retry loop."""
+    return _lab_feed_get(url, "TestingCatalog")
+
+
+def parse_testingcatalog_items(text: str) -> list:
+    """RSS items with category. [] on empty or unparseable input.
+
+    Reads the original elements. Re-serializing a namespaced item (the live
+    feed uses dc: and media:) drops the xmlns and the fragment will not parse.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return []
+    items = []
+    for el in root.iter():
+        if _xml_local(el.tag) != "item":
+            continue
+        title = excerpt = date = link = category = ""
+        for child in list(el):
+            name = _xml_local(child.tag)
+            if name == "title" and not title:
+                title = _xml_text(child)
+            elif name in ("description", "summary") and not excerpt:
+                excerpt = _xml_text(child)
+            elif name in ("pubDate", "published", "updated", "date") and not date:
+                date = _xml_text(child)
+            elif name == "category" and not category:
+                category = _xml_text(child)
+            elif name == "link" and not link:
+                href = (child.get("href") or "").strip()
+                text_link = _xml_text(child)
+                rel = (child.get("rel") or "").lower()
+                candidate = text_link or href
+                if candidate.startswith("http") and rel in ("", "alternate"):
+                    link = candidate
+                elif candidate.startswith("http") and not link:
+                    link = candidate
+        if not link or not (title or excerpt):
+            continue
+        row = _lab_item("TestingCatalog", title, link, _day(date) or "", excerpt)
+        row["category"] = category
+        items.append(row)
+    return items
+
+
+def _preferred_source_url(text: str, fallback: str) -> str:
+    """Vendor / HF / OpenRouter links beat a TestingCatalog permalink."""
+    found = [u.rstrip(").,]>\"'") for u in re.findall(r"https?://[^\s<>\"]+", text or "")]
+
+    def rank(url: str) -> int:
+        host = _url_host(url)
+        if host in ("huggingface.co", "hf.co"):
+            return 0
+        if host == "openrouter.ai":
+            return 1
+        if host == "ollama.com":
+            return 2
+        if "testingcatalog.com" in host or _host_is_aggregator(url):
+            return 9
+        return 3
+
+    primary = [url for url in found if rank(url) < 9]
+    if not primary:
+        return fallback
+    primary.sort(key=rank)
+    return _upgrade_http_url(primary[0])
+
+
+_TC_NAME_VERB = re.compile(
+    r"(?i)^(?P<org>[A-Z0-9][\w.&'+-]*(?:\s+[A-Z0-9][\w.&'+-]*){0,3})\s+"
+    r"(?:launches|launched|releases|released|unveils|unveiled|"
+    r"announces|announced|introduces|introduced)\s+"
+    r"(?:(?:an?\s+)?open[- ]weights?\s+)?"
+    r"(?P<rest>.+)$")
+_TC_NAME_TAIL = re.compile(
+    r"(?i)\s+(?:with|for|to|on|via|after|before|and|preview|"
+    r"open[- ]weights?|parameters?|context|sota|score)\b")
+_TC_GENERIC_NAME = frozenset({
+    "model", "models", "weights", "weight", "llm", "ai", "update", "updates",
+    "release", "releases", "version", "api", "preview",
+})
+
+
+def testingcatalog_model_name(title: str) -> Optional[str]:
+    """Model name from a TestingCatalog headline, or None when it is not clear.
+
+    "Aleph Alpha releases open-weight Kolibri with 1M context" → "Aleph Alpha Kolibri".
+    "Mistral launches Large 4 preview with 1 T parameters" → "Mistral Large 4".
+    A headline that does not name the model is skipped, not published as-is.
+    """
+    title = _clean_title(title)
+    match = _TC_NAME_VERB.match(title)
+    if not match:
+        return None
+    org = re.sub(r"\s+", " ", match.group("org")).strip()
+    rest = match.group("rest").strip()
+    tail = _TC_NAME_TAIL.search(rest)
+    if tail:
+        rest = rest[:tail.start()]
+    rest = rest.strip(" -–—,;:")
+    if not rest or rest.lower() in _TC_GENERIC_NAME:
+        return None
+    if re.fullmatch(r"[\d.]+", rest):
+        return None
+    if rest.lower().startswith(org.lower()):
+        name = rest
+    else:
+        name = f"{org} {rest}"
+    name = re.sub(r"\s+", " ", name).strip()
+    if not name or name.lower() == title.lower():
+        return None
+    if len(name) > 48 or len(name.split()) > 6:
+        return None
+    if not re.search(r"[A-Za-z]", name):
+        return None
+    if _TC_RELEASE_RE.search(name):
+        return None
+    return name
+
+
+def testingcatalog_is_model_release(title: str, description: str = "",
+                                    category: str = "") -> bool:
+    """True for an item that reports a model as released.
+
+    Leaks, rumors, sponsored posts, and product-feature notes are False so
+    they are not given a Released line.
+    """
+    cat = (category or "").strip().lower()
+    if cat in _TC_SKIP_CATEGORIES:
+        return False
+    blob = f"{title or ''} {description or ''}"
+    if _TC_LEAK_RE.search(blob):
+        return False
+    if not _TC_RELEASE_RE.search(title or ""):
+        return False
+    if _TC_PRODUCT_RE.search(title or "") and not re.search(
+            r"(?i)\b(models?|weights|parameters|open-weights?)\b", title or ""):
+        return False
+    return bool(_TC_MODEL_RE.search(blob))
+
+
+def fetch_testingcatalog_models(existing: List[ModelRelease] = None,
+                                today: str = None) -> List[ModelRelease]:
+    """Fresh TestingCatalog items that are actual model releases. Never raises."""
+    global LAST_TC_PARSED
+    LAST_TC_PARSED = 0
+    try:
+        resp = _testingcatalog_get(TESTINGCATALOG_FEED_URL)
+        text = _response_feed_text(resp)
+    except Exception as exc:
+        _remember_source_error("TestingCatalog", exc)
+        print(f"TestingCatalog failed: {_short_source_error(exc)}", file=sys.stderr)
+        return []
+    try:
+        items = parse_testingcatalog_items(text)
+    except Exception as exc:
+        _remember_source_error("TestingCatalog", exc)
+        print(f"TestingCatalog parse failed: {_short_source_error(exc)}",
+              file=sys.stderr)
+        return []
+    fresh = []
+    for item in items:
+        day = _day(item.get("publish_date"))
+        if not day or digest_release_is_stale(day, today=today):
+            continue
+        fresh.append(item)
+    LAST_TC_PARSED = len(fresh)
+    models = []
+    queued = list(existing or [])
+    for item in fresh:
+        title = item.get("title") or ""
+        excerpt = " ".join(item.get("excerpts") or [])
+        if not testingcatalog_is_model_release(
+                title, excerpt, item.get("category") or ""):
+            continue
+        model_name = testingcatalog_model_name(title)
+        if not model_name:
+            continue
+        fallback = _upgrade_http_url(item.get("url") or "")
+        url = _preferred_source_url(f"{title} {excerpt}", fallback)
+        if not url:
+            continue
+        model = ModelRelease(
+            name=model_name,
+            provider=_resolve_provider("", model_name),
+            source="testingcatalog",
+            url=url,
+            description=_smart_truncate(excerpt, 200),
+            release_date=_day(item.get("publish_date")),
+            canonical_url=url,
+            confidence="low",
+            unique_traits=["tc-release"],
+        )
+        if absorb_extra_source(model, queued, today=today):
+            continue
+        models.append(model)
+        queued.append(model)
+        if len(models) >= 5:
+            break
+    return models
+
+
 def main():
     preview_mode = "--preview" in sys.argv
     if preview_mode:
@@ -5119,6 +5744,11 @@ def main():
     LAST_SUMMARY_MODE = "template"
     _DISCOVERY_DISABLED = False
     _SOURCE_ERRORS.clear()
+    global LAST_AA_CATALOG_IDS, LAST_AA_EMITTED_IDS, _AA_SKIPPED, LAST_TC_PARSED
+    LAST_AA_CATALOG_IDS = set()
+    LAST_AA_EMITTED_IDS = set()
+    _AA_SKIPPED = False
+    LAST_TC_PARSED = 0
 
     # Retry queued release events before every early return (already-posted
     # curated day, seed, quiet day, no-models). Preview and a disabled flag
@@ -5172,24 +5802,35 @@ def main():
         ("HuggingFace-Trending", fetch_huggingface_trending),
         ("HuggingFace-Orgs", fetch_major_orgs),
         ("HuggingFace-Top-TextGen", fetch_hf_text_generation),
+        ("ArtificialAnalysis",
+         lambda: fetch_artificial_analysis_models(seen_models, today=today)),
+        ("TestingCatalog",
+         lambda: fetch_testingcatalog_models(existing=all_new, today=today)),
     ]:
         print(f"Fetching {source_name}...")
         batch = list(fetcher() or [])
+        err = _consume_source_error(source_name)
+        items = len(batch)
+        track = True
+        if source_name == "ArtificialAnalysis" and _AA_SKIPPED and not err:
+            err = "disabled"
+            track = False
+        if source_name == "TestingCatalog" and not err:
+            items = max(items, LAST_TC_PARSED)
         fetched_sources.append(
-            (source_name, batch, _consume_source_error(source_name)))
+            {"source": source_name, "items": items, "error": err, "track": track})
         for model in batch:
             if model.name in seen_models or model.name in queued_names:
                 continue
+            if model.source in ("artificial-analysis", "testingcatalog"):
+                if absorb_extra_source(model, all_new, today=today):
+                    continue
             all_new.append(model)
             queued_names.add(model.name)
             # Don't add to seen_models yet — noise models should be
             # re-evaluated next run with updated engagement data.
             # Only posted/significant models get added later.
-    flush_source_health(
-        [{"source": name, "items": len(batch), "error": err}
-         for name, batch, err in fetched_sources],
-        preview=preview_mode,
-    )
+    flush_source_health(fetched_sources, preview=preview_mode)
 
     # Commit cluster before the stale drop: a repo created before launch
     # (Kumo, AstaBrief) keeps lastModified here, then the cluster date when
@@ -5236,6 +5877,7 @@ def main():
         # Seed all current models so they won't be reported as "new" next time
         for m in all_new:
             seen_models.add(m.name)
+        _note_aa_baseline(seen_models, preview=False, seed=True)
         save_seen_models(seen_models)
         record_publish_run(today, "fallback", "seeded", models_found=len(all_new))
         ping_heartbeat(True, "seeded")
@@ -5362,6 +6004,7 @@ def main():
                 print("Preview mode — not sending (no publishable entries)")
                 return 0
             _record_no_publishable(today, fallback_mode, len(all_new), message)
+            _note_aa_baseline(seen_models, preview=False, seed=False)
             save_seen_models(seen_models)
             return 0
 
@@ -5434,6 +6077,11 @@ def main():
         slack_ok = send_slack_post(message)  # mirror to Slack (no-op unless configured)
         for n in posted_names | noise_overflow:
             seen_models.add(n)
+        for model in list(pre_collapse) + list(digest_models):
+            if model.name in posted_names or model.name in noise_overflow:
+                key = _aa_id_from_model(model)
+                if key:
+                    seen_models.add(key)
         record_publish_run(today, fallback_mode, "posted",
                            models_found=len(all_new),
                            models_emitted=len(digest_models),
@@ -5475,6 +6123,7 @@ def main():
         if not preview_mode:
             _record_no_publishable(today, "fallback", 0)
 
+    _note_aa_baseline(seen_models, preview=preview_mode, seed=False)
     save_seen_models(seen_models)
     return 0
 

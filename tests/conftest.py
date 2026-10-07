@@ -32,6 +32,9 @@ def _no_network_no_sleep(monkeypatch, tmp_path):
     monkeypatch.delenv("MODELBYTES_RELEASE_FORWARDING", raising=False)
     monkeypatch.delenv("RELEASE_EVENTS_URL", raising=False)
     monkeypatch.delenv("RELEASE_EVENTS_TOKEN", raising=False)
+    # Optional Artificial Analysis key must not make the suite call that API.
+    monkeypatch.delenv("MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY", raising=False)
+    monkeypatch.setattr(monitor, "ARTIFICIAL_ANALYSIS_API_KEY", "")
     # Source-health state must not leak across tests or into the repo tree.
     monkeypatch.setattr(monitor, "SOURCE_HEALTH_PATH", tmp_path / "source_health.json")
     monkeypatch.setattr(monitor, "_SOURCE_ERRORS", {})

@@ -115,16 +115,24 @@ Fix list/filter leaks (HF org casing, `sig_org_map`, digest-body persistence) be
 - Suggested first test: n/a.
 - Recommendation: reject as fetchers. OpenRouter already covers hosted availability.
 
-### LMArena / Artificial Analysis HTML leaderboards
+### LMArena HTML leaderboard
 
 - Type: community trend / benchmark surface
-- Candidate URL: https://artificialanalysis.ai/models , HF Space `lmarena-ai/arena-leaderboard`
+- Candidate URL: HF Space `lmarena-ai/arena-leaderboard`
 - Why it matters: newly submitted model IDs sometimes appear here first.
 - Expected metadata: model name, score, date (when present).
 - Noise risks: HTML-only (2026-08-20); ClawBytes already passed LMArena ("no machine source since the HF space went stale").
 - Access/auth: public HTML, unstable.
 - Suggested first test: n/a until a JSON endpoint exists.
 - Recommendation: reject until they publish a stable machine-readable board.
+
+### Artificial Analysis — implemented
+
+The 2026-08-20 "reject, HTML-only" note is obsolete. The free Data API
+(`GET /api/v2/language/models/free` and the five `/api/v2/media/*/models/free`
+lanes) is wired as an optional source. Legacy `/api/v2/data/*` retires
+2026-11-04. The key is `MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY`; unset skips
+the source. Seen ids are `aa/<slug>` rows in the existing `models` table.
 
 ### `ollama.com/api/tags` as a library catalog
 

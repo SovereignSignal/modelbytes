@@ -2841,6 +2841,8 @@ def categorize_model(model: ModelRelease) -> str:
         if model.is_open_source is False:
             return "closed_frontier"
         return "open_frontier"
+    if (model.source or "") == "testingcatalog":
+        return "specialized"
 
     premier = ["llama-3.3", "llama-3.2", "mistral-large", "mixtral",
                "qwen2.5-72b", "qwen3", "qwen3.6", "deepseek-v3", "deepseek-v4",
@@ -2901,10 +2903,10 @@ def _availability_tag(m: ModelRelease) -> str:
         return "📦 Ollama pull-ready"
     if m.source == "discovery":
         return "🔗 Cited source"
-    if m.source == "artificial-analysis":
-        return "🔗 Artificial Analysis"
-    if m.source == "testingcatalog":
-        return "🔗 Cited source"
+    # AA's host link already says "Artificial Analysis". A second tag repeats it.
+    # TestingCatalog is labeled by the link host (HF, the lab, testingcatalog.com).
+    if m.source in ("artificial-analysis", "testingcatalog"):
+        return ""
     return "📦 Open weights · HF"
 
 
@@ -5586,6 +5588,58 @@ def _preferred_source_url(text: str, fallback: str) -> str:
     return _upgrade_http_url(primary[0])
 
 
+_TC_NAME_VERB = re.compile(
+    r"(?i)^(?P<org>[A-Z0-9][\w.&'+-]*(?:\s+[A-Z0-9][\w.&'+-]*){0,3})\s+"
+    r"(?:launches|launched|releases|released|unveils|unveiled|"
+    r"announces|announced|introduces|introduced)\s+"
+    r"(?:(?:an?\s+)?open[- ]weights?\s+)?"
+    r"(?P<rest>.+)$")
+_TC_NAME_TAIL = re.compile(
+    r"(?i)\s+(?:with|for|to|on|via|after|before|and|preview|"
+    r"open[- ]weights?|parameters?|context|sota|score)\b")
+_TC_GENERIC_NAME = frozenset({
+    "model", "models", "weights", "weight", "llm", "ai", "update", "updates",
+    "release", "releases", "version", "api", "preview",
+})
+
+
+def testingcatalog_model_name(title: str) -> Optional[str]:
+    """Model name from a TestingCatalog headline, or None when it is not clear.
+
+    "Aleph Alpha releases open-weight Kolibri with 1M context" → "Aleph Alpha Kolibri".
+    "Mistral launches Large 4 preview with 1 T parameters" → "Mistral Large 4".
+    A headline that does not name the model is skipped, not published as-is.
+    """
+    title = _clean_title(title)
+    match = _TC_NAME_VERB.match(title)
+    if not match:
+        return None
+    org = re.sub(r"\s+", " ", match.group("org")).strip()
+    rest = match.group("rest").strip()
+    tail = _TC_NAME_TAIL.search(rest)
+    if tail:
+        rest = rest[:tail.start()]
+    rest = rest.strip(" -–—,;:")
+    if not rest or rest.lower() in _TC_GENERIC_NAME:
+        return None
+    if re.fullmatch(r"[\d.]+", rest):
+        return None
+    if rest.lower().startswith(org.lower()):
+        name = rest
+    else:
+        name = f"{org} {rest}"
+    name = re.sub(r"\s+", " ", name).strip()
+    if not name or name.lower() == title.lower():
+        return None
+    if len(name) > 48 or len(name.split()) > 6:
+        return None
+    if not re.search(r"[A-Za-z]", name):
+        return None
+    if _TC_RELEASE_RE.search(name):
+        return None
+    return name
+
+
 def testingcatalog_is_model_release(title: str, description: str = "",
                                     category: str = "") -> bool:
     """True for an item that reports a model as released.
@@ -5641,13 +5695,16 @@ def fetch_testingcatalog_models(existing: List[ModelRelease] = None,
         if not testingcatalog_is_model_release(
                 title, excerpt, item.get("category") or ""):
             continue
+        model_name = testingcatalog_model_name(title)
+        if not model_name:
+            continue
         fallback = _upgrade_http_url(item.get("url") or "")
         url = _preferred_source_url(f"{title} {excerpt}", fallback)
         if not url:
             continue
         model = ModelRelease(
-            name=title[:180],
-            provider=_resolve_provider("", title),
+            name=model_name,
+            provider=_resolve_provider("", model_name),
             source="testingcatalog",
             url=url,
             description=_smart_truncate(excerpt, 200),

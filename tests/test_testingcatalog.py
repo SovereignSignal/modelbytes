@@ -94,10 +94,7 @@ def test_testingcatalog_keeps_releases_and_skips_leaks(monkeypatch):
     monkeypatch.setattr(
         monitor, "_testingcatalog_get", lambda url: _Feed(FEED))
     models = monitor.fetch_testingcatalog_models(today=TODAY)
-    assert _names(models) == [
-        "Mistral launches Large 4 preview with 1 T parameters",
-        "Aleph Alpha releases open-weight Kolibri with 1M context",
-    ]
+    assert _names(models) == ["Mistral Large 4", "Aleph Alpha Kolibri"]
     mistral, kolibri = models
     assert mistral.release_date == "2026-10-06"
     assert mistral.url == "https://huggingface.co/mistralai/Mistral-Large-4"
@@ -110,10 +107,18 @@ def test_testingcatalog_keeps_releases_and_skips_leaks(monkeypatch):
     assert "plans to" not in blob
     assert "docs" not in blob
     assert "dots" not in blob
+    assert "launches" not in blob
+    assert "releases" not in blob
     assert "gemini 4" not in blob  # Sep 30 is outside the 3-day window
     rendered = monitor.render_model_entry(kolibri, kolibri.description)
-    assert "Released Oct 7" in rendered
-    assert "→ testingcatalog.com</a>" in rendered
+    assert rendered == (
+        "<b>Aleph Alpha Kolibri</b> — "
+        "<i>Aleph Alpha's bilingual Kolibri model offers Apache 2.0 weights.</i> "
+        "Released Oct 7. "
+        '<a href="https://www.testingcatalog.com/aleph-alpha-releases-open-weight-kolibri-with-1m-context/">'
+        "→ testingcatalog.com</a>"
+    )
+    assert "Cited source" not in rendered
     assert "prepares" not in rendered
 
 
@@ -162,7 +167,23 @@ def test_testingcatalog_namespaced_feed_still_filters(monkeypatch):
     """
     monkeypatch.setattr(monitor, "_testingcatalog_get", lambda url: _Feed(namespaced))
     models = monitor.fetch_testingcatalog_models(today=TODAY)
-    assert _names(models) == ["Mistral launches Large 4 with 1 T parameters"]
+    assert _names(models) == ["Mistral Large 4"]
+
+
+def test_testingcatalog_skips_a_release_it_cannot_name(monkeypatch):
+    vague = """<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0"><channel>
+      <item>
+        <title>Acme releases update with new weights</title>
+        <link>https://www.testingcatalog.com/acme-update/</link>
+        <pubDate>Wed, 07 Oct 2026 12:00:00 +0000</pubDate>
+        <category>Acme</category>
+        <description>An update with new weights.</description>
+      </item>
+    </channel></rss>
+    """
+    monkeypatch.setattr(monitor, "_testingcatalog_get", lambda url: _Feed(vague))
+    assert monitor.fetch_testingcatalog_models(today=TODAY) == []
 
 
 def test_testingcatalog_failure_is_empty_and_recorded(monkeypatch):

@@ -251,10 +251,10 @@ def test_aa_facts_render_on_the_code_built_line_not_in_prose():
     assert rendered == (
         "<b>Ideogram 4.5</b> — "
         "Released Oct 6 · Ideogram · text-to-image. "
-        '🔗 Artificial Analysis. '
         '<a href="https://artificialanalysis.ai/image/models/ideogram-4-5">'
         "→ Artificial Analysis</a>"
     )
+    assert "🔗 Artificial Analysis" not in rendered
     assert "by Ideogram, a text-to-image" not in rendered
 
 

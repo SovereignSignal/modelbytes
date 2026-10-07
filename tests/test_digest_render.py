@@ -5,6 +5,7 @@ release date, availability, and link labels are rendered in code so a fallback
 model cannot change the format. Fixtures quote the public channel text from
 digests #217–#225 (Sep 28–Oct 6, 2026).
 """
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -464,3 +465,206 @@ def test_summarize_drops_stale_and_bad_take_from_oct6_shape(monkeypatch, capsys)
     assert "→ Source" not in msg
     assert "Dropped Take" in err
     assert "Mistral Large 4" in msg
+
+
+def _tier_block(msg, title):
+    match = re.search(
+        rf"━━━ <b>{re.escape(title)}</b>[^\n]*\n(.*?)(?=\n━━━ |\n📊 |\Z)",
+        msg,
+        re.S,
+    )
+    assert match, f"{title} section missing:\n{msg}"
+    return match.group(1)
+
+
+def test_unrecognized_also_tracked_header_is_remapped(monkeypatch, capsys):
+    """#226 filed 3 of 4 models under a made-up ALSO TRACKED header.
+
+    Items under a header outside the standard set move into the section
+    their model data already implies. Nothing is dropped. The body that
+    would be posted no longer contains the made-up header, so the
+    unrecognized-tier warning does not fire on it.
+    """
+    closed = _model(
+        "openai/gpt-4o",
+        source="openrouter",
+        url="https://openrouter.ai/models/openai/gpt-4o",
+        release_date="2026-10-07",
+        is_open_source=False,
+    )
+    frontier = _model(
+        "Qwen/Qwen3-72B",
+        release_date="2026-10-07",
+        is_open_source=True,
+        url="https://huggingface.co/Qwen/Qwen3-72B",
+    )
+    local = _model(
+        "tiny-local-7b",
+        provider="Ollama",
+        source="ollama",
+        url="https://ollama.com/library/tiny-local-7b",
+        release_date="2026-10-07",
+    )
+    image = _model(
+        "acme/Shelf-Classifier",
+        modality="image",
+        release_date="2026-10-07",
+        url="https://huggingface.co/acme/Shelf-Classifier",
+    )
+    mystery = _model(
+        "acme/Mystery-Widget",
+        release_date="2026-10-07",
+        url="https://huggingface.co/acme/Mystery-Widget",
+    )
+    # Writer kept a real tier, then invented ALSO TRACKED for the rest.
+    # One name matches no candidate and must still be published.
+    body = (
+        "<i>Narrow tools, not a frontier wave.</i>\n"
+        "\n"
+        "━━━ <b>CLOSED FRONTIER</b> 🔒\n"
+        "\n"
+        "<b>GPT 4o</b> — <i>Closed API point release.</i>\n"
+        "\n"
+        "━━━ <b>ALSO TRACKED</b>\n"
+        "\n"
+        "<b>Qwen3 72B</b> — <i>Open flagship weights.</i>\n"
+        "<b>Tiny Local 7b</b> — <i>Runs on a laptop.</i>\n"
+        "<b>Shelf Classifier</b> — <i>Image classifier for a catalog.</i>\n"
+        "<b>Mystery Widget</b> — <i>A small tool model with no public tier.</i>\n"
+        "<b>Unmatched Gadget</b> — <i>Kept even when no candidate matches.</i>\n"
+    )
+    fake = MagicMock()
+    fake.raise_for_status = lambda: None
+    fake.json.return_value = {"choices": [{"message": {"content": body}}]}
+    monkeypatch.setattr(monitor, "LLM_API_KEY", "k")
+    monkeypatch.setattr(monitor, "LLM_MODEL_FALLBACK", None)
+    monkeypatch.setattr(monitor.requests, "post", lambda *a, **k: fake)
+    msg = monitor.summarize_models(
+        [closed, frontier, local, image, mystery], today="2026-10-07")
+    err = capsys.readouterr().err
+
+    assert "ALSO TRACKED" not in msg
+    assert "Qwen3 72B" in _tier_block(msg, "OPEN FRONTIER")
+    assert "GPT 4o" in _tier_block(msg, "CLOSED FRONTIER")
+    assert "Qwen3" not in _tier_block(msg, "CLOSED FRONTIER")
+    specialized = _tier_block(msg, "SPECIALIZED")
+    assert "Shelf Classifier" in specialized
+    assert "Mystery Widget" in specialized
+    assert "Unmatched Gadget" in specialized
+    assert "Tiny Local 7b" in _tier_block(msg, "LOCAL")
+    for name in ("Qwen3 72B", "Tiny Local 7b", "Shelf Classifier",
+                 "Mystery Widget", "Unmatched Gadget", "GPT 4o"):
+        assert name in msg
+
+    _, warnings, errors = monitor.validate_digest_for_publish(msg, mode="curated")
+    assert not any("unrecognized tier header" in w for w in warnings)
+    assert not any("ALSO TRACKED" in w for w in warnings)
+    assert errors == []
+
+    remap_lines = [line for line in err.splitlines() if "Remapped unrecognized section" in line]
+    assert len(remap_lines) == 1
+    logged = remap_lines[0]
+    assert "ALSO TRACKED" in logged
+    assert "Qwen3 72B" in logged and "OPEN FRONTIER" in logged
+    assert "Tiny Local 7b" in logged and "LOCAL" in logged
+    assert "Mystery Widget" in logged and "SPECIALIZED" in logged
+    assert "Unmatched Gadget" in logged and "SPECIALIZED" in logged
+
+
+def test_structured_other_bucket_is_a_standard_section(monkeypatch):
+    """TAKE/ITEM/PROSE still renders. 'other' is not posted as ALSO TRACKED."""
+    model = _model(
+        "acme/Mystery-Widget",
+        release_date="2026-10-07",
+        url="https://huggingface.co/acme/Mystery-Widget",
+    )
+    body = (
+        "TAKE: NONE\n"
+        "ITEM: Mystery Widget\n"
+        "PROSE: A small tool model with no public tier.\n"
+    )
+    fake = MagicMock()
+    fake.raise_for_status = lambda: None
+    fake.json.return_value = {"choices": [{"message": {"content": body}}]}
+    monkeypatch.setattr(monitor, "LLM_API_KEY", "k")
+    monkeypatch.setattr(monitor, "LLM_MODEL_FALLBACK", None)
+    monkeypatch.setattr(monitor.requests, "post", lambda *a, **k: fake)
+    msg = monitor.summarize_models([model], today="2026-10-07")
+    assert "ALSO TRACKED" not in msg
+    assert "Mystery Widget" in _tier_block(msg, "SPECIALIZED")
+    _, warnings, _errors = monitor.validate_digest_for_publish(msg, mode="curated")
+    assert not any("unrecognized tier header" in w for w in warnings)
+
+
+def test_no_blank_line_directly_under_section_header(monkeypatch):
+    """Header, then the first item. The blank line under the header is gone."""
+    model = _model(
+        "google/gemma-4-12B-it",
+        total_parameters="12B",
+        license="apache-2.0",
+        release_date="2026-10-07",
+        url="https://huggingface.co/google/gemma-4-12B-it",
+        is_open_source=True,
+    )
+    body = (
+        "TAKE: NONE\n"
+        "ITEM: Gemma 4 12B\n"
+        "PROSE: Builders can run it without an API key.\n"
+    )
+    fake = MagicMock()
+    fake.raise_for_status = lambda: None
+    fake.json.return_value = {"choices": [{"message": {"content": body}}]}
+    monkeypatch.setattr(monitor, "LLM_API_KEY", "k")
+    monkeypatch.setattr(monitor, "LLM_MODEL_FALLBACK", None)
+    monkeypatch.setattr(monitor.requests, "post", lambda *a, **k: fake)
+    msg = monitor.summarize_models([model], today="2026-10-07")
+    assert "━━━ <b>OPEN FRONTIER</b> 🔓\n<b>Gemma 4 12B</b>" in msg
+    assert "━━━ <b>OPEN FRONTIER</b> 🔓\n\n" not in msg
+
+    image = _model(
+        "acme/Shelf-Classifier",
+        modality="image",
+        release_date="2026-10-07",
+        url="https://huggingface.co/acme/Shelf-Classifier",
+    )
+    html_body = (
+        "<i>One specialised model.</i>\n"
+        "\n"
+        "━━━ <b>SPECIALIZED</b> 🎯\n"
+        "\n"
+        "<b>Shelf Classifier</b> — <i>Image classifier for a catalog.</i>\n"
+    )
+    fake.json.return_value = {"choices": [{"message": {"content": html_body}}]}
+    html_msg = monitor.summarize_models([image], today="2026-10-07")
+    assert "━━━ <b>SPECIALIZED</b> 🎯\n<b>Shelf Classifier</b>" in html_msg
+    assert "━━━ <b>SPECIALIZED</b> 🎯\n\n" not in html_msg
+
+    template = monitor.build_digest_message([model], today="2026-10-07")
+    assert "━━━ <b>OPEN FRONTIER</b> 🔓\n<b>" in template
+    assert "━━━ <b>OPEN FRONTIER</b> 🔓\n\n" not in template
+
+
+def test_prompt_lists_only_standard_section_headers(monkeypatch):
+    captured = {}
+
+    class FR:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "TAKE: NONE\n"}}]}
+
+    def fake_post(url, json, headers, timeout):
+        captured["prompt"] = json["messages"][0]["content"]
+        return FR()
+
+    monkeypatch.setattr(monitor, "LLM_API_KEY", "k")
+    monkeypatch.setattr(monitor.requests, "post", fake_post)
+    monitor.summarize_models(
+        [_model("acme/Model-1", release_date="2026-10-07")],
+        today="2026-10-07")
+    prompt = captured["prompt"]
+    for header in ("OPEN FRONTIER", "CLOSED FRONTIER", "SPECIALIZED", "LOCAL", "WATCH"):
+        assert header in prompt
+    assert "do not invent" in prompt.lower()
+    assert "ALSO TRACKED" in prompt

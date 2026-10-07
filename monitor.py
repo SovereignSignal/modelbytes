@@ -1160,6 +1160,24 @@ _TELEGRAM_OK_TAGS = {"b", "strong", "i", "em", "u", "ins", "s", "strike", "del",
                      "a", "code", "pre", "span", "blockquote", "tg-spoiler"}
 _V3_TAGS = {"b", "i", "a"}
 _V3_TIERS = ("OPEN FRONTIER", "CLOSED FRONTIER", "SPECIALIZED", "LOCAL", "WATCH")
+# categorize_model's "other" bucket is not a v3 header. WATCH is announcement-only
+# (the deterministic path never emits it), so SPECIALIZED is the catch-all.
+_CATCHALL_TIER = "SPECIALIZED"
+_CATEGORY_TO_TIER = {
+    "open_frontier": "OPEN FRONTIER",
+    "closed_frontier": "CLOSED FRONTIER",
+    "specialized": "SPECIALIZED",
+    "local": "LOCAL",
+    "watch": "WATCH",
+    "other": _CATCHALL_TIER,
+}
+_TIER_EMOJI = {
+    "OPEN FRONTIER": "🔓",
+    "CLOSED FRONTIER": "🔒",
+    "SPECIALIZED": "🎯",
+    "LOCAL": "🏠",
+    "WATCH": "👀",
+}
 _AGGREGATOR_DOMAINS = (
     "techtimes.com", "tomsguide.com", "ndtv.com", "benzinga.com", "msn.com",
     "yahoo.com", "dailymail.co.uk", "businessinsider.com", "marketwatch.com",
@@ -3605,6 +3623,130 @@ def _guard_take_line(summary: str, models: List[ModelRelease],
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
+_TIER_HEADER_RE = re.compile(r"^━━━\s*<b>([^<]+)</b>.*$")
+
+
+def _standard_tier_for_model(model) -> str:
+    """Map a candidate onto a v3 header. Unknown and 'other' use the catch-all."""
+    if model is None:
+        return _CATCHALL_TIER
+    return _CATEGORY_TO_TIER.get(categorize_model(model), _CATCHALL_TIER)
+
+
+def _tier_header_line(title: str) -> str:
+    emoji = _TIER_EMOJI.get(title, "")
+    if emoji:
+        return f"━━━ <b>{title}</b> {emoji}"
+    return f"━━━ <b>{title}</b>"
+
+
+def _entry_display_name(line: str) -> str:
+    match = _ENTRY_RE.search((line or "").strip())
+    if not match:
+        return ""
+    return match.group(1).strip()
+
+
+def _collapse_blank_line_under_headers(text: str) -> str:
+    """Header, then the first item. No blank line directly under the header."""
+    return re.sub(
+        r"(?m)^(━━━[^\n]*)\n(?:[ \t]*\n)+",
+        r"\1\n",
+        text or "",
+    )
+
+
+def _remap_unrecognized_sections(text: str, models: List[ModelRelease]) -> str:
+    """Move items out of any section header that is not a standard v3 tier.
+
+    Placement uses categorize_model (modality, source, name). A line that
+    does not match a candidate still publishes, under the catch-all tier.
+    One stderr line names the original header and where each item went.
+    """
+    if not text or "━━━" not in text:
+        return text or ""
+    preamble = []
+    sections = []
+    current = None
+    for line in text.split("\n"):
+        match = _TIER_HEADER_RE.match(line.strip())
+        if match:
+            current = {
+                "title": match.group(1).strip(),
+                "header": line.strip(),
+                "lines": [],
+            }
+            sections.append(current)
+            continue
+        if current is None:
+            preamble.append(line)
+        else:
+            current["lines"].append(line)
+    if not sections or not any(sec["title"] not in _V3_TIERS for sec in sections):
+        return text
+
+    buckets = {
+        title: {"header": _tier_header_line(title), "kept": [], "moved": []}
+        for title in _V3_TIERS
+    }
+    moves = []
+    for sec in sections:
+        title = sec["title"]
+        if title in _V3_TIERS:
+            buckets[title]["header"] = sec["header"]
+            buckets[title]["kept"].extend(sec["lines"])
+            continue
+        started = False
+        blank_before = False
+        for line in sec["lines"]:
+            if not line.strip():
+                if started:
+                    blank_before = True
+                continue
+            started = True
+            entry_name = _entry_display_name(line)
+            if entry_name:
+                dest = _standard_tier_for_model(_match_model(entry_name, models))
+                label = entry_name
+            else:
+                dest = _CATCHALL_TIER
+                label = re.sub(r"\s+", " ", line).strip()
+            moved = buckets[dest]["moved"]
+            if moved and blank_before and moved[-1].strip():
+                moved.append("")
+            blank_before = False
+            moved.append(line.strip())
+            moves.append((title, label, dest))
+    if moves:
+        grouped = []
+        for origin, label, dest in moves:
+            if not grouped or grouped[-1][0] != origin:
+                grouped.append((origin, []))
+            grouped[-1][1].append(f"{label} → {dest}")
+        print(
+            "Remapped unrecognized section "
+            + "; ".join(f"{origin}: " + ", ".join(pairs) for origin, pairs in grouped),
+            file=sys.stderr,
+        )
+
+    chunks = []
+    pre = "\n".join(preamble).strip()
+    if pre:
+        chunks.append(pre)
+    for title in _V3_TIERS:
+        bucket = buckets[title]
+        kept_body = re.sub(r"\n{3,}", "\n\n", "\n".join(bucket["kept"])).strip()
+        moved_body = "\n".join(bucket["moved"]).strip()
+        if kept_body and moved_body:
+            body = f"{kept_body}\n\n{moved_body}"
+        else:
+            body = kept_body or moved_body
+        if not body:
+            continue
+        chunks.append(bucket["header"].rstrip() + "\n" + body)
+    return "\n\n".join(chunks).strip()
+
+
 def _apply_writer_format(summary: str, models: List[ModelRelease],
                          today: str = None) -> Tuple[str, List[str]]:
     """Render metadata, link labels, and Take italics from structured fields.
@@ -3615,11 +3757,14 @@ def _apply_writer_format(summary: str, models: List[ModelRelease],
     parsed = _parse_writer_blocks(summary)
     if parsed is not None:
         take, items = parsed
-        return _render_structured(take, items, models, today=today)
-    rewritten, stale_names = _rewrite_html_entries(summary, models, today=today)
-    rewritten = _relabel_generic_links(rewritten)
-    rewritten = _guard_take_line(rewritten, models, today=today)
-    return rewritten, stale_names
+        text, stale_names = _render_structured(take, items, models, today=today)
+    else:
+        text, stale_names = _rewrite_html_entries(summary, models, today=today)
+        text = _relabel_generic_links(text)
+        text = _guard_take_line(text, models, today=today)
+    text = _remap_unrecognized_sections(text, models)
+    text = _collapse_blank_line_under_headers(text)
+    return text, stale_names
 
 
 def build_digest_message(models: List[ModelRelease], today: str = None) -> str:
@@ -3688,7 +3833,7 @@ def build_digest_message(models: List[ModelRelease], today: str = None) -> str:
 
     total = len(models)
     lines.extend(["", f"Total: {total} items tracked today"])
-    return "\n".join(lines)
+    return _collapse_blank_line_under_headers("\n".join(lines))
 
 
 # The grammar every rendered digest entry follows: a bold display name then a
@@ -4772,7 +4917,8 @@ ITEM RULES:
 - SKIP: fine-tunes, ONNX, LoRA, GGUF, embedders, experiments, distilled, personal merges.
 - Treat each model's Confidence and Unknowns as pre-publish QA. If a model is low confidence, skip it unless it is the only item.
 - No filler verbs: explores, reveals, highlights, offering, showcases, demonstrates, unpacks, breaks down, dives into, worth watching, notable, gaining traction
-- Do NOT write a totals/count line, tier headers, or links.
+- Do NOT write a totals/count line or links.
+- Section headers must be exactly one of: OPEN FRONTIER, CLOSED FRONTIER, SPECIALIZED, LOCAL, WATCH. Do not invent a new section header. ALSO TRACKED is not a header. Put the first item on the line right after the header, with no blank line in between.
 - Technical and direct, no hype
 - Prefer genuinely-NEW models released or updated in the last 3 days.
 {avoid_block}{web_block}

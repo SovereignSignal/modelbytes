@@ -1159,6 +1159,10 @@ _AGGREGATOR_DOMAINS = (
     # Release-tracker sites that Parallel.ai cites as "sources"; warn so the
     # operator sees the writer didn't land on a primary vendor URL.
     "aireleasetracker.com", "llm-stats.com",
+    # Comparison listicles and roundup blogs. #218 (Sep 29) invented
+    # "Astra = Gemini" from one tech-insider.org article; the same class of
+    # page supplied promptzone / benchlm / hyper.ai links in #219–#223.
+    "tech-insider.org", "promptzone.com", "benchlm.ai", "hyper.ai",
 )
 _QUANT_NAME_RE = re.compile(r"(?i)\b(gguf|awq|gptq|onnx|imatrix|exl2)\b|-bnb-")
 # An entry is a line-leading bold name — with a dash tail (curated/LLM grammar)
@@ -1384,7 +1388,8 @@ def _lint_digest_structure(body: str, mode: str) -> Tuple[List[str], List[str]]:
         if _QUANT_NAME_RE.search(name):
             flood_sink.append(f"quant/serving artifact leaked into digest: {name}")
     for date_str in _loose_release_dates(body):
-        if is_stale_release(date_str):
+        # Digest news window, not the 14-day catalog/forwarding window.
+        if is_stale_release(date_str, max_age_days=DIGEST_FRESHNESS_DAYS):
             flood_sink.append(f"stale release date in a 'new today' digest: {date_str}")
 
     return warnings, errors
@@ -1752,6 +1757,14 @@ def is_noise_model(model_id: str, author: str, tags: list,
     return False
 
 
+# How old a dated release can be and still be "today's news" in the digest.
+# Age is (digest day - release day). Age 3 is kept so a Friday launch is still
+# in Monday's digest; age 4 is not (Holo4 on Sep 28 was 4 days old, LTX 2.5
+# on Oct 6 was 4 days old). Catalog backfill and release-forwarding keep the
+# 14-day default on is_stale_release — this constant is the publish window.
+DIGEST_FRESHNESS_DAYS = 3
+
+
 def is_stale_release(release_date, today: str = None, max_age_days: int = 14) -> bool:
     """True when a model's release date is too old to count as news.
 
@@ -1760,6 +1773,10 @@ def is_stale_release(release_date, today: str = None, max_age_days: int = 14) ->
     would flood the digest as "new" (2026-06-11: Kimi-VL from 2025-04 appeared
     in a "new today" digest). Unknown or unparseable dates are kept — absence
     of a date is not evidence of staleness.
+
+    The default window (14 days) is the catalog / release-forwarding clock.
+    The digest uses DIGEST_FRESHNESS_DAYS so a release is not presented as
+    today's news once it is older than that.
     """
     if not release_date:
         return False
@@ -1770,6 +1787,15 @@ def is_stale_release(release_date, today: str = None, max_age_days: int = 14) ->
     ref = (datetime.strptime(today, "%Y-%m-%d").date() if today
            else datetime.now(timezone.utc).date())
     return (ref - released).days > max_age_days
+
+
+def digest_release_is_stale(release_date, today: str = None) -> bool:
+    """True when a dated release is outside the digest news window.
+
+    Unknown or unparseable dates are kept, same as is_stale_release.
+    """
+    return is_stale_release(
+        release_date, today=today, max_age_days=DIGEST_FRESHNESS_DAYS)
 
 
 _MONTH_NUM = {
@@ -2859,7 +2885,679 @@ def _availability_tag(m: ModelRelease) -> str:
 NO_MODELS_SENTINEL = "No new models today."
 
 
-def build_digest_message(models: List[ModelRelease]) -> str:
+_MON_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+             "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+_HOST_LINK_LABELS = (
+    ("huggingface.co", "HF"),
+    ("hf.co", "HF"),
+    ("openrouter.ai", "OpenRouter"),
+    ("ollama.com", "Ollama"),
+)
+# Sentence-initial and ordinary words. A capitalized token outside this set
+# must match a listed model, its provider, or its license — otherwise the
+# Take is naming something that is not in the digest (Astra on Sep 30).
+_TAKE_STOPWORDS = frozenset({
+    "today", "todays", "open", "closed", "builder", "builders", "model", "models",
+    "release", "releases", "weight", "weights", "week", "weeks", "day", "days",
+    "frontier", "local", "pattern", "multimodal", "source", "sources", "nothing",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december", "apache", "free", "with",
+    "from", "that", "this", "these", "those", "small", "large", "while", "after",
+    "before", "about", "their", "there", "where", "which", "what", "when",
+    "your", "into", "over", "under", "between", "across", "alongside", "managed",
+    "cheaper", "options", "vision", "fallback", "same", "point", "upgrades",
+    "tooling", "added", "math", "verifier", "eval", "checker", "window",
+    "incremental", "shelved", "signals", "safety", "gates", "tightening",
+    "flagship", "rollouts", "smaller", "utility", "concerns", "pulling",
+    "major", "launch", "licensed", "opens", "without", "specialised",
+    "specialized", "sovereign", "german", "english", "french", "chinese",
+    "japanese", "korean", "based", "diarization", "speaker", "whole", "only",
+    "else", "narrow", "practical", "move", "wiring", "cheap", "agent", "loop",
+    "genuinely", "stood", "really", "still", "just", "more", "most", "some",
+    "than", "then", "them", "they", "have", "been", "being", "were", "will",
+    "would", "could", "should", "other", "another", "every", "each", "both",
+    "high", "capacity", "labs", "shipped", "landed", "landing", "means",
+    "builders", "pattern", "todays",
+})
+_PARAM_FRAGMENT = re.compile(
+    r"(?i)^(?:about|around|~)?\s*\d+(?:\.\d+)?\s*[bmkt]"
+    r"\s*(?:total|active)?\s*(?:params|parameters)?$")
+_RELEASED_FRAGMENT = re.compile(
+    r"(?i)^released:?\s+(?:\d{4}-\d{2}-\d{2}|[a-z]+\.?\s+\d{1,2})$")
+_LICENSE_FRAGMENT = re.compile(
+    r"(?i)^(?:license:?\s*)?(?:"
+    r"apache[-\s]?2(?:\.0)?|mit|cc[-\s]?by(?:[-\s]?nc)?(?:[-\s]?4\.0)?|"
+    r"closed/api|bsd(?:[-\s]?3)?"
+    r")$")
+_BENCH_FRAGMENT = re.compile(r"(?i)\b(?:bench|suite|edition)\b|\b\d+\.\d{3,}\b")
+_GLUE_PHRASE = re.compile(
+    r"(?i)^(?:under|with|and|or|at|for|a|an|the|of|in|on|to|license|"
+    r"param|params|parameters)(?:\s+(?:a|an|the|of|to))*$")
+_ENTRY_LINE_RE = re.compile(
+    r"^(?P<prefix>\s*(?:•\s*)?)<b>(?P<name>[^<]+)</b>\s*[—–-]\s*(?P<rest>.*)$")
+_GENERIC_LINK_LABEL = re.compile(r"^(?:→\s*)?(?:source|s|src|link)$", re.I)
+_MENTION_RE = re.compile(r"\b[A-Z][A-Za-z0-9.+-]{3,}\b")
+_LICENSE_TABLE = {
+    "apache-2.0": "Apache-2.0",
+    "apache-2": "Apache-2.0",
+    "mit": "MIT",
+    "cc-by-nc-4.0": "CC BY-NC 4.0",
+    "cc-by-4.0": "CC BY 4.0",
+    "cc-by-nc": "CC BY-NC",
+    "cc-by": "CC BY",
+    "closed/api": "",
+    "other": "",
+    "unknown": "",
+    "none": "",
+}
+
+
+def _license_key(lic: str) -> str:
+    if not lic:
+        return ""
+    key = re.sub(r"[\s_]+", "-", str(lic).strip().lower())
+    return key.replace("apache2.0", "apache-2.0")
+
+
+def _display_license(lic: Optional[str]) -> str:
+    """Human license label. Placeholder values (Closed/API, other) render blank."""
+    key = _license_key(lic or "")
+    if not key:
+        return ""
+    if key in _LICENSE_TABLE:
+        return _LICENSE_TABLE[key]
+    if "closed" in key and "api" in key:
+        return ""
+    return str(lic).strip()
+
+
+def _norm_magnitude_token(token: str) -> str:
+    match = re.search(r"(\d+(?:\.\d+)?)\s*([KMBT])", token or "", re.I)
+    if not match:
+        return ""
+    number = float(match.group(1))
+    num = str(int(number)) if number == int(number) else f"{number:g}"
+    return f"{num}{match.group(2).upper()}"
+
+
+def _context_fragment(ctx) -> str:
+    shown = _format_context(ctx)
+    if not shown:
+        return ""
+    if shown[-1].isalpha():
+        shown = shown[:-1] + shown[-1].upper()
+    return f"{shown} context"
+
+
+def _param_token(value: str) -> str:
+    return re.sub(
+        r"(?i)\s*(total|active|params|parameters)\b", "", (value or "")).strip()
+
+
+def _params_fragment(model: ModelRelease) -> str:
+    total = _param_token(getattr(model, "total_parameters", None) or "")
+    active = _param_token(getattr(model, "active_parameters", None) or "")
+    if (total and active
+            and _norm_magnitude_token(total) != _norm_magnitude_token(active)):
+        return f"{total} total / {active} active"
+    if total:
+        return f"{total} total"
+    if active:
+        return f"{active} active"
+    return ""
+
+
+def _released_fragment(release_date) -> str:
+    day = str(release_date or "")[:10]
+    try:
+        parsed = datetime.strptime(day, "%Y-%m-%d")
+    except ValueError:
+        return ""
+    return f"Released {_MON_ABBR[parsed.month - 1]} {parsed.day}"
+
+
+def _price_fragment(model: ModelRelease) -> str:
+    pin = getattr(model, "pricing_input", None)
+    if pin is None:
+        return ""
+    if pin == 0:
+        return "FREE"
+    pout = getattr(model, "pricing_output", None)
+    if pout is None:
+        return f"${pin:.2f} per 1M"
+    return f"${pin:.2f}/${pout:.2f} per 1M"
+
+
+def metadata_line(model: ModelRelease) -> str:
+    """Fixed-order facts. Missing fields are omitted, never padded.
+
+    Order: params, context, license, price, release date. Benchmarks are
+    not included — card scores were being dumped verbatim (#224).
+    """
+    bits = [
+        _params_fragment(model),
+        _context_fragment(getattr(model, "context_window", None)),
+        _display_license(getattr(model, "license", None)),
+        _price_fragment(model),
+        _released_fragment(getattr(model, "release_date", None)),
+    ]
+    return " · ".join(bit for bit in bits if bit)
+
+
+def link_label(url: str) -> str:
+    """Short label for a digest link, from the host. Never the word Source."""
+    host = _url_host(url)
+    if not host:
+        return "Source"
+    for domain, label in _HOST_LINK_LABELS:
+        if host == domain or host.endswith("." + domain):
+            return label
+    return host
+
+
+_NAME_ACRONYMS = {
+    "gpt": "GPT", "llm": "LLM", "moe": "MoE", "vl": "VL", "ocr": "OCR",
+    "asr": "ASR", "tts": "TTS", "hf": "HF", "api": "API",
+}
+
+
+def _pretty_name_token(token: str) -> str:
+    if any(ch.isupper() for ch in token):
+        return token
+    acronym = _NAME_ACRONYMS.get(token.lower())
+    if acronym:
+        return acronym
+    match = re.match(r"([a-z]+)(.*)$", token)
+    if not match:
+        return token
+    word, rest = match.group(1), match.group(2)
+    return word[:1].upper() + word[1:] + rest
+
+
+def clean_display_name(name: str) -> str:
+    seg = (name or "").strip().lstrip("~")
+    if "/" in seg:
+        seg = seg.split("/", 1)[1]
+    seg = re.sub(r"(?i)(?::free|:latest|-latest)$", "", seg)
+    seg = re.sub(r"(?i)-(?:it|instruct)$", "", seg)
+    seg = seg.replace("_", " ")
+    seg = re.sub(r"-+", " ", seg)
+    seg = re.sub(r"\s+", " ", seg).strip()
+    return " ".join(_pretty_name_token(part) for part in seg.split(" "))
+
+
+def _entry_url(model: ModelRelease) -> str:
+    for url in (getattr(model, "canonical_url", None), getattr(model, "url", None)):
+        if url and not _host_is_aggregator(url):
+            return _upgrade_http_url(url)
+    for url in (getattr(model, "canonical_url", None), getattr(model, "url", None)):
+        if url:
+            return _upgrade_http_url(url)
+    return ""
+
+
+def _model_magnitudes(model: ModelRelease) -> set:
+    keys = set()
+    for value in (getattr(model, "total_parameters", None),
+                  getattr(model, "active_parameters", None)):
+        token = _norm_magnitude_token(value or "")
+        if token:
+            keys.add(token)
+    ctx = _context_fragment(getattr(model, "context_window", None))
+    token = _norm_magnitude_token(ctx)
+    if token:
+        keys.add(token)
+    return keys
+
+
+def _magnitude_tokens(text: str) -> List[str]:
+    scrubbed = re.sub(r"(?i)\bper\s+1\s*[m]\b", " ", text or "")
+    out = []
+    for num, unit in re.findall(r"\b(\d+(?:\.\d+)?)\s*([KMBT])\b", scrubbed, re.I):
+        token = _norm_magnitude_token(f"{num}{unit}")
+        if token and token not in out:
+            out.append(token)
+    return out
+
+
+def _price_values(model: ModelRelease) -> List[float]:
+    vals = []
+    for price in (getattr(model, "pricing_input", None),
+                  getattr(model, "pricing_output", None)):
+        if price is None:
+            continue
+        vals.append(float(price))
+    return vals
+
+
+def _number_conflict_reason(text: str, models: List[ModelRelease]) -> str:
+    allowed = set()
+    prices: List[float] = []
+    for model in models or []:
+        allowed |= _model_magnitudes(model)
+        prices.extend(_price_values(model))
+    bad = [token for token in _magnitude_tokens(text) if token not in allowed]
+    if bad:
+        return "number " + ", ".join(bad) + " is not in the structured fields"
+    for amount in re.findall(r"\$(\d+(?:\.\d+)?)", text or ""):
+        if not prices or not any(abs(float(amount) - price) < 0.001 for price in prices):
+            return f"number ${amount} is not in the structured fields"
+    return ""
+
+
+def _license_spellings(lic: Optional[str]) -> List[str]:
+    key = _license_key(lic or "")
+    if not key or not _display_license(lic):
+        return []
+    shown = _display_license(lic)
+    spells = []
+    for candidate in (shown, (lic or "").strip(), shown.replace("-", " "),
+                      shown.replace(" ", "-")):
+        if candidate and candidate not in spells:
+            spells.append(candidate)
+    return spells
+
+
+def _is_fact_fragment(part: str, model: ModelRelease) -> bool:
+    text = part.strip(" .;:")
+    if not text:
+        return True
+    if (_PARAM_FRAGMENT.match(text) or _RELEASED_FRAGMENT.match(text)
+            or _LICENSE_FRAGMENT.match(text)):
+        return True
+    if _BENCH_FRAGMENT.search(text) and len(text) < 80:
+        return True
+    shown = _display_license(getattr(model, "license", None))
+    raw = (getattr(model, "license", None) or "").strip()
+    if shown and text.lower() == shown.lower():
+        return True
+    if raw and text.lower() == raw.lower():
+        return True
+    return False
+
+
+def _strip_inline_facts(text: str, model: ModelRelease) -> str:
+    for spelling in _license_spellings(getattr(model, "license", None)):
+        text = re.sub(rf"(?i)\b{re.escape(spelling)}\b", "", text)
+    text = re.sub(
+        r"(?i)\b\d+(?:\.\d+)?\s*[bmkt]\s*(?:total|active)?\s*(?:params|parameters)\b",
+        "", text)
+    text = re.sub(
+        r"(?i)\b\d+(?:\.\d+)?\s*[bmkt]\s+(?:total|active)\b", "", text)
+    text = re.sub(
+        r"(?i)\breleased:?\s+(?:\d{4}-\d{2}-\d{2}|[a-z]+\.?\s+\d{1,2})\b",
+        "", text)
+    text = re.sub(r"(?i)\blicense:?\s*", "", text)
+    text = re.sub(r"(?i)\b[\w.-]*bench[\w.-]*\b", "", text)
+    text = re.sub(r"\b\d+\.\d{3,}\b", "", text)
+    text = re.sub(
+        r"\$\d+(?:\.\d+)?(?:\s*/\s*\$\d+(?:\.\d+)?)?"
+        r"(?:\s*per\s+1\s*[m]\s*(?:tokens?)?)?",
+        "", text, flags=re.I)
+    return text
+
+
+def clean_item_prose(prose: str, model: ModelRelease) -> str:
+    """One differentiator sentence. Restated specs are removed; a sentence
+    whose numbers contradict the structured fields is dropped and logged."""
+    text = html.unescape(re.sub(r"<[^>]+>", "", prose or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return ""
+    kept = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        parts = [p.strip(" .;") for p in re.split(r"\s*(?:,|·)\s*", sentence)]
+        kept_parts = []
+        for part in parts:
+            if not part:
+                continue
+            reason = _number_conflict_reason(part, [model])
+            if reason:
+                print(f"Dropped prose clause ({reason}): {part[:180]}",
+                      file=sys.stderr)
+                continue
+            if _is_fact_fragment(part, model):
+                continue
+            part = _strip_inline_facts(part, model)
+            part = re.sub(
+                r"(?i)(?:\s+\b(?:at|with|for|under|of|per)\b)+\s*$", "", part)
+            part = re.sub(r"\s+", " ", part).strip(" ,;·-")
+            if not part or _GLUE_PHRASE.match(part):
+                continue
+            kept_parts.append(part)
+        if not kept_parts:
+            continue
+        rebuilt = re.sub(r"\s+", " ", ", ".join(kept_parts)).strip(" ,;·")
+        if not rebuilt:
+            continue
+        if rebuilt[-1] not in ".!?":
+            rebuilt += "."
+        kept.append(rebuilt)
+    return " ".join(kept)
+
+
+def render_model_entry(model: ModelRelease, prose: str = "",
+                       display_name: str = None) -> str:
+    """One digest entry. Prose is the writer's sentence; every fact after it
+    comes from the model fields, in metadata_line order, with a host link label.
+    """
+    name = html.escape(display_name or clean_display_name(model.name), quote=False)
+    cleaned = clean_item_prose(prose or "", model)
+    meta = metadata_line(model)
+    avail = _availability_tag(model)
+    tail = ". ".join(bit for bit in (meta, avail) if bit)
+    if cleaned:
+        head = f"<b>{name}</b> — <i>{html.escape(cleaned, quote=False)}</i>"
+    else:
+        head = f"<b>{name}</b> —"
+    line = f"{head} {tail}." if tail else head
+    url = _entry_url(model)
+    if url:
+        label = html.escape(link_label(url), quote=False)
+        href = html.escape(url, quote=True)
+        line += f' <a href="{href}">→ {label}</a>'
+    return line
+
+
+def _allowed_name_blobs(models: List[ModelRelease]) -> List[str]:
+    blobs = []
+    for model in models or []:
+        for raw in (model.name, clean_display_name(model.name),
+                    model.provider or "",
+                    _display_license(getattr(model, "license", None))):
+            if raw:
+                blobs.append(raw.lower())
+        pretty = clean_display_name(model.name).lower()
+        blobs.extend(re.findall(r"[a-z0-9][a-z0-9.+-]{2,}", pretty))
+    return blobs
+
+
+def _mention_is_allowed(mention: str, blobs: List[str]) -> bool:
+    token = mention.lower().rstrip("'")
+    if token.endswith("'s"):
+        token = token[:-2]
+    if token in _TAKE_STOPWORDS:
+        return True
+    compact = _compact_match_text(token)
+    for blob in blobs:
+        if token in blob or blob in token:
+            return True
+        other = _compact_match_text(blob)
+        if (compact and other and min(len(compact), len(other)) >= 4
+                and (compact in other or other in compact)):
+            return True
+    return False
+
+
+def _unlisted_mention(text: str, models: List[ModelRelease]) -> str:
+    blobs = _allowed_name_blobs(models)
+    for match in _MENTION_RE.finditer(text or ""):
+        token = match.group(0)
+        if "-" in token and not re.search(r"\d", token):
+            continue
+        if _mention_is_allowed(token, blobs):
+            continue
+        return token
+    return ""
+
+
+def guard_take(take: str, models: List[ModelRelease],
+               today: str = None) -> Tuple[str, Optional[str]]:
+    """Return (take, None) or ("", reason).
+
+    The Take may only name items in this digest, and every magnitude in it
+    must match a structured field. On failure the caller drops the Take.
+    """
+    text = re.sub(r"(?i)</?i>", "", take or "")
+    text = html.unescape(re.sub(r"<[^>]+>", "", text)).strip()
+    if not text or text.upper() == "NONE":
+        return "", None
+    mention = _unlisted_mention(text, models)
+    if mention:
+        return "", f"unlisted mention {mention}"
+    reason = _number_conflict_reason(text, models)
+    if reason:
+        return "", reason
+    dates = _loose_release_dates(text, today=today)
+    stale = [d for d in dates if digest_release_is_stale(d, today=today)]
+    if stale:
+        return "", f"stale date {stale[0]}"
+    return text, None
+
+
+def format_take_html(text: str) -> str:
+    """Take italics are applied here, not by the writer model."""
+    raw = re.sub(r"(?i)</?i>", "", text or "")
+    raw = html.unescape(re.sub(r"<[^>]+>", "", raw)).strip()
+    if not raw or raw.upper() == "NONE":
+        return ""
+    return f"<i>{html.escape(raw, quote=False)}</i>"
+
+
+def _models_in_digest_window(models, today: str = None) -> List[ModelRelease]:
+    """Drop dated releases outside the digest news window. Undated models stay."""
+    kept = []
+    for model in models or []:
+        if model is None:
+            continue
+        if digest_release_is_stale(getattr(model, "release_date", None), today=today):
+            log_dropped_candidate(
+                "filter", getattr(model, "name", None),
+                f"digest window >{DIGEST_FRESHNESS_DAYS}d "
+                f"date={str(getattr(model, 'release_date', '') or '')[:10]}")
+            continue
+        kept.append(model)
+    return kept
+
+
+def _digest_dateline(today: str = None) -> str:
+    if today:
+        ref = datetime.strptime(today, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    else:
+        ref = datetime.now(timezone.utc)
+    return ref.strftime("%A, %B %d, %Y")
+
+
+def _match_model(name: str, models: List[ModelRelease]):
+    key = _compact_match_text(name)
+    if len(key) < 3:
+        return None
+    best = None
+    best_score = 0
+    for model in models or []:
+        candidates = [
+            clean_display_name(model.name),
+            (model.name or "").split("/")[-1],
+            model.name or "",
+        ]
+        for cand in candidates:
+            compact = _compact_match_text(cand)
+            if not compact:
+                continue
+            if compact == key:
+                return model
+            if (len(key) >= 6 and len(compact) >= 6
+                    and (key in compact or compact in key)):
+                score = min(len(key), len(compact))
+                if score > best_score:
+                    best = model
+                    best_score = score
+    return best
+
+
+def _prose_from_entry_rest(rest: str) -> str:
+    rest = re.sub(r'(?i)<a\s+href="[^"]*"[^>]*>.*?</a>', "", rest or "")
+    italics = re.findall(r"(?is)<i>(.*?)</i>", rest)
+    if italics:
+        text = " ".join(html.unescape(re.sub(r"<[^>]+>", "", part)) for part in italics)
+    else:
+        text = html.unescape(re.sub(r"<[^>]+>", "", rest))
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _relabel_generic_links(text: str) -> str:
+    def repl(match):
+        href, label = match.group(1), match.group(2).strip()
+        if not _GENERIC_LINK_LABEL.match(label):
+            return match.group(0)
+        return f'<a href="{href}">→ {link_label(href)}</a>'
+
+    return re.sub(r'(?i)<a href="([^"]*)">([^<]*)</a>', repl, text or "")
+
+
+def _parse_writer_blocks(summary: str):
+    """TAKE/ITEM/PROSE blocks, or None when the writer emitted HTML instead."""
+    if not re.search(r"(?im)^(TAKE|ITEM):", summary or ""):
+        return None
+    take = ""
+    items = []
+    current = None
+    for line in (summary or "").splitlines():
+        if re.match(r"(?i)TAKE:\s*", line):
+            take = re.sub(r"(?i)^TAKE:\s*", "", line).strip()
+            current = None
+        elif re.match(r"(?i)ITEM:\s*", line):
+            current = {"name": re.sub(r"(?i)^ITEM:\s*", "", line).strip(),
+                       "prose": ""}
+            items.append(current)
+        elif re.match(r"(?i)PROSE:\s*", line) and current is not None:
+            current["prose"] = re.sub(r"(?i)^PROSE:\s*", "", line).strip()
+    return take, items
+
+
+def _render_structured(take: str, items: list, models: List[ModelRelease],
+                       today: str = None) -> Tuple[str, List[str]]:
+    fresh = [m for m in (models or [])
+             if not digest_release_is_stale(getattr(m, "release_date", None), today=today)]
+    lines = []
+    stale_names = []
+    kept, reason = guard_take(take or "", fresh, today=today)
+    if reason:
+        print(f"Dropped Take ({reason}): {(take or '')[:200]}", file=sys.stderr)
+    elif kept:
+        lines.extend([format_take_html(kept), ""])
+    buckets = {key: [] for key in
+               ("open_frontier", "closed_frontier", "specialized", "local", "other")}
+    for item in items or []:
+        model = _match_model(item.get("name") or "", models)
+        if model is None:
+            print(f"Dropped entry with no candidate: {item.get('name')}",
+                  file=sys.stderr)
+            continue
+        if digest_release_is_stale(getattr(model, "release_date", None), today=today):
+            label = f"{item.get('name')} ({str(model.release_date)[:10]})"
+            stale_names.append(label)
+            print(f"Dropped stale digest entry {label}.", file=sys.stderr)
+            continue
+        buckets[categorize_model(model)].append(render_model_entry(
+            model, item.get("prose") or "", display_name=item.get("name") or None))
+    headers = (
+        ("open_frontier", "OPEN FRONTIER", "🔓"),
+        ("closed_frontier", "CLOSED FRONTIER", "🔒"),
+        ("specialized", "SPECIALIZED", "🎯"),
+        ("local", "LOCAL", "🏠"),
+    )
+    for key, title, emoji in headers:
+        if not buckets[key]:
+            continue
+        lines.extend(["", f"━━━ <b>{title}</b> {emoji}", ""])
+        for entry in buckets[key]:
+            lines.extend([entry, ""])
+    if buckets["other"]:
+        lines.extend(["", "━━━ <b>ALSO TRACKED</b>", ""])
+        for entry in buckets["other"]:
+            lines.extend([entry, ""])
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    return text, stale_names
+
+
+def _rewrite_html_entries(summary: str, models: List[ModelRelease],
+                          today: str = None) -> Tuple[str, List[str]]:
+    """Replace writer-formatted entry lines with render_model_entry.
+
+    A matched model outside the digest window is dropped. An unmatched line
+    keeps its prose (web-only) but its generic Source label is rewritten.
+    """
+    stale_names = []
+    out = []
+    for line in (summary or "").split("\n"):
+        match = _ENTRY_LINE_RE.match(line)
+        if not match:
+            out.append(line)
+            continue
+        name = match.group("name").strip()
+        model = _match_model(name, models)
+        if model is None:
+            out.append(_relabel_generic_links(line))
+            continue
+        if digest_release_is_stale(getattr(model, "release_date", None), today=today):
+            label = f"{name} ({str(getattr(model, 'release_date', '') or '')[:10]})"
+            stale_names.append(label)
+            print(f"Dropped stale digest entry {label}.", file=sys.stderr)
+            continue
+        prose = _prose_from_entry_rest(match.group("rest"))
+        rendered = render_model_entry(model, prose, display_name=name)
+        out.append(f"{match.group('prefix')}{rendered}")
+    return _prune_orphaned_tiers(out), stale_names
+
+
+def _guard_take_line(summary: str, models: List[ModelRelease],
+                     today: str = None) -> str:
+    lines = (summary or "").split("\n")
+    idx = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if (stripped.startswith("━━━") or stripped.startswith("<b>")
+                or stripped.startswith("•")):
+            break
+        idx = i
+        break
+    if idx is None:
+        return summary
+    raw = lines[idx].strip()
+    text = re.sub(r"(?i)</?i>", "", raw)
+    text = html.unescape(re.sub(r"<[^>]+>", "", text)).strip()
+    if not text or re.match(
+            r"(?i)^(monday|tuesday|wednesday|thursday|friday|saturday|sunday),",
+            text):
+        return summary
+    fresh = [m for m in (models or [])
+             if not digest_release_is_stale(getattr(m, "release_date", None), today=today)]
+    kept, reason = guard_take(text, fresh, today=today)
+    if reason:
+        print(f"Dropped Take ({reason}): {text[:200]}", file=sys.stderr)
+        del lines[idx]
+    elif not kept:
+        del lines[idx]
+    else:
+        lines[idx] = format_take_html(kept)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+def _apply_writer_format(summary: str, models: List[ModelRelease],
+                         today: str = None) -> Tuple[str, List[str]]:
+    """Render metadata, link labels, and Take italics from structured fields.
+
+    HTML from the writer and TAKE/ITEM/PROSE blocks both come out in the
+    same entry shape, so the fallback model cannot change the format.
+    """
+    parsed = _parse_writer_blocks(summary)
+    if parsed is not None:
+        take, items = parsed
+        return _render_structured(take, items, models, today=today)
+    rewritten, stale_names = _rewrite_html_entries(summary, models, today=today)
+    rewritten = _relabel_generic_links(rewritten)
+    rewritten = _guard_take_line(rewritten, models, today=today)
+    return rewritten, stale_names
+
+
+def build_digest_message(models: List[ModelRelease], today: str = None) -> str:
     """Build tiered digest message (HTML format)."""
     if not models:
         return NO_MODELS_SENTINEL
@@ -2870,6 +3568,9 @@ def build_digest_message(models: List[ModelRelease]) -> str:
     if not models:
         return NO_MODELS_SENTINEL
     models, _ = prepare_models_for_digest(models)
+    models = _models_in_digest_window(models, today=today)
+    if not models:
+        return NO_MODELS_SENTINEL
 
     # Deduplicate by base name
     seen = set()
@@ -2888,7 +3589,7 @@ def build_digest_message(models: List[ModelRelease]) -> str:
 
     lines = [
         f"🤖 <b>ModelBytes Digest</b>",
-        f"<i>{datetime.now(timezone.utc).strftime('%A, %B %d, %Y')}</i>",
+        f"<i>{_digest_dateline(today)}</i>",
         "",
     ]
 
@@ -2897,35 +3598,9 @@ def build_digest_message(models: List[ModelRelease]) -> str:
             return
         lines.extend(["", f"━━━ <b>{title}</b> {emoji}", ""])
         for m in items:
-            # Strip :free and :latest suffixes for cleaner display
-            display_name = m.name.split("/")[-1].replace(":free", "").replace(":latest", "").replace("-latest", "")
-            lines.append(f"<b>{display_name}</b>")
-            if m.description:
-                # Strip OpenRouter markdown links that don't render in Telegram HTML
-                clean_desc = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', m.description)
-                lines.append(f"  {_smart_truncate(clean_desc, 150)}...")
-            specs = []
-            if m.release_date and m.release_date != datetime.now(timezone.utc).strftime("%Y-%m-%d"):
-                specs.append(f"Released: {m.release_date}")
-            if m.context_window:
-                specs.append(f"Context: {_format_context(m.context_window)}")
-            if m.license:
-                specs.append(f"License: {m.license}")
-            if m.total_parameters:
-                if m.active_parameters:
-                    specs.append(f"Params: {m.total_parameters} total / {m.active_parameters} active")
-                else:
-                    specs.append(f"Params: {m.total_parameters}")
-            if m.pricing_input is not None and m.pricing_input > 0:
-                specs.append(f"${m.pricing_input:.2f}/${m.pricing_output:.2f} per 1M")
-            elif m.pricing_input == 0:
-                specs.append("FREE")
-            if specs:
-                lines.append(f"  {' | '.join(specs)}")
-            lines.append(f"  {_availability_tag(m)}")
-            link = m.canonical_url or m.url
-            if link:
-                lines.append(f'  <a href="{link}">→ Source</a>')
+            prose = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', m.description or "")
+            lines.append(render_model_entry(
+                m, prose, display_name=clean_display_name(m.name)))
             lines.append("")
 
     _section("OPEN FRONTIER", "🔓", tiers["open_frontier"])
@@ -3117,7 +3792,8 @@ def _discovery_already_covered(model: ModelRelease,
 def _filter_discovery_models(models: List[ModelRelease],
                              recent_names: List[str] = None,
                              seen: Set[str] = None,
-                             today: str = None) -> List[ModelRelease]:
+                             today: str = None,
+                             max_age_days: int = 14) -> List[ModelRelease]:
     """Keep primary-source discovery hits that are fresh, unseen, and not
     already covered in recent digests. Aggregator/roundup pages are dropped
     so a catalog-quiet day does not re-post last week's tracker dump."""
@@ -3132,7 +3808,7 @@ def _filter_discovery_models(models: List[ModelRelease],
         if (_ROUNDUP_TITLE_RE.search(m.name or "")
                 or _ROUNDUP_TITLE_RE.search(m.description or "")):
             continue
-        if is_stale_release(m.release_date, today=today):
+        if is_stale_release(m.release_date, today=today, max_age_days=max_age_days):
             continue
         if m.name in seen or m.url in seen:
             continue
@@ -3596,18 +4272,22 @@ def _prune_orphaned_tiers(lines: List[str]) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
 
 
-def _stale_drop_label(line: str, today: str = None) -> str:
+def _stale_drop_label(line: str, today: str = None,
+                      max_age_days: int = None) -> str:
     """Human label for a stale-scrubbed entry: 'Name (YYYY-MM-DD)'."""
+    if max_age_days is None:
+        max_age_days = DIGEST_FRESHNESS_DAYS
     m = _ENTRY_RE.search(line)
     name = (m.group(1).strip() if m else "") or "unnamed entry"
     stale_dates = [d for d in _loose_release_dates(line, today=today)
-                   if is_stale_release(d, today=today)]
+                   if is_stale_release(d, today=today, max_age_days=max_age_days)]
     if stale_dates:
         return f"{name} ({stale_dates[0]})"
     return name
 
 
-def _strip_stale_entries(summary: str, today: str = None) -> Tuple[str, List[str]]:
+def _strip_stale_entries(summary: str, today: str = None,
+                         max_age_days: int = None) -> Tuple[str, List[str]]:
     """Drop any single entry line carrying a release date too old to be "new
     today", then prune orphaned tier headers. This is the per-entry counterpart
     to the whole-body stale-release gate: it reuses the SAME parser
@@ -3620,11 +4300,14 @@ def _strip_stale_entries(summary: str, today: str = None) -> Tuple[str, List[str
     where labels are 'Name (YYYY-MM-DD)' so the ops note can name the trim
     (2026-08-21: count-only alert left the operator guessing).
     """
+    if max_age_days is None:
+        max_age_days = DIGEST_FRESHNESS_DAYS
     kept, dropped = [], []
     for line in summary.split("\n"):
-        if any(is_stale_release(d, today=today)
+        if any(is_stale_release(d, today=today, max_age_days=max_age_days)
                for d in _loose_release_dates(line, today=today)):
-            dropped.append(_stale_drop_label(line, today=today))
+            dropped.append(_stale_drop_label(
+                line, today=today, max_age_days=max_age_days))
             continue
         kept.append(line)
     return _prune_orphaned_tiers(kept), dropped
@@ -3904,7 +4587,7 @@ def collapse_variants(models: List["ModelRelease"]) -> List["ModelRelease"]:
 
 
 def summarize_models(models: List[ModelRelease], web_context: str = "",
-                     recent_names: List[str] = None) -> str:
+                     recent_names: List[str] = None, today: str = None) -> str:
     """Use LLM for concise digest if key available.
 
     web_context: cited Parallel.ai web research on recent releases (the inline
@@ -3927,6 +4610,12 @@ def summarize_models(models: List[ModelRelease], web_context: str = "",
     models, validation_notes = prepare_models_for_digest(models)
     for note in validation_notes:
         print(f"Digest QA: {note}", file=sys.stderr)
+    # URLs from models we then drop for age still count as "provided", so a
+    # writer line that cites one is trimmed as stale rather than as a guessed link.
+    link_models = list(models)
+    models = _models_in_digest_window(models, today=today)
+    if not models and not web_context:
+        return NO_MODELS_SENTINEL
 
     seen = set()
     deduped = []
@@ -3975,12 +4664,11 @@ def summarize_models(models: List[ModelRelease], web_context: str = "",
             "source. Identify EVERY distinct genuinely-new model named across these "
             "sources (aim for breadth — frontier, open-weight, coding, multimodal, "
             "audio, local — typically 4-8 if the sources support it), one entry each, "
-            "only models clearly released/updated in the last ~10 days.\n"
-            "LINKS: each entry's <a href> MUST be a source URL copied CHARACTER-FOR-"
-            "CHARACTER from the lines below. NEVER construct, complete, or guess a URL "
-            "(e.g. do not invent a huggingface.co/<org>/<name> link) — if you have no "
-            "provided URL for a model, omit that model. Never state a spec not in these "
-            "sources.\n"
+            "only models clearly released/updated in the last 3 days.\n"
+            "Prefer a primary source (vendor page, Hugging Face, or OpenRouter). "
+            "Do not treat a comparison listicle as a source. Never state a spec "
+            "that is not in the lines below. The publisher attaches the link; "
+            "do not invent a URL.\n"
             f"{web_context}\n")
     avoid_block = ""
     if recent_names:
@@ -3988,53 +4676,37 @@ def summarize_models(models: List[ModelRelease], web_context: str = "",
                        "is a NEW development (then say what changed):\n"
                        + ", ".join(recent_names[:60]) + "\n")
 
-    prompt = f"""You are ModelBytes, an AI model tracker. Write a SHORT Telegram digest.
+    prompt = f"""You are ModelBytes, an AI model tracker. Write ONLY the prose for a short Telegram digest. The publisher renders the metadata line (params, context, license, price, release date), the availability tag, the link label, and Take italics. You do not write those.
 
-FORMAT (begin with the Take line, then the tiers in this order, hide empty ones):
-<i>one opinionated sentence on what today's releases mean for a builder — lead with the pattern across the day's models, not a single project name; write the sentence only, with no label in front of it; omit this whole line if nothing ties the day together</i>
+OUTPUT (no HTML, no links, no metadata line):
+TAKE: <one sentence, or NONE>
+ITEM: <clean display name of one candidate>
+PROSE: <one sentence: why a builder should care. No specs.>
 
-━━━ <b>OPEN FRONTIER</b> 🔓
-<b>Clean Model Name</b> — <i>One sentence: the differentiator / value prop — why a builder should care.</i> Hard facts (params, context, license, pricing — only if provided). ⚡ or 📦 availability. <a href="URL">→ Source</a>
-
-━━━ <b>CLOSED FRONTIER</b> 🔒
-(same entry format)
-
-━━━ <b>SPECIALIZED</b> 🎯
-(same entry format — domain models: coding, audio, image, video)
-
-━━━ <b>LOCAL</b> 🏠
-(same entry format — models whose headline is running on your own hardware)
-
-ENTRY GRAMMAR (every entry, no exceptions):
-1. <b>Clean display name</b> — drop the "org/" prefix and any leading "~", and write it the way people say it, not the raw repo id. E.g. "MiniMaxAI/MiniMax-M3" → "MiniMax M3"; "google/gemma-4-12B-it" → "Gemma 4 12B"; "~anthropic/claude-fable-latest" → "Claude Fable"; "open-thoughts/OpenThinkerAgent-32B" → "OpenThinkerAgent 32B". Keep the version/size; drop format suffixes like "-it"/"-Instruct". Then an <i>italic differentiator sentence</i>: what makes this model different / why it exists. Not a spec recitation.
-2. Hard facts from the data below.
-3. Availability tag: "⚡ API live · OpenRouter" (openrouter source), "📦 Open weights · HF" (huggingface), "📦 Ollama pull-ready" (ollama).
-4. <a href="URL">→ Source</a> using the canonical URL when given.
-
-RULES:
-- ONLY HTML tags: <b>, <i>, <a href>
-- Release date as "Released Apr 7" (no year)
-- SKIP: fine-tunes, ONNX, LoRA, GGUF, embedders, experiments, distilled, personal merges
-- Treat each model's Confidence and Unknowns as pre-publish QA.
-- Only mention release date, license, total params, or active params if explicitly provided below.
-- DO weave in the concrete specs provided (params, context, license, and any "Benchmarks (from model card)" line) — they make an entry land. Prefer one hard number over a vague adjective.
+TAKE RULES:
+- The Take line may mention only models you also list as items in this digest. If a claim does not map to one of those items, omit it. Do not cite a shelved, rumored, or unlisted launch.
+- Do not put parameter counts, context lengths, licenses, prices, benchmark scores, or release dates in the Take or the PROSE. Those are appended from structured fields.
 - Do not infer or invent parameter counts, license terms, benchmark numbers, or release dates beyond what is provided below.
-- If a model is low confidence, skip it unless it is the only item in its section.
+- No vendor or lab attribution unless that name is in the candidate data for that item.
+- Prefer a primary source (the vendor page, Hugging Face, or OpenRouter). Do not make an entry whose only source is a comparison listicle or news roundup. Skip a bare codename (a single name with no version or size) that appears only in a listicle.
+- Omit the Take line (TAKE: NONE) when nothing ties two or more listed items together.
+- Never write a release date older than 3 days. If the only date you have is older, omit that model entirely — do not mention it in the Take line either.
+
+ITEM RULES:
+- One ITEM per model. Name it the way people say it ("MiniMax M3", "Gemma 4 12B"), not the raw repo id. Drop an "org/" prefix, a leading "~", and format suffixes like "-it"/"-Instruct". Keep the version and size.
+- SKIP: fine-tunes, ONNX, LoRA, GGUF, embedders, experiments, distilled, personal merges.
+- Treat each model's Confidence and Unknowns as pre-publish QA. If a model is low confidence, skip it unless it is the only item.
 - No filler verbs: explores, reveals, highlights, offering, showcases, demonstrates, unpacks, breaks down, dives into, worth watching, notable, gaining traction
-- HIDE empty sections
-- Deduplicate across platforms
-- MAX 2800 chars
-- Do NOT write a totals/count line; it is appended automatically.
+- Do NOT write a totals/count line, tier headers, or links.
 - Technical and direct, no hype
-- Prefer genuinely-NEW models (released/updated in the last ~10 days). The web research below is your freshness source; the fetched catalog may be mostly already-seen.
-- Never write a release date older than 10 days. If the only date you have is older, omit that model entirely — do not mention it in the Take line either. A weekly roundup that recaps last month's release is not today's news.
+- Prefer genuinely-NEW models released or updated in the last 3 days.
 {avoid_block}{web_block}
 Candidate models from our fetchers (may be sparse or already-covered — the web research above is primary for freshness):
 {chr(10).join(info) if info else "(none from fetchers today — build the digest from the web research above)"}"""
 
     if not LLM_API_KEY:
         print("No LLM key — falling back to template digest")
-        return build_digest_message(models)
+        return build_digest_message(models, today=today)
 
     # Try the primary model, then the fallback — so one model vanishing from
     # Ollama Cloud degrades to another model, not to the bare template.
@@ -4050,7 +4722,7 @@ Candidate models from our fetchers (may be sparse or already-covered — the web
         print(f"LLM '{model}' produced nothing — trying next candidate.", file=sys.stderr)
     if not summary:
         print("All LLM candidates failed — falling back to template")
-        return build_digest_message(models)
+        return build_digest_message(models, today=today)
 
     # The model is unreliable at filling the count (it echoes the literal
     # "X"); strip any footer it emitted and append a deterministic one.
@@ -4058,17 +4730,19 @@ Candidate models from our fetchers (may be sparse or already-covered — the web
     summary = re.sub(r"(?im)^\s*📊?\s*surfaced\b.*\bscanned\b.*today\s*$", "", summary).rstrip()
     if not summary:
         print("LLM body was only a footer — falling back to template")
-        return build_digest_message(models)
+        return build_digest_message(models, today=today)
     # How many entries the writer actually produced, before any scrub — so a
     # zero-survivor fallback can report whether entries existed and were stripped
     # or the writer never wrote one (the 2026-07-12 diagnosis needed both cases).
     n_written = _count_surfaced_models(summary)
+    n_items = len(re.findall(r"(?im)^ITEM:\s*\S", summary))
+    n_written = max(n_written, n_items)
     LAST_WRITER_N_WRITTEN = n_written
     # Hard guarantee: every published link is a URL we actually provided. Drops
     # entries whose <a href> the writer constructed/guessed (e.g. a plausible
     # but unverified huggingface.co/... link) rather than copying a source URL.
     summary, dropped = _strip_unverified_links(
-        summary, _collect_provided_urls(models, web_context))
+        summary, _collect_provided_urls(link_models, web_context))
     LAST_LINK_DROPPED = dropped
     if dropped:
         print(f"Dropped {dropped} entr(y/ies) with unverified/constructed links.",
@@ -4078,8 +4752,12 @@ Candidate models from our fetchers (may be sparse or already-covered — the web
     # just those entries — the per-entry counterpart to the link scrub — so one
     # stale line trims a single entry instead of tripping the whole-body gate
     # and taking the digest dark (the 2026-07-04 incident). The gate remains the
-    # backstop for a stale date outside an entry line.
-    summary, stale_names = _strip_stale_entries(summary)
+    # backstop for a stale date outside an entry line. The window is the digest
+    # news window (DIGEST_FRESHNESS_DAYS), not the 14-day catalog clock.
+    summary, stale_names = _strip_stale_entries(summary, today=today)
+    summary, more_stale = _apply_writer_format(summary, link_models, today=today)
+    if more_stale:
+        stale_names = list(stale_names) + list(more_stale)
     LAST_STALE_DROPPED = len(stale_names)
     LAST_STALE_DROPPED_NAMES = stale_names
     if stale_names:
@@ -4092,8 +4770,8 @@ Candidate models from our fetchers (may be sparse or already-covered — the web
         print(f"No entries survived verification (writer produced {n_written} "
               f"entr(y/ies); link-scrub dropped {dropped}, stale-scrub dropped "
               f"{len(stale_names)}) — falling back to template", file=sys.stderr)
-        return build_digest_message(models)
-    header = f"🤖 <b>ModelBytes Digest</b>\n<i>{datetime.now(timezone.utc).strftime('%A, %B %d, %Y')}</i>"
+        return build_digest_message(models, today=today)
+    header = f"🤖 <b>ModelBytes Digest</b>\n<i>{_digest_dateline(today)}</i>"
     # Honest footer: how many we actually surfaced vs how many we scanned.
     footer = f"📊 Surfaced {_count_surfaced_models(summary)} · scanned {len(models)} today"
     LAST_SUMMARY_MODE = "llm"
@@ -4577,7 +5255,8 @@ def main():
     # a primary URL are promoted to ModelRelease objects and merged into the
     # candidate set so a writer-0 day can still post via the template
     # (2026-08-24: 9 web sources, 0 catalog models, writer produced 0 entries).
-    web_context = discover_recent_releases(today)
+    web_context = discover_recent_releases(
+        today, max_age_days=DIGEST_FRESHNESS_DAYS)
     # Lab feeds run even when Parallel is off. "disabled" is only the empty
     # no-key case; a feed that actually returned items is a live source.
     discovery_has_items = bool((web_context or "").strip() or LAST_DISCOVERY_MODELS)
@@ -4607,7 +5286,8 @@ def main():
     existing = {m.name for m in all_new}
     for m in _filter_discovery_models(
             LAST_DISCOVERY_MODELS, recent_names=recent_names,
-            seen=seen_models, today=today):
+            seen=seen_models, today=today,
+            max_age_days=DIGEST_FRESHNESS_DAYS):
         if m.name in existing or m.name in seen_models:
             continue
         all_new.append(m)
@@ -4633,6 +5313,7 @@ def main():
             key=lambda m: (1 if _significant(m) else 0, m.downloads or 0, m.likes or 0),
             reverse=True,
         )
+        ranked = _models_in_digest_window(ranked, today=today)
         digest_models = ranked[:DIGEST_LIMIT]
         held = ranked[DIGEST_LIMIT:]
         # Mark the pre-collapse set seen FIRST: collapsed-away variants must be

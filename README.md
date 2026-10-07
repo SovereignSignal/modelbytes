@@ -94,6 +94,7 @@ venv/bin/python -m pytest tests/ -v
 | `MODELBYTES_PENDING_GRACE_SECONDS` | How long to poll GitHub for a late hand-written `pending/<date>.txt` before the inline path. Default: `0` (no wait). Ignored when `MODELBYTES_INLINE_PRIMARY=1`. | ❌ |
 | `MODELBYTES_ALLOW_SEED` | Set to `1` to let the fallback path seed an empty `models` table (otherwise it refuses, to guard wiped/migrated state). | ❌ |
 | `MODELBYTES_RELEASE_FORWARDING` | Set to exactly `1` to forward qualified model releases after a successful post. Inert unless this is `1` and both `RELEASE_EVENTS_URL` and `RELEASE_EVENTS_TOKEN` are set. Leave unset until the receiver is deployed. | ❌ |
+| `MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY` | Optional Artificial Analysis free-tier key (`x-api-key`). When unset, that source is skipped with one info log and no ops alert. | ❌ |
 | `RELEASE_EVENTS_URL` | Release Events v1 endpoint. Unused while forwarding is off. | ❌ |
 | `RELEASE_EVENTS_TOKEN` | Bearer token for that endpoint. Never commit it. | ❌ |
 
@@ -104,6 +105,8 @@ These power the **inline writer**, which is the everyday digest path (the retire
 - **OpenRouter** — 400+ models with pricing
 - **Ollama** — Local LLM models
 - **Hugging Face** — Open weights and research models
+- **Artificial Analysis** — optional free API (language plus image, video, and speech). Set `MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY`.
+- **TestingCatalog** — RSS early signal for model releases (leaks are not posted as released)
 
 See [`docs/source-growth.md`](./docs/source-growth.md) for the source expansion rubric, [`docs/source-candidates.md`](./docs/source-candidates.md) for the intake queue, and [`docs/superpowers/specs/2026-08-20-coverage-and-quality-expansion.md`](./docs/superpowers/specs/2026-08-20-coverage-and-quality-expansion.md) for the 2026-08-20 coverage/quality plan.
 

@@ -1,5 +1,6 @@
 """Pre-publish factual QA for curated and fallback digests."""
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -85,7 +86,7 @@ def test_summarize_models_supplies_known_facts_to_llm(monkeypatch):
         source="huggingface-org",
         url="https://huggingface.co/Zyphra/ZAYA1-8B",
         description="Reasoning MoE",
-        release_date="2026-05-06",
+        release_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         is_open_source=True,
     )
 

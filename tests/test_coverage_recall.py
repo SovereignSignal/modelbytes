@@ -395,7 +395,7 @@ def test_listicle_search_slots_are_gone_and_lab_feeds_are_configured():
     labs = " ".join(feed["lab"].lower() for feed in monitor.LAB_NEWS_FEEDS)
     for name in (
         "openai", "anthropic", "deepmind", "meta", "mistral",
-        "deepseek", "qwen", "kimi", "zhipu", "xai",
+        "deepseek", "qwen", "kimi", "zhipu", "xai", "reflection",
     ):
         assert name in labs, name
 

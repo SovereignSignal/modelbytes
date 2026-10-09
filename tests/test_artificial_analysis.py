@@ -97,6 +97,12 @@ MEDIA = {
     "text-to-speech": {"tier": "free", "data": []},
     "text-to-video": {"tier": "free", "data": []},
     "image-to-video": {"tier": "free", "data": []},
+    "text-to-video-audio": {"tier": "free", "data": []},
+    "image-to-video-audio": {"tier": "free", "data": []},
+    "speech-to-text": {"tier": "free", "data": []},
+    "speech-to-speech": {"tier": "free", "data": []},
+    "music/instrumental": {"tier": "free", "data": []},
+    "music/with-vocals": {"tier": "free", "data": []},
 }
 
 
@@ -163,6 +169,12 @@ def test_aa_hits_free_endpoints_and_pages(monkeypatch):
         "text-to-speech",
         "text-to-video",
         "image-to-video",
+        "text-to-video-audio",
+        "image-to-video-audio",
+        "speech-to-text",
+        "speech-to-speech",
+        "music/instrumental",
+        "music/with-vocals",
     ):
         assert f"https://artificialanalysis.ai/api/v2/media/{lane}/models/free" in urls
     headers = calls[0][2]["headers"]
@@ -220,9 +232,13 @@ def test_aa_new_undated_id_publishes_only_after_a_baseline(monkeypatch):
     assert flux.creator == "Black Forest Labs"
     assert flux.modality == "text-to-image"
     assert flux.url == "https://artificialanalysis.ai/image/models/flux-3"
-    # Already-baselined and still-stale rows stay out.
+    # A language row with an old release date stays out.
     assert "Old LLM" not in _names(models)
-    assert "Qwen-Image-2.1" not in _names(models)
+    # A media id that was not on the baseline is a leaderboard debut. The
+    # ship date (Oct 1) is outside the window, so it is not printed.
+    qwen = next(m for m in models if m.name == "Qwen-Image-2.1")
+    assert qwen.release_date is None
+    assert qwen.modality == "text-to-image"
 
 
 def test_aa_partial_failure_keeps_other_lanes_and_redacts_the_key(monkeypatch):

@@ -153,6 +153,8 @@ PROVIDER_NAMES = {
     "sarvamai": "Sarvam AI",
     "meta-models": "Meta",
     "jetbrains": "JetBrains",
+    "reflectionai": "Reflection",
+    "reflection-ai": "Reflection",
 }
 
 # Known significant orgs — never noise-filter these
@@ -175,6 +177,7 @@ KNOWN_ORGS = {
     "internlm", "meituan-longcat", "poolside", "ai-sage",
     "thinkingmachines", "black-forest-labs",
     "skt", "wan-ai", "sarvamai", "meta-models", "jetbrains",
+    "reflectionai", "reflection-ai",
 }
 
 
@@ -2159,7 +2162,10 @@ def is_significant_release(model_id: str, author: str, tags: list,
     tag_set = {str(t).lower() for t in (tags or [])}
     # AA and TestingCatalog rows are already release-filtered. A non-matching
     # family name must not lose them to the noise-overflow seen mark.
-    if "aa-release" in tag_set or "tc-release" in tag_set:
+    # Lab-blog rows are first-party announcements. A title that does not match
+    # a family token (Reflection Beam) must not lose the cap and then be
+    # marked seen as noise overflow.
+    if "aa-release" in tag_set or "tc-release" in tag_set or "lab-release" in tag_set:
         return True
     model_lower = model_id.lower()
 
@@ -2236,74 +2242,141 @@ def is_openrouter_serving_sku(model_id: str) -> bool:
     return bool(raw) and _openrouter_base_id(raw) != raw
 
 
-def fetch_openrouter_models() -> List[ModelRelease]:
-    models = []
+# The default /models list is text-output. Video, image, and audio catalogs
+# are separate query params on the same public endpoint. Grok Imagine Video
+# 1.5 Lite (created 2026-10-06) is only on output_modalities=video.
+# Speech is not pulled here: on 2026-10-07 OpenRouter stamped nine ElevenLabs
+# rows, including v2 SKUs, inside the same minute. That is a catalog import,
+# not nine launches. Speech debuts stay on the Artificial Analysis lanes.
+_OPENROUTER_EXTRA_OUTPUTS = ("video", "image", "audio")
+
+
+def _openrouter_media_modality(row: dict) -> Optional[str]:
+    """Modality for a non-text OpenRouter row, or None for a text model."""
+    arch = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
+    outs = {str(x).lower() for x in (arch.get("output_modalities") or [])}
+    ins = {str(x).lower() for x in (arch.get("input_modalities") or [])}
+    if "video" in outs:
+        if "text" in ins:
+            return "text-to-video"
+        if "image" in ins:
+            return "image-to-video"
+        return "text-to-video"
+    if "image" in outs and "text" not in outs:
+        return "text-to-image"
+    if "speech" in outs:
+        return "text-to-speech"
+    if "audio" in outs and "text" not in outs:
+        return "text-to-audio"
+    return None
+
+
+def _openrouter_row_to_model(m: dict) -> Optional[ModelRelease]:
+    model_id = m.get("id", "")
+    if not model_id or is_openrouter_serving_sku(model_id):
+        return None
+    media = _openrouter_media_modality(m)
+    pricing = m.get("pricing", {}) or {}
     try:
-        resp = _http_get("https://openrouter.ai/api/v1/models", "OpenRouter", timeout=30)
-        for m in resp.json().get("data", []):
-            model_id = m.get("id", "")
-            if not model_id:
-                continue
-            if is_openrouter_serving_sku(model_id):
-                continue
-            pricing = m.get("pricing", {})
-            try:
-                ip = float(pricing.get("prompt", 0)) * 1_000_000
-                op = float(pricing.get("completion", 0)) * 1_000_000
-            except (ValueError, TypeError):
-                ip = op = None
-            ctx = m.get("context_length")
+        ip = float(pricing.get("prompt", 0)) * 1_000_000
+        op = float(pricing.get("completion", 0)) * 1_000_000
+    except (ValueError, TypeError):
+        ip = op = None
+    # Video / image / speech rows often report token price 0 because they
+    # are billed per second or per image. Do not render that as FREE.
+    if media and ip == 0 and (op == 0 or op is None):
+        ip = op = None
+    ctx = m.get("context_length") or None
 
-            is_open = False
-            open_kws = ["llama", "mistral", "qwen", "gemma", "mixtral",
-                        "phi", "falcon", "yi", "deepseek", "nemotron", "olm", "c4ai",
-                        "sulphur", "zamba", "arcee", "minicpm",
-                        "devstral", "leanstral", "voxtral", "granite"]
-            closed = ["openai", "anthropic", "google", "cohere", "ai21"]
-            prov = (m.get("owned_by") or "").lower()
-            if any(kw in model_id.lower() for kw in open_kws):
-                is_open = True
-            elif prov in closed:
-                is_open = False
-            elif "open" in prov or "open" in model_id.lower():
-                is_open = True
+    is_open = False
+    open_kws = ["llama", "mistral", "qwen", "gemma", "mixtral",
+                "phi", "falcon", "yi", "deepseek", "nemotron", "olm", "c4ai",
+                "sulphur", "zamba", "arcee", "minicpm",
+                "devstral", "leanstral", "voxtral", "granite"]
+    closed = ["openai", "anthropic", "google", "cohere", "ai21", "x-ai"]
+    prov = (m.get("owned_by") or "").lower()
+    if any(kw in model_id.lower() for kw in open_kws):
+        is_open = True
+    elif prov in closed:
+        is_open = False
+    elif "open" in prov or "open" in model_id.lower():
+        is_open = True
 
-            traits = []
-            if ctx and ctx >= 128_000:
-                traits.append("long_context")
-            if "vision" in model_id.lower() or "vl" in model_id.lower():
-                traits.append("multimodal")
-            if any(x in model_id.lower() for x in ["reasoning", "r1", "o3", "o1"]):
-                traits.append("reasoning")
-            if any(x in model_id.lower() for x in ["code", "coder", "claude", "gpt-4"]):
-                traits.append("coding")
-            if ip is not None and ip < 0.5:
-                traits.append("cheap")
-            if "moe" in model_id.lower() or "mixtral" in model_id.lower():
-                traits.append("MoE")
+    traits = []
+    if ctx and ctx >= 128_000:
+        traits.append("long_context")
+    if "vision" in model_id.lower() or "vl" in model_id.lower():
+        traits.append("multimodal")
+    if any(x in model_id.lower() for x in ["reasoning", "r1", "o3", "o1"]):
+        traits.append("reasoning")
+    if any(x in model_id.lower() for x in ["code", "coder", "claude", "gpt-4"]):
+        traits.append("coding")
+    if ip is not None and ip < 0.5:
+        traits.append("cheap")
+    if "moe" in model_id.lower() or "mixtral" in model_id.lower():
+        traits.append("MoE")
 
-            created = m.get('created', 0)
-            if created:
-                rd = datetime.fromtimestamp(created, tz=timezone.utc).strftime("%Y-%m-%d")
+    created = m.get("created", 0)
+    if created:
+        rd = datetime.fromtimestamp(created, tz=timezone.utc).strftime("%Y-%m-%d")
+    else:
+        rd = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    desc = _smart_truncate(m.get("description", ""), 200)
+    return ModelRelease(
+        name=model_id,
+        provider=_resolve_provider(m.get("owned_by", ""), model_id),
+        source="openrouter",
+        url=f"https://openrouter.ai/models/{model_id}",
+        description=desc,
+        context_window=ctx,
+        pricing_input=ip,
+        pricing_output=op,
+        release_date=rd,
+        is_open_source=is_open,
+        unique_traits=traits,
+        modality=media,
+    )
+
+
+def fetch_openrouter_models() -> List[ModelRelease]:
+    """Text catalog plus video, image, speech, and audio catalogs.
+
+    A failure of one extra modality does not drop the text catalog. The
+    source is an error only when the default catalog itself fails.
+    """
+    models = []
+    seen = set()
+    queries = [None, *_OPENROUTER_EXTRA_OUTPUTS]
+    primary_error = None
+    for modality in queries:
+        params = {"output_modalities": modality} if modality else None
+        try:
+            kwargs = {"timeout": 30}
+            if params:
+                kwargs["params"] = params
+            resp = _http_get(
+                "https://openrouter.ai/api/v1/models", "OpenRouter", **kwargs)
+            rows = resp.json().get("data", []) or []
+        except Exception as e:
+            if modality is None:
+                primary_error = e
             else:
-                rd = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-            desc = _smart_truncate(m.get("description", ""), 200)
-            models.append(ModelRelease(
-                name=model_id,
-                provider=_resolve_provider(m.get("owned_by", ""), model_id),
-                source="openrouter",
-                url=f"https://openrouter.ai/models/{model_id}",
-                description=desc,
-                context_window=ctx,
-                pricing_input=ip,
-                pricing_output=op,
-                release_date=rd,
-                is_open_source=is_open,
-                unique_traits=traits,
-            ))
-    except Exception as e:
-        reason = _remember_source_error("OpenRouter", e)
+                print(
+                    f"OpenRouter {modality} catalog failed: {_short_source_error(e)}",
+                    file=sys.stderr,
+                )
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            model = _openrouter_row_to_model(row)
+            if model is None or model.name in seen:
+                continue
+            seen.add(model.name)
+            models.append(model)
+    if primary_error is not None:
+        reason = _remember_source_error("OpenRouter", primary_error)
         print(f"OpenRouter error: {reason}", file=sys.stderr)
     return models
 
@@ -2348,6 +2421,9 @@ MAJOR_HF_ORGS = [
     "thinkingmachines", "black-forest-labs",
     "skt", "Wan-AI", "sarvamai", "meta-models",
     "JetBrains",
+    # No public Hub org as of 2026-10-09 (Beam's weights were not up yet).
+    # Both casings: author= is case-sensitive and returns [] for a miss.
+    "reflectionai", "ReflectionAI",
 ]
 
 
@@ -2357,7 +2433,9 @@ ENRICH_HF_CARDS = os.environ.get("MODELBYTES_ENRICH_HF_CARDS", "1") == "1"
 # Web research + cited sources, fed to the writer model. No Claude.
 PARALLEL_API_KEY = os.environ.get("MODELBYTES_PARALLEL_API_KEY", "")
 # Optional. Unset skips the Artificial Analysis catalog with one info log.
-# Free tier is 100 requests / 24h (AA docs, 2026-10); a daily run is about 6–18.
+# Free tier is 100 requests / 24h (AA docs, 2026-10); a daily run is about
+# 12–36 (12 lanes, up to 3 pages). Public leaderboard HTML is not fetched:
+# the site terms forbid automated scraping.
 ARTIFICIAL_ANALYSIS_API_KEY = os.environ.get(
     "MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY", "")
 DISCOVERY_ENABLED = os.environ.get(
@@ -2855,6 +2933,11 @@ def categorize_model(model: ModelRelease) -> str:
     # (Alibaba / Qwen image models would otherwise hit the org shortcut).
     if modality and modality not in ("text", "multimodal", "language"):
         return "specialized"
+    # A first-party post that says the weights are open is an open release
+    # even when the lab is not yet in the family-token list (Reflection Beam).
+    if "lab-release" in traits and re.search(
+            r"open[-\s]?weights?", f"{name} {model.description or ''}", re.I):
+        return "open_frontier"
     if (model.source or "") == "artificial-analysis":
         if model.is_open_source is False:
             return "closed_frontier"
@@ -4066,6 +4149,9 @@ LAB_NEWS_FEEDS = (
     {"lab": "Moonshot/Kimi", "url": "https://www.kimi.ai/blog/", "kind": "html_kimi"},
     {"lab": "Zhipu/GLM", "url": "https://www.zhipuai.cn/en/news", "kind": "html_zhipu"},
     {"lab": "xAI", "url": "https://x.ai/news", "kind": "html_xai"},
+    # No RSS. The index lists posts; each article page carries the byline date.
+    # Beam (2026-10-05) was announced here while the weights were still unreleased.
+    {"lab": "Reflection", "url": "https://reflection.ai/blog", "kind": "html_reflection"},
 )
 
 
@@ -4290,6 +4376,55 @@ def _parse_html_zhipu(text: str, lab: str) -> list:
     return items
 
 
+def _reflection_index_posts(text: str) -> list:
+    """Blog index cards: title + absolute URL. Dates live on the article page."""
+    text = text or ""
+    titles = []
+    for match in re.finditer(r"<h([123])[^>]*>(.*?)</h\1>", text, re.S):
+        title = _clean_title(re.sub(r"<[^>]+>", "", match.group(2)))
+        if title and title.lower() != "blog":
+            titles.append(title)
+    paths = []
+    for path in re.findall(r'href="(/blog/[^"#?]+)"', text):
+        path = path.rstrip("/")
+        if path in ("", "/blog") or path in paths:
+            continue
+        paths.append(path)
+    labeled = {}
+    for title, path in re.findall(
+            r'aria-label="Read more:\s*([^"]+)"[^>]*href="(/blog/[^"#?]+)"',
+            text):
+        labeled[path.split("?")[0].rstrip("/")] = _clean_title(title)
+    posts = []
+    for i, path in enumerate(paths):
+        title = labeled.get(path) or (titles[i] if i < len(titles) else "")
+        title = title or _title_from_url(path)
+        posts.append({
+            "title": title,
+            "url": "https://reflection.ai" + path,
+        })
+    return posts
+
+
+def _reflection_article_date(text: str) -> Optional[str]:
+    """Byline month-date. Ignores an ISO string buried in a script config."""
+    visible = re.sub(r"<script[\s\S]*?</script>", " ", text or "", flags=re.I)
+    return _day(visible)
+
+
+def _reflection_article_excerpt(text: str) -> str:
+    """First real paragraph after the title. Nav links sit above the h1."""
+    visible = re.sub(r"<script[\s\S]*?</script>", " ", text or "", flags=re.I)
+    h1 = re.search(r"<h1\b", visible, re.I)
+    region = visible[h1.start():] if h1 else visible
+    for match in re.finditer(r"<p[^>]*>(.*?)</p>", region, re.S):
+        plain = _clean_title(re.sub(r"<[^>]+>", "", match.group(1)))
+        if len(plain) < 80:
+            continue
+        return plain
+    return ""
+
+
 _HTML_NEWS_PARSERS = {
     "html_xai": _parse_html_xai,
     "html_meta": _parse_html_meta,
@@ -4349,6 +4484,24 @@ def _collect_lab_feed_rows(ref, max_age_days: int) -> list:
                     path_contains=feed.get("path_contains") or "",
                     slug_date=bool(feed.get("slug_date")),
                 )
+            elif kind == "html_reflection":
+                items = []
+                for post in _reflection_index_posts(text)[:3]:
+                    try:
+                        article_resp = _lab_feed_get(post["url"], lab)
+                        article = _response_feed_text(article_resp)
+                    except Exception as exc:
+                        print(
+                            f"lab feed {lab} article failed: {_short_source_error(exc)}",
+                            file=sys.stderr,
+                        )
+                        continue
+                    day = _reflection_article_date(article)
+                    if not day:
+                        continue
+                    items.append(_lab_item(
+                        lab, post["title"], post["url"], day,
+                        _reflection_article_excerpt(article)))
             else:
                 items = parse_html_news_items(text, lab, kind)
         except Exception as exc:
@@ -4429,6 +4582,11 @@ def discover_recent_releases(today: str = None, max_age_days: int = 14,
         kept.append(f"- {title} ({pd or 'undated'}) — {url}\n  "
                     f"{_smart_truncate(excerpt, 280)}")
         model = _discovery_hit_to_model(url, title, excerpt, pd)
+        if model and r.get("lab"):
+            if "lab-release" not in model.unique_traits:
+                model.unique_traits.append("lab-release")
+            if not model.provider or model.provider == "unknown":
+                model.provider = r.get("lab") or model.provider
         if model:
             models.append(model)
         if len(kept) >= 10:
@@ -5324,7 +5482,9 @@ def _record_no_publishable(today: str, mode: str, models_found: int,
 # release dates are included when the payload has them; the free media shape
 # often omits the date, so a first armed run only publishes dated rows inside
 # the digest window and records every id. Later runs publish ids that were
-# not on that baseline.
+# not on that baseline. A media id that appears after that baseline is a
+# leaderboard debut even when its ship date is older than the window; the
+# stale date is not printed. Language rows keep the date window.
 _AA_API = "https://artificialanalysis.ai"
 _AA_ENDPOINTS = (
     ("language", "text",
@@ -5345,6 +5505,26 @@ _AA_ENDPOINTS = (
     ("image-to-video", "image-to-video",
      _AA_API + "/api/v2/media/image-to-video/models/free",
      _AA_API + "/video/leaderboard/image-to-video"),
+    # With-audio video boards, speech arenas, and music. Same free tier.
+    # Cite pages are the public board or model URL, not a scraped HTML parse.
+    ("text-to-video-audio", "text-to-video",
+     _AA_API + "/api/v2/media/text-to-video-audio/models/free",
+     _AA_API + "/video/leaderboard/text-to-video"),
+    ("image-to-video-audio", "image-to-video",
+     _AA_API + "/api/v2/media/image-to-video-audio/models/free",
+     _AA_API + "/video/leaderboard/image-to-video"),
+    ("speech-to-text", "speech-to-text",
+     _AA_API + "/api/v2/media/speech-to-text/models/free",
+     _AA_API + "/speech-to-text/models/{slug}"),
+    ("speech-to-speech", "speech-to-speech",
+     _AA_API + "/api/v2/media/speech-to-speech/models/free",
+     _AA_API + "/speech-to-speech/arena"),
+    ("music-instrumental", "text-to-audio",
+     _AA_API + "/api/v2/media/music/instrumental/models/free",
+     _AA_API + "/music/leaderboard/instrumental"),
+    ("music-vocals", "text-to-audio",
+     _AA_API + "/api/v2/media/music/with-vocals/models/free",
+     _AA_API + "/music/leaderboard/vocals"),
 )
 _AA_PAGE_CAP = 3
 _AA_EFFORT_RE = re.compile(
@@ -5586,10 +5766,17 @@ def fetch_artificial_analysis_models(seen: Set[str] = None,
             if key in seen or model.name in seen:
                 continue
             dated = model.release_date
-            if dated and digest_release_is_stale(dated, today=today):
+            stale = bool(dated) and digest_release_is_stale(dated, today=today)
+            # Language dates are the release. Media ship dates are often the
+            # quiet launch, weeks before the board lists the model. After a
+            # baseline, a new media id is the debut.
+            media_debut = baselined and modality != "text" and stale
+            if stale and not media_debut:
                 continue
             if not dated and not baselined:
                 continue
+            if media_debut:
+                model.release_date = None
             emitted.append(model)
             LAST_AA_EMITTED_IDS.add(key)
     return emitted

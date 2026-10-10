@@ -223,6 +223,25 @@ Optional / tuning:
 | `MODELBYTES_PENDING_POLL_SECONDS` | `120` | Poll interval inside the grace window. |
 | `MODELBYTES_ALLOW_SEED` | unset | Set to `1` to allow seeding an empty `models` table (see "Live-mode guards"). |
 | `MODELBYTES_HTTP_RETRIES` / `MODELBYTES_HTTP_BACKOFF_SECONDS` / `MODELBYTES_USER_AGENT` | see "When source fetches are flaky" | Retrying HTTP helper knobs. |
+| `AI_WIRE_ENABLED` | unset | Exactly `1` to push digest models to AI Wire after a successful Telegram post. Also needs `AI_WIRE_URL` and `AI_WIRE_INGEST_TOKEN`. Leave unset until that registry is up. |
+| `AI_WIRE_URL` | (none) | Site origin. POST `{AI_WIRE_URL}/api/ingest/items`. |
+| `AI_WIRE_INGEST_TOKEN` | (none) | Bearer token. Never commit it. A failed push is a log line, not an ops alert, and never blocks the digest. |
+
+## AI Wire registry
+
+After Telegram accepts a digest, and after `posted_digests` / `publish_runs` are written, ModelBytes POSTs the models that actually appear in that digest. One batch, 5 second timeout, one retry. Success logs `ai_wire push ok n=`. Failure logs `ai_wire push failed:` and the cron still exits as a normal post.
+
+The canonical key is `model:<org>/<name>`, lowercased, with the same quant / `:free` stripping as release forwarding, so a Hugging Face row, an OpenRouter listing, and a lab-blog entry collapse when the org and name are visible. The lane is the tier header (`OPEN FRONTIER`, `CLOSED FRONTIER`, `SPECIALIZED`, `LOCAL`, `WATCH`, `ALSO TRACKED`). `channel_post_url` is `https://t.me/ModelBytes/<message_id>` when `publish_runs` has one.
+
+Backfill reads that history. It does not post to Telegram. Dry-run is the default:
+
+```bash
+python monitor.py --ai-wire-backfill
+python monitor.py --ai-wire-backfill --days 30
+python monitor.py --ai-wire-backfill --apply
+```
+
+`--apply` still does nothing until `AI_WIRE_ENABLED=1` plus the URL and token. With no `DATABASE_URL`, or no stored digest bodies, it prints `no posted digest history` and exits 0. See [`ai-wire.md`](./ai-wire.md).
 
 ## Live-mode guards
 

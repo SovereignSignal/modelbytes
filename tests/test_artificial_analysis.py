@@ -295,7 +295,10 @@ def test_aa_merge_fills_hf_model_and_keeps_the_hf_link():
         credit_url="https://artificialanalysis.ai/image/models/qwen-image-2-1",
         unique_traits=["aa-release", "aa-id:qwen-image-2-1"],
     )
-    assert monitor.absorb_extra_source(incoming, [existing]) is True
+    # The fixture date has to sit inside the 3-day digest window. Passing
+    # today keeps the merge assertion from going stale with the calendar.
+    assert monitor.absorb_extra_source(
+        incoming, [existing], today="2026-10-07") is True
     assert existing.release_date == "2026-10-06"
     assert existing.creator == "Alibaba"
     assert existing.modality == "text-to-image"

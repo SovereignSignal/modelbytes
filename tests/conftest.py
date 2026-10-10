@@ -32,6 +32,11 @@ def _no_network_no_sleep(monkeypatch, tmp_path):
     monkeypatch.delenv("MODELBYTES_RELEASE_FORWARDING", raising=False)
     monkeypatch.delenv("RELEASE_EVENTS_URL", raising=False)
     monkeypatch.delenv("RELEASE_EVENTS_TOKEN", raising=False)
+    # AI Wire ingest must stay inert in the suite even if a dev shell
+    # exported the registry endpoint. Tests that exercise it opt in.
+    monkeypatch.delenv("AI_WIRE_ENABLED", raising=False)
+    monkeypatch.delenv("AI_WIRE_URL", raising=False)
+    monkeypatch.delenv("AI_WIRE_INGEST_TOKEN", raising=False)
     # Optional Artificial Analysis key must not make the suite call that API.
     monkeypatch.delenv("MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY", raising=False)
     monkeypatch.setattr(monitor, "ARTIFICIAL_ANALYSIS_API_KEY", "")

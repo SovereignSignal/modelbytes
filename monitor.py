@@ -30,6 +30,7 @@ from ss_publish import (
     truncate_for_telegram as _ss_truncate_for_telegram,
 )
 
+import ai_wire
 import release_forwarding
 
 import psycopg2
@@ -5338,6 +5339,23 @@ def _fix_dateline(body: str, today: str = None) -> str:
     return fixed
 
 
+def _push_ai_wire(models, message: str, today: str = None) -> None:
+    """Push digest entries to AI Wire after Telegram has accepted the post.
+
+    Preview, QA blocks, and send failures never reach this. A registry
+    outage must not fail the digest or skip the Slack mirror.
+    """
+    try:
+        ai_wire.push_published_digest(
+            models, message,
+            message_id=LAST_TELEGRAM_MESSAGE_ID,
+            posted_at=datetime.now(timezone.utc),
+            today=today,
+        )
+    except Exception as exc:
+        print(f"ai_wire push failed: {type(exc).__name__}", file=sys.stderr)
+
+
 def _forward_published_releases(models, message: str, today: str,
                                 qa_errors=None) -> None:
     """Hand a published digest to the release-event seam.
@@ -5425,7 +5443,8 @@ def try_post_pending_curated() -> bool:
                            error="telegram send failed")
         return False
 
-    # No structured candidates on this branch — do not invent events from HTML.
+    # No structured candidates on this branch — do not invent release events
+    # from HTML. AI Wire is pushed after the ledger write below.
     _forward_published_releases([], body, today, qa_errors)
     mark_posted_digest(today, "curated", str(pending_path), body)
     # Keep the local file in sync with what was actually published (the body
@@ -5448,6 +5467,10 @@ def try_post_pending_curated() -> bool:
                              if qa_warnings else None)
     ping_heartbeat(True, f"curated posted for {today}")
     print(f"Posted curated digest for {today}.")
+    # After the posted_digests ledger and publish_runs row. A slow registry
+    # must not sit in front of idempotency, or a killed push could re-send
+    # today's digest. Entries come from the HTML that Telegram accepted.
+    _push_ai_wire([], body, today)
     return True
 
 
@@ -6449,6 +6472,9 @@ def main():
         ping_heartbeat(True, f"{'inline' if INLINE_PRIMARY else 'fallback'} "
                              f"({LAST_SUMMARY_MODE}) posted for {today}")
         print("Digest sent")
+        # Ledger and heartbeat are already recorded. Push only the models
+        # that survived into the sent HTML. Failures are logged, not raised.
+        _push_ai_wire(digest_models, message, today)
 
     else:
         emit_writer_health(0, 0)
@@ -6578,6 +6604,14 @@ def _handle_crash(exc: BaseException, preview: bool, argv=None) -> None:
 if __name__ == "__main__":
     _preview = "--preview" in sys.argv
     _argv = list(sys.argv)
+    if "--ai-wire-backfill" in _argv:
+        # Replay only. This must not fall through into a Telegram publish.
+        try:
+            _rc = ai_wire.main_backfill(_argv)
+        except Exception as _e:
+            print(f"ai_wire backfill failed: {type(_e).__name__}", file=sys.stderr)
+            _rc = 1
+        sys.exit(_rc)
     try:
         _rc = main()
     except Exception as _e:

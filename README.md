@@ -97,6 +97,9 @@ venv/bin/python -m pytest tests/ -v
 | `MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY` | Optional Artificial Analysis free-tier key (`x-api-key`). When unset, that source is skipped with one info log and no ops alert. | ❌ |
 | `RELEASE_EVENTS_URL` | Release Events v1 endpoint. Unused while forwarding is off. | ❌ |
 | `RELEASE_EVENTS_TOKEN` | Bearer token for that endpoint. Never commit it. | ❌ |
+| `AI_WIRE_ENABLED` | Set to exactly `1` to push models that were in a successfully sent digest to the AI Wire registry. Inert unless this is `1` and both `AI_WIRE_URL` and `AI_WIRE_INGEST_TOKEN` are set. A failed push is logged and does not affect the digest. | ❌ |
+| `AI_WIRE_URL` | AI Wire site origin. Items are POSTed to `{AI_WIRE_URL}/api/ingest/items`. | ❌ |
+| `AI_WIRE_INGEST_TOKEN` | Bearer token for that endpoint. Never commit it. | ❌ |
 
 These power the **inline writer**, which is the everyday digest path (the retired claude.ai curator layer did not use them). The writer has a primary + fallback model; if the primary (`MODELBYTES_LLM_MODEL`) returns empty, it tries `MODELBYTES_LLM_MODEL_FALLBACK` and alerts the operator that the primary was unavailable.
 

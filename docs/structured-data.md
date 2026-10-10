@@ -57,6 +57,8 @@ non-preview run, including quiet days. There is no replay of older digests.
 - `attempts` (`int`)
 - `updated_at` (`timestamptz`)
 
+AI Wire ingest does not add a table. The daily push is fire-and-forget after a successful post. Backfill (`python monitor.py --ai-wire-backfill`) reads `posted_digests.body` / `posted_at` and the latest posted `publish_runs.telegram_message_id` for that date. Days with an empty body are skipped.
+
 ## Recommended Next Tables
 
 These are intentionally small and can be added incrementally.

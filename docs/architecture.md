@@ -8,7 +8,7 @@ A daily curated digest of notable AI model news, posted to the public Telegram c
 
 ## Two systems, one repo
 
-**Inline-primary publisher** — `monitor.py` in the repo root, a daily 16:00 UTC Railway cron. There is **no claude.ai / Claude Code dependency**. The editorial digest is produced inline: fetch OpenRouter/Ollama/HuggingFace → filter (`is_noise_model` / `is_significant_release` / `is_stale_release`) → dedupe vs Postgres → `collapse_variants()` (group same-family variants) → `enrich_with_hf_cards()` (real specs from model cards) → `discover_recent_releases()` (Parallel.ai cited web research) → `summarize_models()` (writer model emits format-v3 HTML) → `validate_digest_for_publish()` content gate → post Telegram + Slack mirror → record `posted_digests` + `publish_runs` + heartbeat.
+**Inline-primary publisher** — `monitor.py` in the repo root, a daily 16:00 UTC Railway cron. There is **no claude.ai / Claude Code dependency**. The editorial digest is produced inline: fetch OpenRouter/Ollama/HuggingFace → filter (`is_noise_model` / `is_significant_release` / `is_stale_release`) → dedupe vs Postgres → `collapse_variants()` (group same-family variants) → `enrich_with_hf_cards()` (real specs from model cards) → `discover_recent_releases()` (Parallel.ai cited web research) → `summarize_models()` (writer model emits format-v3 HTML) → `validate_digest_for_publish()` content gate → post Telegram + Slack mirror → record `posted_digests` + `publish_runs` + heartbeat. When `AI_WIRE_ENABLED=1`, the models in that sent digest are then POSTed to the AI Wire registry; that call cannot fail the publish.
 
 The writer model (`MODELBYTES_LLM_MODEL`, prod = `deepseek-v4-pro` on Ollama Cloud) with `MODELBYTES_LLM_MODEL_FALLBACK` (`gpt-oss:120b`) is OpenAI-compatible and runs on owned/low-cost inference — not Anthropic. `MODELBYTES_INLINE_PRIMARY=1` (prod) tells the publisher an inline day is the **normal** path, not a degraded fallback, so it does not alert "curator absent".
 
@@ -47,6 +47,7 @@ The writer model (`MODELBYTES_LLM_MODEL`, prod = `deepseek-v4-pro` on Ollama Clo
             │     8. validate_digest_for_publish(mode='fallback') content gate
             ├── post Telegram (+ message_id) + Slack mirror
             ├── record posted_digests + publish_runs, ping heartbeat, write pending/<TODAY>.txt
+            ├── AI Wire ingest (only after that record, only if AI_WIRE_ENABLED=1; never fails the post)
             └── exit 0 (deterministic blocks like a QA gate trip also exit 0 — see
                  the 2026-06-19 crash-loop fix; only real failures / send-fails exit 1)
 ```

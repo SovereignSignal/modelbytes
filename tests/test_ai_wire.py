@@ -391,8 +391,22 @@ def test_push_is_one_batch_with_bearer_auth_and_a_five_second_timeout(
         "model:acme/one", "model:acme/two",
     ]
     err = capsys.readouterr().err
-    assert "ai_wire push ok n=2" in err
+    assert "ai_wire push ok n=3" in err
     assert TOKEN not in err
+
+
+def test_push_ok_counts_created_rows_when_nothing_was_updated(monkeypatch, capsys):
+    """``upserted`` is updates only. A create-only batch must not log n=0."""
+    _arm(monkeypatch)
+    _install_urlopen(monkeypatch, 200, b'{"upserted": 0, "created": 2}')
+    message = _digest(
+        ("OPEN FRONTIER", [
+            _entry("One", "https://huggingface.co/acme/one"),
+            _entry("Two", "https://huggingface.co/acme/two"),
+        ]),
+    )
+    ai_wire.push_published_digest([], message, message_id=7)
+    assert "ai_wire push ok n=2" in capsys.readouterr().err
 
 
 def test_push_retries_once_then_logs_failure_without_raising(monkeypatch, capsys):

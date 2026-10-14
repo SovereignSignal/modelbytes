@@ -473,14 +473,28 @@ def _endpoint() -> str:
     return base + suffix
 
 
-def _upserted(raw: bytes, fallback: int) -> int:
+def _accepted(raw: bytes, fallback: int) -> int:
+    """Rows written: created plus updated.
+
+    The ingest ``upserted`` field counts updates only. New rows are
+    ``created``. Sum both so a create-only batch is not logged as ``n=0``.
+    Missing or non-integer fields fall back to the number of items sent.
+    """
     try:
         data = json.loads((raw or b"").decode("utf-8", errors="replace") or "{}")
     except Exception:
         return fallback
-    if isinstance(data, dict) and isinstance(data.get("upserted"), int):
-        return data["upserted"]
-    return fallback
+    if not isinstance(data, dict):
+        return fallback
+    total = 0
+    seen = False
+    for key in ("upserted", "created"):
+        value = data.get(key)
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        seen = True
+        total += value
+    return total if seen else fallback
 
 
 def _post(url: str, token: str, data: bytes):
@@ -544,7 +558,7 @@ def _push_items(items) -> bool:
             print(f"ai_wire push failed: {last}", file=sys.stderr)
             return False
         if 200 <= status < 300:
-            print(f"ai_wire push ok n={_upserted(raw, len(batch))}", file=sys.stderr)
+            print(f"ai_wire push ok n={_accepted(raw, len(batch))}", file=sys.stderr)
             return True
         last = f"http {status}"
         if attempt == 0 and (status in (408, 429) or status >= 500):

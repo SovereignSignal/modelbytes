@@ -35,7 +35,7 @@ not logged.
 
 | Log | Meaning |
 |---|---|
-| `ai_wire push ok n=` | HTTP 2xx. `n` is the response `upserted` count when present, else the number of items sent. |
+| `ai_wire push ok n=` | HTTP 2xx. `n` is created + updated (`created` + `upserted` on the response) when either field is an integer, else the number of items sent. |
 | `ai_wire push failed:` | The attempt (and the one retry, when one was allowed) failed. The digest still stands. |
 | `ai_wire push skipped: no items` | The flag is on, but the sent HTML had no parseable model entry. |
 

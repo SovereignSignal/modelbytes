@@ -103,7 +103,7 @@ Fix list/filter leaks (HF org casing, `sig_org_map`, digest-body persistence) be
 
 - Type: coverage cross-check, not a publisher
 - Candidate URL: `https://alphasignal.ai/feed.xml` (also `https://alphasignal.ai/atom.xml`; the archive page at `https://alphasignal.ai/archive` links both)
-- Probe 2026-10-15: HTTP 200, `application/rss+xml`, 18 items, newest dated 2026-10-15. This is a per-article feed, not one email issue. The latest issue is every item on the newest UTC day. No key and no per-request cost.
+- Probe 2026-10-15: HTTP 200, `application/rss+xml`, 18 items, newest dated 2026-10-15. This is a per-article feed, not one email issue. The daily issue is items from the digest day and the previous UTC day, so one midnight article does not hide the previous day's model notes. No key and no per-request cost.
 - What it does: flags model names in that issue that are absent from the last 14 posted digests (ops alert, plus a log line). It does not add them to the digest. Preview does not alert. A dead feed is a source-health error and does not page about coverage.
 - Substack (`alphasignal.substack.com/feed`, `alphasignalai.substack.com/feed`) still answers but is not the current site. Feeder has no first-party RSS of its own; the site does.
 - Recommendation: implemented.

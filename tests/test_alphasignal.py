@@ -2,8 +2,8 @@
 
 The public feed is https://alphasignal.ai/feed.xml (RSS, verified
 2026-10-15; atom.xml is the same items). It is a stream of articles, not
-one email blob. The latest issue is every item dated on the newest UTC
-day in the feed. Model names in that issue that are absent from the last
+one email blob. The daily issue is items from the digest day and the
+previous UTC day. Model names in that issue that are absent from the last
 14 posted digests are flagged. The check never posts them.
 """
 import sys
@@ -18,6 +18,12 @@ TODAY = "2026-10-15"
 FEED = """<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel>
   <item>
+    <title>Princeton Researchers Fix Costly AI Training Mistakes</title>
+    <link>https://alphasignal.ai/news/princeton-learning-rates</link>
+    <pubDate>Thu, 15 Oct 2026 00:00:18 GMT</pubDate>
+    <description>No model in this one. It must not hide yesterday.</description>
+  </item>
+  <item>
     <title>HeyGen Voice is #1 and Microsoft-Decision-1 ships</title>
     <link>https://alphasignal.ai/news/heygen-voice</link>
     <pubDate>Wed, 14 Oct 2026 19:01:14 GMT</pubDate>
@@ -27,7 +33,7 @@ FEED = """<?xml version="1.0" encoding="UTF-8"?>
     <title>Google DeepMind Shrinks Gemma 4 E4B to 5GB</title>
     <link>https://alphasignal.ai/news/gemma-4-e4b</link>
     <pubDate>Tue, 13 Oct 2026 12:00:00 GMT</pubDate>
-    <description>An older day, not this issue.</description>
+    <description>Two days old. Not this issue.</description>
   </item>
 </channel></rss>
 """
@@ -71,25 +77,26 @@ def test_extracts_versioned_names_from_article_titles():
     ) == ["FLUX 3"]
 
 
-def test_latest_issue_is_the_newest_utc_day():
+def test_latest_issue_includes_yesterday_and_skips_the_day_before():
     items = monitor.parse_rss_items(FEED, "AlphaSignal")
-    latest = monitor.alphasignal_latest_items(items)
-    assert [item["publish_date"] for item in latest] == ["2026-10-14"]
-    assert "Gemma" not in latest[0]["title"]
+    latest = monitor.alphasignal_latest_items(items, today=TODAY)
+    assert [item["publish_date"] for item in latest] == [
+        "2026-10-15", "2026-10-14"]
+    assert all("Gemma" not in item["title"] for item in latest)
 
 
 def test_unposted_names_ignore_older_days_and_already_posted_models():
     posted = "Yesterday we posted <b>Microsoft-Decision-1</b> and Gemma 4 E4B."
-    assert monitor.alphasignal_unposted_models(FEED, posted) == [
+    assert monitor.alphasignal_unposted_models(FEED, posted, today=TODAY) == [
         "HeyGen Voice",
         "GLM-Legal",
     ]
 
 
 def test_unposted_names_on_empty_or_broken_feed():
-    assert monitor.alphasignal_unposted_models("", "HeyGen Voice") == []
-    assert monitor.alphasignal_unposted_models("<rss>", "") == []
-    assert monitor.alphasignal_unposted_models(FEED, "") == [
+    assert monitor.alphasignal_unposted_models("", "HeyGen Voice", today=TODAY) == []
+    assert monitor.alphasignal_unposted_models("<rss>", "", today=TODAY) == []
+    assert monitor.alphasignal_unposted_models(FEED, "", today=TODAY) == [
         "HeyGen Voice",
         "Microsoft-Decision-1",
         "GLM-Legal",

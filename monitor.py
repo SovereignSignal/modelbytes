@@ -6214,8 +6214,12 @@ def extract_model_mentions(text: str) -> List[str]:
     return out
 
 
-def alphasignal_latest_items(items: list) -> list:
-    """Items whose publish day is the newest UTC day in the feed."""
+def alphasignal_latest_items(items: list, today: str = None) -> list:
+    """Items from `today` and the previous UTC day.
+
+    A single article after midnight must not hide the previous day's model
+    notes. Without `today`, the newest day in the feed is the reference.
+    """
     dated = []
     for item in items or []:
         day = _day(item.get("publish_date"))
@@ -6223,14 +6227,24 @@ def alphasignal_latest_items(items: list) -> list:
             dated.append((day, item))
     if not dated:
         return []
-    newest = max(day for day, _item in dated)
-    return [item for day, item in dated if day == newest]
+    if today:
+        ref = datetime.strptime(str(today)[:10], "%Y-%m-%d").date()
+    else:
+        ref = datetime.strptime(max(day for day, _item in dated), "%Y-%m-%d").date()
+    kept = []
+    for day, item in dated:
+        age = (ref - datetime.strptime(day, "%Y-%m-%d").date()).days
+        if 0 <= age <= 1:
+            kept.append(item)
+    return kept
 
 
-def alphasignal_unposted_models(feed_text: str, posted_text: str = "") -> List[str]:
-    """Model names in the latest AlphaSignal day that are not in posted_text.
+def alphasignal_unposted_models(feed_text: str, posted_text: str = "",
+                                today: str = None) -> List[str]:
+    """Model names in the latest AlphaSignal issue that are not in posted_text.
 
-    [] on an empty or unparseable feed. Never raises.
+    The issue is `today` and the previous UTC day. [] on an empty or
+    unparseable feed. Never raises.
     """
     try:
         items = parse_rss_items(feed_text or "", "AlphaSignal")
@@ -6238,7 +6252,7 @@ def alphasignal_unposted_models(feed_text: str, posted_text: str = "") -> List[s
         return []
     posted = _compact_match_text(posted_text)
     names, seen = [], set()
-    for item in alphasignal_latest_items(items):
+    for item in alphasignal_latest_items(items, today=today):
         blob = " ".join(
             [item.get("title") or ""] + list(item.get("excerpts") or []))
         for name in extract_model_mentions(blob):
@@ -6299,9 +6313,10 @@ def run_alphasignal_crosscheck(today: str = None, preview: bool = False) -> List
             preview=preview,
         )
         return []
-    gaps = alphasignal_unposted_models(text, _posted_coverage_text(today))
+    gaps = alphasignal_unposted_models(
+        text, _posted_coverage_text(today), today=today)
     issue_day = ""
-    latest = alphasignal_latest_items(parsed)
+    latest = alphasignal_latest_items(parsed, today=today)
     if latest:
         issue_day = latest[0].get("publish_date") or ""
     flush_source_health(

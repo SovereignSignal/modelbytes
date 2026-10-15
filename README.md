@@ -111,7 +111,7 @@ These power the **inline writer**, which is the everyday digest path (the retire
 - **Hugging Face** — Open weights and research models
 - **Artificial Analysis** — optional free API (language plus image, video, and speech). Turns on by itself once `MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY` is set.
 - **@ArtificialAnlys on X** — optional. Rankings and launches from that account become digest candidates when `MODELBYTES_X_BEARER_TOKEN` is set. See the env table for the per-post cost.
-- **AlphaSignal** — public RSS at `https://alphasignal.ai/feed.xml` (no key, no extra cost). Each run flags model names in the newest UTC day's items that are missing from the last 14 posted digests. It does not publish those names.
+- **AlphaSignal** — public RSS at `https://alphasignal.ai/feed.xml` (no key, no extra cost). Each run flags model names from the digest day and the previous UTC day that are missing from the last 14 posted digests. It does not publish those names.
 - **TestingCatalog** — RSS early signal for model releases (leaks are not posted as released)
 
 See [`docs/source-growth.md`](./docs/source-growth.md) for the source expansion rubric, [`docs/source-candidates.md`](./docs/source-candidates.md) for the intake queue, and [`docs/superpowers/specs/2026-08-20-coverage-and-quality-expansion.md`](./docs/superpowers/specs/2026-08-20-coverage-and-quality-expansion.md) for the 2026-08-20 coverage/quality plan.

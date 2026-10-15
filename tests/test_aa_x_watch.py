@@ -187,12 +187,16 @@ def test_main_skips_x_watch_without_a_token(monkeypatch, capsys, tmp_path):
 
 def test_main_references_the_x_fetcher():
     tree = ast.parse(Path(monitor.__file__).read_text())
-    main_fn = next(
+    # main() is a thin wrapper; the pipeline body lives in _run_digest.
+    fns = [
         node for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "main"
-    )
+        if isinstance(node, ast.FunctionDef)
+        and node.name in ("main", "_run_digest")
+    ]
+    assert len(fns) == 2
     referenced = {
-        node.id for node in ast.walk(main_fn) if isinstance(node, ast.Name)
+        node.id for fn in fns for node in ast.walk(fn)
+        if isinstance(node, ast.Name)
     }
     assert "fetch_artificial_analysis_x_models" in referenced
     assert "run_alphasignal_crosscheck" in referenced

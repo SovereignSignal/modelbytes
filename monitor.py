@@ -6573,6 +6573,12 @@ def main():
         except Exception as exc:
             print(f"[WARN] release outbox retry failed: {type(exc).__name__}",
                   file=sys.stderr)
+        # Same for AI Wire: deliver rows an earlier run queued but could not
+        # push. Never resends Telegram; inert unless AI_WIRE_ENABLED=1.
+        try:
+            ai_wire.retry_pending()
+        except Exception as exc:
+            print(f"ai_wire outbox failed: {type(exc).__name__}", file=sys.stderr)
 
     if live_mode and not DATABASE_URL:
         # Degraded but not fatal yet: the curated fast-path doesn't need the DB
@@ -6926,9 +6932,9 @@ def main():
         ping_heartbeat(True, f"{'inline' if INLINE_PRIMARY else 'fallback'} "
                              f"({LAST_SUMMARY_MODE}) posted for {today}")
         print("Digest sent")
-        # Ledger and heartbeat are already recorded. Push only the models
-        # that survived into the sent HTML. Failures are logged, not raised.
-        _push_ai_wire(digest_models, message, today)
+        # Ledger and heartbeat are already recorded. Push only the publication
+        # manifest. A failure stays queued in ai_wire_outbox for the next run.
+        _push_ai_wire(manifest.models, message, today)
 
     else:
         emit_writer_health(0, 0)

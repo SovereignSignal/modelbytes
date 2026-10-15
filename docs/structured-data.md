@@ -10,6 +10,7 @@ ModelBytes should use Postgres as the durable system of record for production st
 | `posted_digests` | implemented | Records one posted digest per UTC date so reruns are idempotent. Also stores `body` (the published HTML) so fact-consistency and already-covered checks survive the ephemeral Railway cron. |
 | `publish_runs` | implemented | One audit row per `monitor.py` run, including failures. |
 | `release_event_outbox` | implemented | Durable queue for Release Events v1. Created and written only while forwarding is enabled. See `docs/release-events-v1.md`. |
+| `ai_wire_outbox` | implemented | Durable queue for AI Wire registry items. Created and written only while `AI_WIRE_ENABLED=1`. |
 
 ### `posted_digests` schema
 
@@ -57,7 +58,24 @@ non-preview run, including quiet days. There is no replay of older digests.
 - `attempts` (`int`)
 - `updated_at` (`timestamptz`)
 
-AI Wire ingest does not add a table. The daily push is fire-and-forget after a successful post. Backfill (`python monitor.py --ai-wire-backfill`) reads `posted_digests.body` / `posted_at` and the latest posted `publish_runs.telegram_message_id` for that date. Days with an empty body are skipped.
+### `ai_wire_outbox` schema
+
+Queued only after Telegram accepts a digest, and only when `AI_WIRE_ENABLED=1`
+plus `AI_WIRE_URL` and `AI_WIRE_INGEST_TOKEN`. Items come from the publication
+manifest (the models present in the delivered text). The run that queues them
+delivers every pending row; pending rows are also retried at the start of
+every non-preview run, including quiet days and same-day reruns. Telegram is
+never re-sent. Each delivery logs
+`ai_wire_outbox pending=N oldest=<created_at> age_h=<h> key=<id>`.
+
+- `id` (`text`, primary key) — `<post_date>|model:<org>/<name>`
+- `item` (`jsonb`) — the ingest item, including `channel_post_url`
+- `status` (`text`) — `pending`, `delivered` (2xx), or `rejected` (400, 409, 410, 413, 422). 401/403/404, 408/429, 5xx, and network errors stay `pending`.
+- `attempts` (`int`)
+- `last_error` (`text`)
+- `created_at`, `updated_at` (`timestamptz`)
+
+Without `DATABASE_URL` the daily push is a single best-effort POST. Backfill (`python monitor.py --ai-wire-backfill`) reads `posted_digests.body` / `posted_at` and the latest posted `publish_runs.telegram_message_id` for that date. Days with an empty body are skipped.
 
 ## Recommended Next Tables
 

@@ -489,6 +489,9 @@ def _quiet_main(monkeypatch, tmp_path, models=None, summarize=None, preview=Fals
     monkeypatch.setattr(monitor, "TELEGRAM_BOT_TOKEN", "tok")
     monkeypatch.setattr(monitor, "TELEGRAM_CHANNEL_ID", "-100123")
     monkeypatch.setattr(monitor, "DATABASE_URL", "postgres://invalid/modelbytes")
+    # These cover the direct push. The outbox has its own tests
+    # (test_ai_wire_outbox.py) and must not connect to the fake host here.
+    monkeypatch.setattr(ai_wire, "_outbox_available", lambda: False)
     monkeypatch.setattr(monitor, "try_post_pending_curated", lambda: False)
     monkeypatch.setattr(monitor, "init_database", lambda: None)
     monkeypatch.setattr(monitor, "load_seen_models", lambda: {"seed/already"})

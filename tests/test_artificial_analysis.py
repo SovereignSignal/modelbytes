@@ -323,6 +323,48 @@ def test_aa_baseline_records_unemitted_ids_and_skips_preview():
     assert seen == {"aa/old-llm", "aa/flux-3"}
 
 
+def test_main_fetches_aa_when_the_key_is_set(monkeypatch, capsys, tmp_path):
+    """The key alone arms the source. There is no second enable flag."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["monitor.py", "--preview"])
+    monkeypatch.setattr(monitor, "try_post_pending_curated", lambda: False)
+    monkeypatch.setattr(monitor, "init_database", lambda: None)
+    monkeypatch.setattr(monitor, "load_seen_models", lambda: {"seed/already"})
+    monkeypatch.setattr(monitor, "save_seen_models", lambda _s: None)
+    monkeypatch.setattr(monitor, "DISCOVERY_ENABLED", False)
+    monkeypatch.setattr(monitor, "PARALLEL_API_KEY", "")
+    monkeypatch.setattr(monitor, "enrich_with_hf_cards", lambda models: None)
+    for name in (
+        "fetch_openrouter_models",
+        "fetch_ollama_models",
+        "fetch_huggingface_trending",
+        "fetch_major_orgs",
+        "fetch_hf_text_generation",
+        "fetch_testingcatalog_models",
+    ):
+        monkeypatch.setattr(monitor, name, lambda *args, **kwargs: [])
+    calls = _install_aa(monkeypatch)
+    body = (
+        "━━━ <b>OPEN FRONTIER</b> 🔓\n"
+        "<b>Mistral Large 4</b> — <i>fresh</i> "
+        '<a href="https://huggingface.co/mistralai/Mistral-Large-4">→ HF</a>\n'
+    )
+    monkeypatch.setattr(monitor, "summarize_models", lambda models, *a, **k: body)
+    alerts = []
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda text: alerts.append(text) or True)
+
+    assert monitor.main() == 0
+    urls = [url for url, _source, _kw in calls]
+    assert "https://artificialanalysis.ai/api/v2/language/models/free" in urls
+    assert calls[0][2]["headers"]["x-api-key"] == KEY
+    err = capsys.readouterr().err
+    aa_lines = [ln for ln in err.splitlines() if "source=ArtificialAnalysis" in ln]
+    assert aa_lines
+    assert "error=disabled" not in aa_lines[0]
+    assert "MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY is unset" not in err
+    assert alerts == []
+
+
 def test_main_logs_disabled_aa_without_an_alert(monkeypatch, capsys, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["monitor.py", "--preview"])

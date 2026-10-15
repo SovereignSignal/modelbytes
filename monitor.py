@@ -2437,6 +2437,8 @@ ENRICH_HF_CARDS = os.environ.get("MODELBYTES_ENRICH_HF_CARDS", "1") == "1"
 # Web research + cited sources, fed to the writer model. No Claude.
 PARALLEL_API_KEY = os.environ.get("MODELBYTES_PARALLEL_API_KEY", "")
 # Optional. Unset skips the Artificial Analysis catalog with one info log.
+# The key is the only switch: once MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY
+# is set, the next run fetches. There is no second enable flag.
 # Free tier is 100 requests / 24h (AA docs, 2026-10); a daily run is about
 # 12–36 (12 lanes, up to 3 pages). Public leaderboard HTML is not fetched:
 # the site terms forbid automated scraping.

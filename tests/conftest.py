@@ -40,6 +40,9 @@ def _no_network_no_sleep(monkeypatch, tmp_path):
     # Optional Artificial Analysis key must not make the suite call that API.
     monkeypatch.delenv("MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY", raising=False)
     monkeypatch.setattr(monitor, "ARTIFICIAL_ANALYSIS_API_KEY", "")
+    # Optional X timeline watch must not call api.x.com from the suite.
+    monkeypatch.delenv("MODELBYTES_X_BEARER_TOKEN", raising=False)
+    monkeypatch.setattr(monitor, "X_BEARER_TOKEN", "")
     # Source-health state must not leak across tests or into the repo tree.
     monkeypatch.setattr(monitor, "SOURCE_HEALTH_PATH", tmp_path / "source_health.json")
     monkeypatch.setattr(monitor, "_SOURCE_ERRORS", {})

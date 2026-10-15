@@ -80,6 +80,34 @@ Fix list/filter leaks (HF org casing, `sig_org_map`, digest-body persistence) be
 
 ## Accepted
 
+### Z.ai Hugging Face org (`zai-org`)
+
+- Type: existing HF org watch
+- Candidate URL: `https://huggingface.co/api/models?author=zai-org`
+- Why it matters: Z.ai specialist releases (GLM-Legal and the next one) land on this org when weights are published.
+- Probe 2026-10-15: `author=zai-org` returns models (`zai-org/GLM-5.3` and the rest). `author=z-ai` returns `[]`. OpenRouter still uses the `z-ai` id; that slug stays in `KNOWN_ORGS` and is not an HF author. `MAJOR_HF_ORGS` watches `zai-org` only.
+- GLM-Legal itself had no Hub repo under that name on 2026-10-15 (API access is application-only; the announcement is `https://z.ai/blog/glm-legal`). The org watch picks the repo up when it exists. Until then the AlphaSignal cross-check is what flags the name.
+- Recommendation: implemented. No new secret.
+
+### @ArtificialAnlys on X
+
+- Type: ranking and launch posts
+- Candidate URL: `GET https://api.x.com/2/users/1743487864934162432/tweets` (@ArtificialAnlys, id resolved 2026-10-15)
+- Why it matters: closed and specialist models show up as arena rankings (HeyGen Voice at #1 on the voice arena) before they are a fresh row in a registry.
+- Access/auth: `MODELBYTES_X_BEARER_TOKEN`. Unset skips the watch. There is no X client library in this repo; the call is one `requests` GET.
+- Cost: X API v2 pay-per-use, Posts: Read at $0.005 per post returned (docs.x.com pricing, checked 2026-10). `max_results=10` (the API rejects values under 5; 10 covers a thread). A full page is $0.05 per run, about $1.50/month if every day returns 10 posts. The same post is not rebilled inside a UTC day. The user id is pinned, so there is no $0.010 username lookup and no expansions. No monthly minimum.
+- Noise: only the first model name in a post that reads as a ranking or a launch. Retweets are dropped. Replies stay, because the ranking is often a thread reply.
+- Recommendation: implemented, off until the token is set.
+
+### AlphaSignal public RSS
+
+- Type: coverage cross-check, not a publisher
+- Candidate URL: `https://alphasignal.ai/feed.xml` (also `https://alphasignal.ai/atom.xml`; the archive page at `https://alphasignal.ai/archive` links both)
+- Probe 2026-10-15: HTTP 200, `application/rss+xml`, 18 items, newest dated 2026-10-15. This is a per-article feed, not one email issue. The latest issue is every item on the newest UTC day. No key and no per-request cost.
+- What it does: flags model names in that issue that are absent from the last 14 posted digests (ops alert, plus a log line). It does not add them to the digest. Preview does not alert. A dead feed is a source-health error and does not page about coverage.
+- Substack (`alphasignal.substack.com/feed`, `alphasignalai.substack.com/feed`) still answers but is not the current site. Feeder has no first-party RSS of its own; the site does.
+- Recommendation: implemented.
+
 ### HuggingFace Papers (daily trending)
 
 - Type: research-paper feed (curator research surface, not a monitor.py fetcher)

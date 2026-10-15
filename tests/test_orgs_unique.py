@@ -69,3 +69,13 @@ def test_openrouter_tilde_slug_matches_known_org():
     # OpenRouter ids sometimes look like ~z-ai/glm-latest.
     assert monitor.is_significant_release(
         "~z-ai/glm-latest", "~z-ai", [], downloads=0) is True
+
+
+def test_zai_hf_watch_uses_the_live_org_slug():
+    # Probed 2026-10-15: author=zai-org returns models (GLM-5.3 and the
+    # rest). author=z-ai returns []. OpenRouter still uses the z-ai slug.
+    orgs = monitor.MAJOR_HF_ORGS
+    assert "zai-org" in orgs
+    assert "z-ai" not in orgs
+    assert "zai-org" in monitor.KNOWN_ORGS
+    assert "z-ai" in monitor.KNOWN_ORGS

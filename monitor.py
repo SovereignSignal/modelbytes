@@ -2409,7 +2409,10 @@ def fetch_ollama_models() -> List[ModelRelease]:
 MAJOR_HF_ORGS = [
     "deepseek-ai", "meta-llama", "mistralai", "Qwen", "google",
     "anthropic", "openai", "nvidia", "microsoft", "x-ai",
-    "z-ai", "zai-org", "arcee-ai", "openbmb", "MiniMaxAI",
+    # author=zai-org is the Hub org (probed 2026-10-15, GLM-5.3 and the
+    # rest). author=z-ai returns []. OpenRouter ids still use z-ai; that
+    # slug stays in KNOWN_ORGS and is not an HF author.
+    "zai-org", "arcee-ai", "openbmb", "MiniMaxAI",
     "NousResearch", "tiiuae", "01-ai", "BAAI", "xiaomi",
     "moonshotai", "ByteDance-Seed", "bytedance-research", "inclusionAI", "ibm",
     "allenai", "amazon", "perplexity-ai", "stabilityai",

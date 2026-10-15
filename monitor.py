@@ -487,8 +487,10 @@ def _posted_date_str(value) -> str:
     return str(value)[:10]
 
 
-def load_recent_digest_bodies(today: str = None, days: int = 14) -> List[Tuple[str, str]]:
+def load_recent_digest_bodies(today: str = None,
+                              days: Optional[int] = 14) -> List[Tuple[str, str]]:
     """Published digest HTML from posted_digests, newest first, today excluded.
+    days=None is every row (LIMIT NULL).
 
     Empty list when DATABASE_URL is unset or on any failure — callers fall
     back to pending/*.txt. Never raises.
@@ -523,9 +525,10 @@ def load_recent_digest_bodies(today: str = None, days: int = 14) -> List[Tuple[s
         return []
 
 
-def _digest_history(today: str = None, days: int = 14,
+def _digest_history(today: str = None, days: Optional[int] = 14,
                     pending_dir: Path = None) -> List[Tuple[str, str]]:
-    """[(date, body), ...] newest first, `today` excluded.
+    """[(date, body), ...] newest first, `today` excluded. days=None is the
+    full history.
 
     Postgres posted_digests.body wins for a given date (what readers saw).
     pending/*.txt fills dates the DB has no body for (baked-in corpus,
@@ -5253,6 +5256,9 @@ def _truncate_for_telegram(message: str, limit: int = TELEGRAM_MAX_CHARS) -> str
 # The message_id of the last successful channel post (t.me/ModelBytes/<id>) —
 # the one durable proof of publication Telegram gives; recorded in publish_runs.
 LAST_TELEGRAM_MESSAGE_ID = None
+# Body of the last digest Telegram accepted in this run. main() resets it and
+# hands it to the AlphaSignal cross-check so today's post counts as covered.
+LAST_DELIVERED_DIGEST = None
 
 
 def send_telegram_post(message: str) -> bool:
@@ -5263,10 +5269,11 @@ def send_telegram_post(message: str) -> bool:
     LAST_TELEGRAM_MESSAGE_ID side-effect that callers (publish_runs audit)
     read after a successful send.
     """
-    global LAST_TELEGRAM_MESSAGE_ID
+    global LAST_TELEGRAM_MESSAGE_ID, LAST_DELIVERED_DIGEST
     result = _publisher.send_telegram(message)
     if result.ok:
         LAST_TELEGRAM_MESSAGE_ID = result.message_id
+        LAST_DELIVERED_DIGEST = message
         print(f"Sent ({len(message)} chars).", file=sys.stderr)
     else:
         LAST_TELEGRAM_MESSAGE_ID = None
@@ -6181,6 +6188,7 @@ _MODEL_VARIANT_RE = re.compile(
     r"|\d+[a-z]{1,3}"
     r"|\d{1,3}"
     r"|voice|legal|flash|pro|mini|nano|max|ultra|lite|instruct|thinking"
+    r"|super|vl"
     r"|haiku|sonnet|opus|fable|astra|argon|sol|turbo|preview|tts|decision"
     r")$"
 )
@@ -6201,6 +6209,19 @@ _X_SIGNAL_RE = re.compile(
 # application/rss+xml, items through 2026-10-15. atom.xml is the same feed.
 # The archive page links both. There is no separate newsletter RSS.
 ALPHASIGNAL_FEED_URL = "https://alphasignal.ai/feed.xml"
+# Benchmark and comparison headlines name models that are being measured,
+# not released (SoSBench Catches DeepSeek-R1 Leaking ..., Jais 3 matches
+# Claude Sonnet 5 ...). Such a title counts only with a release word in the
+# title or its excerpt (Grok Voice 3.0 Tops ... / "debuts at the top").
+_ALPHASIGNAL_BENCH_RE = re.compile(
+    r"(?i)(bench|\b(?:index|pits|shows|catches|leaking|leads|vs\.?|versus"
+    r"|matches|tops|beats|ranks|ranked|outperforms|outscores|rivals"
+    r"|leaderboard|arena|compares|compared|comparison)\b)"
+)
+_ALPHASIGNAL_RELEASE_RE = re.compile(
+    r"(?i)\b(?:launch(?:es)?|releases?|debuts?|introduces|open-sources"
+    r"|unveils|ships)\b"
+)
 _X_PAGE_SIZE = 10
 
 
@@ -6291,25 +6312,38 @@ def alphasignal_unposted_models(feed_text: str, posted_text: str = "",
                                 today: str = None) -> List[str]:
     """Model names in the latest AlphaSignal issue that are not in posted_text.
 
-    The issue is `today` and the previous UTC day. [] on an empty or
-    unparseable feed. Never raises.
+    The issue is `today` and the previous UTC day. Names come from item
+    titles only; excerpts name competitors and baselines. Benchmark-style
+    titles are skipped unless the title or excerpt signals a release.
+    [] on an empty or unparseable feed. Never raises.
     """
     try:
         items = parse_rss_items(feed_text or "", "AlphaSignal")
     except Exception:
         return []
-    posted = _compact_match_text(posted_text)
+    return _alphasignal_unposted(
+        _alphasignal_candidates(items, today=today), posted_text)
+
+
+def _alphasignal_candidates(items: list, today: str = None) -> List[str]:
     names, seen = [], set()
     for item in alphasignal_latest_items(items, today=today):
-        blob = " ".join(
-            [item.get("title") or ""] + list(item.get("excerpts") or []))
-        for name in extract_model_mentions(blob):
-            key = _compact_match_text(name)
-            if not key or key in seen or key in posted:
+        title = item.get("title") or ""
+        if _ALPHASIGNAL_BENCH_RE.search(title):
+            blob = " ".join([title] + list(item.get("excerpts") or []))
+            if not _ALPHASIGNAL_RELEASE_RE.search(blob):
                 continue
-            seen.add(key)
-            names.append(name)
+        for name in extract_model_mentions(title):
+            key = _compact_match_text(name)
+            if key and key not in seen:
+                seen.add(key)
+                names.append(name)
     return names
+
+
+def _alphasignal_unposted(names: List[str], posted_text: str) -> List[str]:
+    posted = _compact_match_text(posted_text)
+    return [name for name in names if _compact_match_text(name) not in posted]
 
 
 def _alphasignal_feed_get(url: str):
@@ -6317,10 +6351,12 @@ def _alphasignal_feed_get(url: str):
     return _lab_feed_get(url, "AlphaSignal")
 
 
-def _posted_coverage_text(today: str = None) -> str:
-    parts = []
+def _posted_coverage_text(today: str = None, delivered: str = None) -> str:
+    """Every published digest (full history, not a recent window) plus
+    `delivered`, the body sent this run, so today's post counts."""
+    parts = [delivered] if delivered else []
     try:
-        for _date, body in _digest_history(today=today, days=14):
+        for _date, body in _digest_history(today=today, days=None):
             if body:
                 parts.append(body)
     except Exception as exc:
@@ -6329,10 +6365,12 @@ def _posted_coverage_text(today: str = None) -> str:
     return "\n".join(parts)
 
 
-def run_alphasignal_crosscheck(today: str = None, preview: bool = False) -> List[str]:
+def run_alphasignal_crosscheck(today: str = None, preview: bool = False,
+                               delivered: str = None) -> List[str]:
     """Flag model names in AlphaSignal's latest issue that we have not posted.
 
-    The latest issue is the newest UTC day in the public RSS. Never raises.
+    The latest issue is the newest UTC day in the public RSS. `delivered` is
+    the digest this run sent; without it only history counts. Never raises.
     Preview logs the gap and does not alert. A dead feed is a source-health
     error, not a coverage alert.
     """
@@ -6361,8 +6399,12 @@ def run_alphasignal_crosscheck(today: str = None, preview: bool = False) -> List
             preview=preview,
         )
         return []
-    gaps = alphasignal_unposted_models(
-        text, _posted_coverage_text(today), today=today)
+    # History is read only when the issue names a model; a quiet feed costs
+    # no DB query.
+    gaps = _alphasignal_candidates(parsed, today=today)
+    if gaps:
+        gaps = _alphasignal_unposted(
+            gaps, _posted_coverage_text(today, delivered))
     issue_day = ""
     latest = alphasignal_latest_items(parsed, today=today)
     if latest:
@@ -6530,6 +6572,22 @@ def main():
         sys.argv.remove("--preview")
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    global LAST_DELIVERED_DIGEST
+    LAST_DELIVERED_DIGEST = None
+    try:
+        return _run_digest(today, preview_mode)
+    finally:
+        # After the publish so the digest just sent counts as covered. Every
+        # return path lands here; with no send it checks history only.
+        try:
+            run_alphasignal_crosscheck(
+                today, preview=preview_mode, delivered=LAST_DELIVERED_DIGEST)
+        except Exception as exc:
+            print(f"AlphaSignal coverage failed: {_short_source_error(exc)}",
+                  file=sys.stderr)
+
+
+def _run_digest(today: str, preview_mode: bool) -> int:
     live_mode = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID) and not preview_mode
 
     # Per-run diagnostics. summarize_models overwrites these; reset here so a
@@ -6554,12 +6612,6 @@ def main():
     _X_SKIPPED = False
     LAST_X_POSTS = 0
     LAST_TC_PARSED = 0
-    try:
-        run_alphasignal_crosscheck(today, preview=preview_mode)
-    except Exception as exc:
-        print(f"AlphaSignal coverage failed: {_short_source_error(exc)}",
-              file=sys.stderr)
-
     # Retry queued release events before every early return (already-posted
     # curated day, seed, quiet day, no-models). Preview and a disabled flag
     # do neither HTTP nor outbox writes. This does not scan historical

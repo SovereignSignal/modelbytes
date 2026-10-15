@@ -94,7 +94,8 @@ venv/bin/python -m pytest tests/ -v
 | `MODELBYTES_PENDING_GRACE_SECONDS` | How long to poll GitHub for a late hand-written `pending/<date>.txt` before the inline path. Default: `0` (no wait). Ignored when `MODELBYTES_INLINE_PRIMARY=1`. | ❌ |
 | `MODELBYTES_ALLOW_SEED` | Set to `1` to let the fallback path seed an empty `models` table (otherwise it refuses, to guard wiped/migrated state). | ❌ |
 | `MODELBYTES_RELEASE_FORWARDING` | Set to exactly `1` to forward qualified model releases after a successful post. Inert unless this is `1` and both `RELEASE_EVENTS_URL` and `RELEASE_EVENTS_TOKEN` are set. Leave unset until the receiver is deployed. | ❌ |
-| `MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY` | Optional Artificial Analysis free-tier key (`x-api-key`). When unset, that source is skipped with one info log and no ops alert. | ❌ |
+| `MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY` | Optional Artificial Analysis free-tier key (`x-api-key`). This is the only switch: when it is set, the next run fetches the language, image, video, and speech catalogs. When unset, that source is skipped with one info log and no ops alert. Free tier is about 100 requests / 24h; a daily run is about 12–36. | ❌ |
+| `MODELBYTES_X_BEARER_TOKEN` | Optional X API v2 app bearer token. This is the only switch for the @ArtificialAnlys timeline watch. Unset skips it with one info log and no ops alert. Cost: Posts Read is $0.005 per post returned. One daily page of 10 posts is at most $0.05 (about $1.50/month if every day returns 10 posts). The same post is not rebilled inside a UTC day. No username lookup and no monthly minimum. | ❌ |
 | `RELEASE_EVENTS_URL` | Release Events v1 endpoint. Unused while forwarding is off. | ❌ |
 | `RELEASE_EVENTS_TOKEN` | Bearer token for that endpoint. Never commit it. | ❌ |
 | `AI_WIRE_ENABLED` | Set to exactly `1` to push models that were in a successfully sent digest to the AI Wire registry. Inert unless this is `1` and both `AI_WIRE_URL` and `AI_WIRE_INGEST_TOKEN` are set. A failed push is logged and does not affect the digest. | ❌ |
@@ -108,7 +109,9 @@ These power the **inline writer**, which is the everyday digest path (the retire
 - **OpenRouter** — 400+ models with pricing
 - **Ollama** — Local LLM models
 - **Hugging Face** — Open weights and research models
-- **Artificial Analysis** — optional free API (language plus image, video, and speech). Set `MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY`.
+- **Artificial Analysis** — optional free API (language plus image, video, and speech). Turns on by itself once `MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY` is set.
+- **@ArtificialAnlys on X** — optional. Rankings and launches from that account become digest candidates when `MODELBYTES_X_BEARER_TOKEN` is set. See the env table for the per-post cost.
+- **AlphaSignal** — public RSS at `https://alphasignal.ai/feed.xml` (no key, no extra cost). Each run flags model names from the digest day and the previous UTC day that are missing from the last 14 posted digests. It does not publish those names.
 - **TestingCatalog** — RSS early signal for model releases (leaks are not posted as released)
 
 See [`docs/source-growth.md`](./docs/source-growth.md) for the source expansion rubric, [`docs/source-candidates.md`](./docs/source-candidates.md) for the intake queue, and [`docs/superpowers/specs/2026-08-20-coverage-and-quality-expansion.md`](./docs/superpowers/specs/2026-08-20-coverage-and-quality-expansion.md) for the 2026-08-20 coverage/quality plan.

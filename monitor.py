@@ -591,6 +591,8 @@ def _redact_secrets(text: str) -> str:
         out = out.replace(SLACK_BOT_TOKEN, "<token>")
     if ARTIFICIAL_ANALYSIS_API_KEY:
         out = out.replace(ARTIFICIAL_ANALYSIS_API_KEY, "<redacted>")
+    if X_BEARER_TOKEN:
+        out = out.replace(X_BEARER_TOKEN, "<redacted>")
     return out
 
 
@@ -629,6 +631,7 @@ def _short_source_error(exc: BaseException) -> str:
     for secret in (
         PARALLEL_API_KEY,
         ARTIFICIAL_ANALYSIS_API_KEY,
+        X_BEARER_TOKEN,
         LLM_API_KEY,
         TELEGRAM_BOT_TOKEN,
         SLACK_BOT_TOKEN,
@@ -2166,7 +2169,8 @@ def is_significant_release(model_id: str, author: str, tags: list,
     # Lab-blog rows are first-party announcements. A title that does not match
     # a family token (Reflection Beam) must not lose the cap and then be
     # marked seen as noise overflow.
-    if "aa-release" in tag_set or "tc-release" in tag_set or "lab-release" in tag_set:
+    if ("aa-release" in tag_set or "tc-release" in tag_set
+            or "lab-release" in tag_set or "x-release" in tag_set):
         return True
     model_lower = model_id.lower()
 
@@ -2409,7 +2413,10 @@ def fetch_ollama_models() -> List[ModelRelease]:
 MAJOR_HF_ORGS = [
     "deepseek-ai", "meta-llama", "mistralai", "Qwen", "google",
     "anthropic", "openai", "nvidia", "microsoft", "x-ai",
-    "z-ai", "zai-org", "arcee-ai", "openbmb", "MiniMaxAI",
+    # author=zai-org is the Hub org (probed 2026-10-15, GLM-5.3 and the
+    # rest). author=z-ai returns []. OpenRouter ids still use z-ai; that
+    # slug stays in KNOWN_ORGS and is not an HF author.
+    "zai-org", "arcee-ai", "openbmb", "MiniMaxAI",
     "NousResearch", "tiiuae", "01-ai", "BAAI", "xiaomi",
     "moonshotai", "ByteDance-Seed", "bytedance-research", "inclusionAI", "ibm",
     "allenai", "amazon", "perplexity-ai", "stabilityai",
@@ -2434,11 +2441,26 @@ ENRICH_HF_CARDS = os.environ.get("MODELBYTES_ENRICH_HF_CARDS", "1") == "1"
 # Web research + cited sources, fed to the writer model. No Claude.
 PARALLEL_API_KEY = os.environ.get("MODELBYTES_PARALLEL_API_KEY", "")
 # Optional. Unset skips the Artificial Analysis catalog with one info log.
+# The key is the only switch: once MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY
+# is set, the next run fetches. There is no second enable flag.
 # Free tier is 100 requests / 24h (AA docs, 2026-10); a daily run is about
 # 12–36 (12 lanes, up to 3 pages). Public leaderboard HTML is not fetched:
 # the site terms forbid automated scraping.
 ARTIFICIAL_ANALYSIS_API_KEY = os.environ.get(
     "MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY", "")
+# @ArtificialAnlys timeline. Off when unset — the token is the only switch.
+# Official X API v2 pay-per-use (docs.x.com pricing, checked 2026-10):
+# Posts: Read is $0.005 per post returned. This watch requests one timeline
+# page, max_results=10 (the API rejects max_results under 5; 10 covers a
+# thread). A full page is $0.05. About $1.50/month if every day returns 10
+# posts. The same post is not rebilled inside one UTC day, and a same-day
+# retry is cheaper. The user id is pinned, so there is no $0.010 username
+# lookup and no expansions (those bill user reads). No monthly minimum.
+X_BEARER_TOKEN = os.environ.get("MODELBYTES_X_BEARER_TOKEN", "")
+X_AA_USER_ID = "1743487864934162432"  # @ArtificialAnlys, resolved 2026-10-15
+X_AA_USERNAME = "ArtificialAnlys"
+if X_BEARER_TOKEN and X_BEARER_TOKEN not in _publisher.secret_values:
+    _publisher.secret_values = _publisher.secret_values + (X_BEARER_TOKEN,)
 DISCOVERY_ENABLED = os.environ.get(
     "MODELBYTES_DISCOVERY", "1" if PARALLEL_API_KEY else "0") == "1"
 PARALLEL_SEARCH_URL = "https://api.parallel.ai/v1/search"
@@ -2945,6 +2967,13 @@ def categorize_model(model: ModelRelease) -> str:
         return "open_frontier"
     if (model.source or "") == "testingcatalog":
         return "specialized"
+    # An @ArtificialAnlys ranking or launch. Voice/speech already returned
+    # specialized above. A post that does not say the weights are open is a
+    # closed or API-only release (Microsoft-Decision-1).
+    if "x-release" in traits:
+        if model.is_open_source is False:
+            return "closed_frontier"
+        return "open_frontier"
 
     premier = ["llama-3.3", "llama-3.2", "mistral-large", "mixtral",
                "qwen2.5-72b", "qwen3", "qwen3.6", "deepseek-v3", "deepseek-v4",
@@ -3007,7 +3036,7 @@ def _availability_tag(m: ModelRelease) -> str:
         return "🔗 Cited source"
     # AA's host link already says "Artificial Analysis". A second tag repeats it.
     # TestingCatalog is labeled by the link host (HF, the lab, testingcatalog.com).
-    if m.source in ("artificial-analysis", "testingcatalog"):
+    if m.source in ("artificial-analysis", "testingcatalog", "x-artificial-analysis"):
         return ""
     return "📦 Open weights · HF"
 
@@ -3983,6 +4012,10 @@ LAST_DISCOVERY_MODELS: List[ModelRelease] = []
 LAST_AA_CATALOG_IDS: Set[str] = set()
 LAST_AA_EMITTED_IDS: Set[str] = set()
 _AA_SKIPPED = False
+_X_SKIPPED = False
+# Posts returned by the @ArtificialAnlys timeline page, before the ranking
+# filter. A quiet page is still a live source — same idea as LAST_TC_PARSED.
+LAST_X_POSTS = 0
 # TestingCatalog items inside the digest window before the release filter.
 # A feed full of leaks is still a live source.
 LAST_TC_PARSED = 0
@@ -6078,6 +6111,371 @@ def fetch_testingcatalog_models(existing: List[ModelRelease] = None,
     return models
 
 
+# Model-like names in a headline or a post. Families are the labs and product
+# lines a digest would actually name. A following token has to be a version
+# or a specialist marker (Voice, Legal, Flash, Astra) so "Claude Code" and
+# "Zed 1.24" are not models. Hyphenated forms (GLM-Legal, Microsoft-Decision-1,
+# DeepSeek-R1) count as one name.
+_MODEL_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*")
+_MODEL_FAMILIES = frozenset({
+    "heygen", "glm", "gemma", "gemini", "gpt", "claude", "grok", "llama",
+    "mistral", "qwen", "deepseek", "flux", "phi", "nemotron", "kimi",
+    "minimax", "hunyuan", "whisper", "olmo", "granite", "command",
+    "codestral", "devstral", "voxtral", "mixtral", "ideogram", "kling",
+    "microsoft",
+})
+_MODEL_VARIANT_RE = re.compile(
+    r"(?i)^(?:"
+    r"decision-\d+(?:\.\d+)?"
+    r"|v?\d+(?:\.\d+)+"
+    r"|v\d+"
+    r"|[a-z]\d+[a-z]{0,3}"
+    r"|\d+[a-z]{1,3}"
+    r"|\d{1,3}"
+    r"|voice|legal|flash|pro|mini|nano|max|ultra|lite|instruct|thinking"
+    r"|haiku|sonnet|opus|fable|astra|argon|sol|turbo|preview|tts|decision"
+    r")$"
+)
+_MODEL_BRIDGE = frozenset({
+    "releases", "released", "launches", "launched", "unveils", "unveiled",
+    "announces", "announced", "introduces", "introduced", "debuts", "debuted",
+    "is", "now", "the", "new", "a", "an",
+})
+_X_SIGNAL_RE = re.compile(
+    r"(?i)("
+    r"#\s*1\b|\btops?\b|\bleaderboard\b|\brank(?:s|ed|ing)?\b|"
+    r"\blaunch(?:es|ed|ing)?\b|\bintroduc(?:e|es|ed|ing)\b|"
+    r"\bannounc(?:e|es|ed|ing)\b|\bdebuts?\b|\breleas(?:e|es|ed|ing)\b|"
+    r"\bnow available\b|\bis now\b"
+    r")"
+)
+# Public article feed, not the email. Verified 2026-10-15: HTTP 200,
+# application/rss+xml, items through 2026-10-15. atom.xml is the same feed.
+# The archive page links both. There is no separate newsletter RSS.
+ALPHASIGNAL_FEED_URL = "https://alphasignal.ai/feed.xml"
+_X_PAGE_SIZE = 10
+
+
+def _is_model_family(token: str) -> bool:
+    head = (token or "").split("-", 1)[0].split(".", 1)[0].lower()
+    return head in _MODEL_FAMILIES
+
+
+def _is_model_variant(token: str) -> bool:
+    low = (token or "").lower()
+    if not low or re.fullmatch(r"\d+k", low) or re.fullmatch(r"\d{4}", low):
+        return False
+    return bool(_MODEL_VARIANT_RE.match(low))
+
+
+def extract_model_mentions(text: str) -> List[str]:
+    """Model names in reading order. Products without a version or specialist
+    marker (Claude Code) are omitted."""
+    tokens = _MODEL_TOKEN_RE.findall(text or "")
+    out, seen = [], set()
+    i = 0
+    while i < len(tokens):
+        raw = tokens[i]
+        if not _is_model_family(raw):
+            i += 1
+            continue
+        parts = [raw]
+        j = i + 1
+        bridged = False
+        while j < len(tokens):
+            tok = tokens[j]
+            if _is_model_variant(tok):
+                parts.append(tok)
+                bridged = False
+                j += 1
+                continue
+            if (len(parts) == 1 and not bridged
+                    and tok.lower() in _MODEL_BRIDGE):
+                bridged = True
+                j += 1
+                continue
+            break
+        if len(parts) == 1 and "-" in raw:
+            bits = raw.split("-")
+            if len(bits) < 2 or not all(_is_model_variant(bit) for bit in bits[1:]):
+                i += 1
+                continue
+            name = raw
+        elif len(parts) >= 2:
+            name = " ".join(parts)
+        else:
+            i += 1
+            continue
+        key = _compact_match_text(name)
+        if key and len(key) >= 4 and key not in seen:
+            seen.add(key)
+            out.append(name)
+        i = j if j > i else i + 1
+    return out
+
+
+def alphasignal_latest_items(items: list, today: str = None) -> list:
+    """Items from `today` and the previous UTC day.
+
+    A single article after midnight must not hide the previous day's model
+    notes. Without `today`, the newest day in the feed is the reference.
+    """
+    dated = []
+    for item in items or []:
+        day = _day(item.get("publish_date"))
+        if day:
+            dated.append((day, item))
+    if not dated:
+        return []
+    if today:
+        ref = datetime.strptime(str(today)[:10], "%Y-%m-%d").date()
+    else:
+        ref = datetime.strptime(max(day for day, _item in dated), "%Y-%m-%d").date()
+    kept = []
+    for day, item in dated:
+        age = (ref - datetime.strptime(day, "%Y-%m-%d").date()).days
+        if 0 <= age <= 1:
+            kept.append(item)
+    return kept
+
+
+def alphasignal_unposted_models(feed_text: str, posted_text: str = "",
+                                today: str = None) -> List[str]:
+    """Model names in the latest AlphaSignal issue that are not in posted_text.
+
+    The issue is `today` and the previous UTC day. [] on an empty or
+    unparseable feed. Never raises.
+    """
+    try:
+        items = parse_rss_items(feed_text or "", "AlphaSignal")
+    except Exception:
+        return []
+    posted = _compact_match_text(posted_text)
+    names, seen = [], set()
+    for item in alphasignal_latest_items(items, today=today):
+        blob = " ".join(
+            [item.get("title") or ""] + list(item.get("excerpts") or []))
+        for name in extract_model_mentions(blob):
+            key = _compact_match_text(name)
+            if not key or key in seen or key in posted:
+                continue
+            seen.add(key)
+            names.append(name)
+    return names
+
+
+def _alphasignal_feed_get(url: str):
+    """One GET for the public AlphaSignal feed. No retry loop."""
+    return _lab_feed_get(url, "AlphaSignal")
+
+
+def _posted_coverage_text(today: str = None) -> str:
+    parts = []
+    try:
+        for _date, body in _digest_history(today=today, days=14):
+            if body:
+                parts.append(body)
+    except Exception as exc:
+        print(f"AlphaSignal coverage history failed: {_short_source_error(exc)}",
+              file=sys.stderr)
+    return "\n".join(parts)
+
+
+def run_alphasignal_crosscheck(today: str = None, preview: bool = False) -> List[str]:
+    """Flag model names in AlphaSignal's latest issue that we have not posted.
+
+    The latest issue is the newest UTC day in the public RSS. Never raises.
+    Preview logs the gap and does not alert. A dead feed is a source-health
+    error, not a coverage alert.
+    """
+    today = today or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        resp = _alphasignal_feed_get(ALPHASIGNAL_FEED_URL)
+        text = _response_feed_text(resp)
+        error = ""
+    except Exception as exc:
+        _remember_source_error("AlphaSignal", exc)
+        error = _short_source_error(exc)
+        print(f"AlphaSignal coverage failed: {error}", file=sys.stderr)
+        flush_source_health(
+            [{"source": "AlphaSignal", "items": 0, "error": error}],
+            preview=preview,
+        )
+        return []
+    try:
+        parsed = parse_rss_items(text, "AlphaSignal")
+    except Exception as exc:
+        _remember_source_error("AlphaSignal", exc)
+        error = _short_source_error(exc)
+        print(f"AlphaSignal coverage failed: {error}", file=sys.stderr)
+        flush_source_health(
+            [{"source": "AlphaSignal", "items": 0, "error": error}],
+            preview=preview,
+        )
+        return []
+    gaps = alphasignal_unposted_models(
+        text, _posted_coverage_text(today), today=today)
+    issue_day = ""
+    latest = alphasignal_latest_items(parsed, today=today)
+    if latest:
+        issue_day = latest[0].get("publish_date") or ""
+    flush_source_health(
+        [{"source": "AlphaSignal", "items": len(parsed), "error": ""}],
+        preview=preview,
+    )
+    if not gaps:
+        print("AlphaSignal coverage: no unposted model names", file=sys.stderr)
+        return []
+    shown = gaps[:12]
+    extra = len(gaps) - len(shown)
+    message = (
+        "AlphaSignal coverage gap "
+        f"({issue_day or today}, {ALPHASIGNAL_FEED_URL}): "
+        "unposted model names: " + ", ".join(shown)
+    )
+    if extra:
+        message += f" (+{extra} more)"
+    print(message, file=sys.stderr)
+    if not preview:
+        send_ops_alert(message)
+    return gaps
+
+
+def _aa_x_posts(body) -> list:
+    if isinstance(body, dict):
+        data = body.get("data") or []
+    elif isinstance(body, list):
+        data = body
+    else:
+        return []
+    return [row for row in data if isinstance(row, dict)]
+
+
+def _aa_x_article_url(post: dict) -> str:
+    entities = post.get("entities") if isinstance(post.get("entities"), dict) else {}
+    for row in entities.get("urls") or []:
+        if not isinstance(row, dict):
+            continue
+        expanded = (row.get("unwound_url") or row.get("expanded_url") or "").strip()
+        if not expanded.startswith("http"):
+            continue
+        host = _url_host(expanded)
+        if host in ("x.com", "twitter.com", "t.co", "pic.x.com", "pic.twitter.com"):
+            continue
+        return expanded
+    return ""
+
+
+def _aa_x_status_url(post: dict) -> str:
+    tweet_id = str(post.get("id") or "").strip()
+    if not tweet_id:
+        return ""
+    return f"https://x.com/{X_AA_USERNAME}/status/{tweet_id}"
+
+
+def _aa_x_model_from_post(post: dict, today: str = None) -> Optional[ModelRelease]:
+    refs = post.get("referenced_tweets") or []
+    if any(isinstance(row, dict) and row.get("type") == "retweeted" for row in refs):
+        return None
+    raw = post.get("text") or ""
+    if raw.lstrip().startswith("RT @"):
+        return None
+    plain = re.sub(r"https?://t\.co/\S+", " ", raw)
+    plain = re.sub(r"[ \t]+", " ", plain).strip()
+    if not plain or not _X_SIGNAL_RE.search(plain):
+        return None
+    created = _day(post.get("created_at"))
+    if created and digest_release_is_stale(created, today=today):
+        return None
+    head = plain.split("\n", 1)[0].strip()
+    names = extract_model_mentions(head)
+    if not names:
+        return None
+    name = names[0]
+    article = _aa_x_article_url(post)
+    status = _aa_x_status_url(post)
+    url = article or status
+    if not url:
+        return None
+    modality = None
+    if re.search(r"(?i)\b(voice|tts|speech)\b", name):
+        modality = "text-to-speech"
+    open_weights = bool(re.search(r"(?i)open[-\s]?weights?", plain))
+    head_token = re.split(r"[\s-]", name, maxsplit=1)[0]
+    return ModelRelease(
+        name=name,
+        provider=_resolve_provider(head_token, name),
+        source="x-artificial-analysis",
+        url=url,
+        description=_smart_truncate(re.sub(r"\s+", " ", plain), 200),
+        release_date=created,
+        is_open_source=True if open_weights else False,
+        canonical_url=url,
+        credit_url=status or None,
+        modality=modality,
+        confidence="low",
+        unique_traits=["x-release"],
+    )
+
+
+def fetch_artificial_analysis_x_models(seen: Set[str] = None,
+                                       today: str = None) -> List[ModelRelease]:
+    """New rankings and launches from @ArtificialAnlys. [] when the token is unset.
+
+    Never raises. One timeline page. Replies stay in, because AA posts the
+    ranking inside the thread. Retweets are excluded.
+    """
+    global _X_SKIPPED, LAST_X_POSTS
+    seen = seen or set()
+    LAST_X_POSTS = 0
+    if not X_BEARER_TOKEN:
+        _X_SKIPPED = True
+        print(
+            "X watch skipped: MODELBYTES_X_BEARER_TOKEN is unset",
+            file=sys.stderr,
+        )
+        return []
+    _X_SKIPPED = False
+    ref = (datetime.strptime(today, "%Y-%m-%d").date() if today
+           else datetime.now(timezone.utc).date())
+    start = ref - timedelta(days=DIGEST_FRESHNESS_DAYS)
+    start_time = datetime(
+        start.year, start.month, start.day, tzinfo=timezone.utc,
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    url = f"https://api.x.com/2/users/{X_AA_USER_ID}/tweets"
+    try:
+        resp = _http_get(
+            url, "X-ArtificialAnalysis", timeout=30,
+            headers={"Authorization": f"Bearer {X_BEARER_TOKEN}"},
+            params={
+                "max_results": _X_PAGE_SIZE,
+                "exclude": "retweets",
+                "tweet.fields": "created_at,entities",
+                "start_time": start_time,
+            },
+        )
+        posts = _aa_x_posts(resp.json())
+        LAST_X_POSTS = len(posts)
+    except Exception as exc:
+        LAST_X_POSTS = 0
+        _remember_source_error("X-ArtificialAnalysis", exc)
+        print(f"X watch failed: {_short_source_error(exc)}", file=sys.stderr)
+        return []
+    emitted, seen_names = [], set()
+    for post in posts:
+        model = _aa_x_model_from_post(post, today=today)
+        if model is None:
+            continue
+        key = _compact_match_text(model.name)
+        if not key or key in seen_names or model.name in seen:
+            continue
+        seen_names.add(key)
+        emitted.append(model)
+        if len(emitted) >= 5:
+            break
+    return emitted
+
+
 def main():
     preview_mode = "--preview" in sys.argv
     if preview_mode:
@@ -6101,10 +6499,18 @@ def main():
     _DISCOVERY_DISABLED = False
     _SOURCE_ERRORS.clear()
     global LAST_AA_CATALOG_IDS, LAST_AA_EMITTED_IDS, _AA_SKIPPED, LAST_TC_PARSED
+    global _X_SKIPPED, LAST_X_POSTS
     LAST_AA_CATALOG_IDS = set()
     LAST_AA_EMITTED_IDS = set()
     _AA_SKIPPED = False
+    _X_SKIPPED = False
+    LAST_X_POSTS = 0
     LAST_TC_PARSED = 0
+    try:
+        run_alphasignal_crosscheck(today, preview=preview_mode)
+    except Exception as exc:
+        print(f"AlphaSignal coverage failed: {_short_source_error(exc)}",
+              file=sys.stderr)
 
     # Retry queued release events before every early return (already-posted
     # curated day, seed, quiet day, no-models). Preview and a disabled flag
@@ -6162,6 +6568,8 @@ def main():
          lambda: fetch_artificial_analysis_models(seen_models, today=today)),
         ("TestingCatalog",
          lambda: fetch_testingcatalog_models(existing=all_new, today=today)),
+        ("X-ArtificialAnalysis",
+         lambda: fetch_artificial_analysis_x_models(seen_models, today=today)),
     ]:
         print(f"Fetching {source_name}...")
         batch = list(fetcher() or [])
@@ -6171,6 +6579,11 @@ def main():
         if source_name == "ArtificialAnalysis" and _AA_SKIPPED and not err:
             err = "disabled"
             track = False
+        if source_name == "X-ArtificialAnalysis" and _X_SKIPPED and not err:
+            err = "disabled"
+            track = False
+        if source_name == "X-ArtificialAnalysis" and not err:
+            items = max(items, LAST_X_POSTS)
         if source_name == "TestingCatalog" and not err:
             items = max(items, LAST_TC_PARSED)
         fetched_sources.append(
@@ -6178,7 +6591,8 @@ def main():
         for model in batch:
             if model.name in seen_models or model.name in queued_names:
                 continue
-            if model.source in ("artificial-analysis", "testingcatalog"):
+            if model.source in (
+                    "artificial-analysis", "testingcatalog", "x-artificial-analysis"):
                 if absorb_extra_source(model, all_new, today=today):
                     continue
             all_new.append(model)

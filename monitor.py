@@ -217,6 +217,9 @@ class ModelRelease:
     creator: Optional[str] = None
     modality: Optional[str] = None
     credit_url: Optional[str] = None
+    # A collapse_variants family entry lists the variant names it stands for,
+    # so publishing the family marks every variant seen.
+    variants: List[str] = None
 
     def __post_init__(self):
         if self.performance_scores is None:
@@ -225,6 +228,8 @@ class ModelRelease:
             self.unique_traits = []
         if self.validation_notes is None:
             self.validation_notes = []
+        if self.variants is None:
+            self.variants = []
 
 
 @dataclass(frozen=True)
@@ -1414,9 +1419,9 @@ def _lint_digest_structure(body: str, mode: str) -> Tuple[List[str], List[str]]:
     # machine-assembled fallback content, warnings (→ ops alert) for curated,
     # because replacing a flawed curated digest with the fallback is worse.
     flood_sink = errors if mode == "fallback" else warnings
-    if len(entries) > DIGEST_LIMIT:
+    if len(entries) > DIGEST_FLOOD_LIMIT:
         flood_sink.append(f"flood: {len(entries)} entries exceeds the "
-                          f"{DIGEST_LIMIT}-model cap")
+                          f"{DIGEST_FLOOD_LIMIT}-model cap")
     for name in entries:
         if _QUANT_NAME_RE.search(name):
             flood_sink.append(f"quant/serving artifact leaked into digest: {name}")
@@ -2145,6 +2150,42 @@ def candidate_in_digest(model, summary: str) -> bool:
     if len(key) >= 6 and key in _alnum(summary):
         return True
     return False
+
+
+@dataclass
+class PublicationManifest:
+    """What a delivered digest actually published.
+
+    models: the candidates present in the text Telegram received.
+    seen_ids: ids to mark seen — those models, the variants behind a
+    published family entry, and their AA ids.
+    """
+    models: List["ModelRelease"]
+    seen_ids: Set[str]
+
+
+def build_publication_manifest(candidates, message: str) -> PublicationManifest:
+    """Manifest of the candidates that survive into the delivered text.
+
+    Reads the body after QA and after the same 4096-char cut the Telegram
+    send applies. A candidate the renderer capped, the writer omitted, a
+    scrub dropped, or truncation cut is not in the manifest and stays
+    eligible for a later run.
+    """
+    delivered = _truncate_for_telegram(message or "")
+    included, ids = [], set()
+    for model in candidates or []:
+        if model is None or not getattr(model, "name", None):
+            continue
+        if not candidate_in_digest(model, delivered):
+            continue
+        included.append(model)
+        ids.add(model.name)
+        ids.update(getattr(model, "variants", None) or [])
+        key = _aa_id_from_model(model)
+        if key:
+            ids.add(key)
+    return PublicationManifest(models=included, seen_ids=ids)
 
 
 def log_writer_exclusions(models, summary: str) -> List[str]:
@@ -4984,6 +5025,7 @@ def collapse_variants(models: List["ModelRelease"]) -> List["ModelRelease"]:
             is_open_source=rep.is_open_source,
             license=rep.license,
             release_date=rep.release_date,
+            variants=[g.name for g in group],
         )
         out.append(collapsed)
 
@@ -5036,7 +5078,7 @@ def summarize_models(models: List[ModelRelease], web_context: str = "",
         if base not in seen:
             seen.add(base)
             deduped.append(m)
-    models = deduped[:12]
+    models = deduped[:DIGEST_LIMIT]
 
     info = []
     for m in models:
@@ -5192,7 +5234,13 @@ Candidate models from our fetchers (may be sparse or already-covered — the web
 
 
 TELEGRAM_MAX_CHARS = 4096
-DIGEST_LIMIT = 15  # max models included in one daily digest
+# Max models included in one daily digest. main() selects this many and
+# summarize_models() renders this many — one cap, so a selected model is never
+# silently cut by the renderer.
+DIGEST_LIMIT = 12
+# Entry-count gate for a whole body. The writer may add entries from web
+# research on top of DIGEST_LIMIT candidates, so this sits above it.
+DIGEST_FLOOD_LIMIT = 15
 
 
 def _truncate_for_telegram(message: str, limit: int = TELEGRAM_MAX_CHARS) -> str:
@@ -6728,11 +6776,6 @@ def main():
         ranked = _models_in_digest_window(ranked, today=today)
         digest_models = ranked[:DIGEST_LIMIT]
         held = ranked[DIGEST_LIMIT:]
-        # Mark the pre-collapse set seen FIRST: collapsed-away variants must be
-        # recorded as seen or they re-surface next run (the family entry's name
-        # is the base, not the individual variants). Done before collapse so
-        # the original variant names are captured.
-        pre_collapse = list(digest_models)
         # Collapse (inline path only, 2026-06-22 spec): group same-(org, base,
         # size) variants and collapse N≥3 into one family entry so one org's
         # batch doesn't burn the daily cap or spam the channel. Sits after
@@ -6744,9 +6787,10 @@ def main():
             + (f"; {len(held)} held for a later run" if held else "")
         )
 
-        # Defer seen-marking until a successful post. Marking before summarize
-        # burned unposted models on no-post days (they never resurfaced).
-        posted_names = {m.name for m in pre_collapse} | {m.name for m in digest_models}
+        # Defer seen-marking until a successful post, and then mark only the
+        # publication manifest. Marking the whole selection burned models the
+        # renderer capped, the writer omitted, or truncation cut (2026-10-14
+        # review). A family entry carries its variant names (collapse_variants).
         noise_overflow = {m.name for m in held if not _significant(m)}
 
         # Enrich the top candidates with real HF-card facts (params, license,
@@ -6845,13 +6889,9 @@ def main():
             print(f"Could not record published digest to {pending_path}: {exc}", file=sys.stderr)
         mark_posted_digest(today, "fallback", str(pending_path), message)
         slack_ok = send_slack_post(message)  # mirror to Slack (no-op unless configured)
-        for n in posted_names | noise_overflow:
-            seen_models.add(n)
-        for model in list(pre_collapse) + list(digest_models):
-            if model.name in posted_names or model.name in noise_overflow:
-                key = _aa_id_from_model(model)
-                if key:
-                    seen_models.add(key)
+        manifest = build_publication_manifest(digest_models, message)
+        seen_models.update(manifest.seen_ids)
+        seen_models.update(noise_overflow)
         record_publish_run(today, fallback_mode, "posted",
                            models_found=len(all_new),
                            models_emitted=len(digest_models),

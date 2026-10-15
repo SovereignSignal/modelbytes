@@ -5,9 +5,15 @@ Inert unless ``AI_WIRE_ENABLED`` is exactly ``1`` and both ``AI_WIRE_URL`` and
 :func:`push_published_digest` only after Telegram has accepted the post.
 A receiver outage is logged and swallowed.
 
+With ``DATABASE_URL`` set, each item of a sent digest is first queued in
+``ai_wire_outbox``. Delivery marks it ``delivered`` (2xx) or ``rejected``
+(a permanent 4xx); anything else stays ``pending`` and every ordinary run
+retries it via :func:`retry_pending`. The oldest pending row is logged as
+``ai_wire_outbox pending=N oldest=...``.
+
 ``python monitor.py --ai-wire-backfill`` reprints recent digests from
-``posted_digests`` (dry-run). ``--apply`` POSTs them. There is no new table:
-the published HTML and ``publish_runs.telegram_message_id`` are the history.
+``posted_digests`` (dry-run). ``--apply`` POSTs them. The published HTML and
+``publish_runs.telegram_message_id`` are the history.
 """
 from __future__ import annotations
 
@@ -19,12 +25,46 @@ import socket
 import sys
 import urllib.error
 import urllib.request
-from datetime import datetime
-from typing import List, Optional, Sequence
+from datetime import datetime, timezone
+from typing import List, Optional, Sequence, Tuple
 
 TIMEOUT_SECONDS = 5
 MAX_ATTEMPTS = 2  # one try plus one retry
 BATCH_LIMIT = 100
+# 4xx that will not change on retry. 401/403/404 are config (token, URL)
+# and stay pending until the operator fixes them.
+PERMANENT_STATUSES = frozenset({400, 409, 410, 413, 422})
+
+OUTBOX_DDL = """
+CREATE TABLE IF NOT EXISTS ai_wire_outbox (
+    id TEXT PRIMARY KEY,
+    item JSONB NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INT NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+"""
+
+_OUTBOX_INSERT_SQL = """
+INSERT INTO ai_wire_outbox (id, item, status, attempts, created_at, updated_at)
+VALUES (%s, %s::jsonb, 'pending', 0, NOW(), NOW())
+ON CONFLICT (id) DO NOTHING
+"""
+
+_OUTBOX_PENDING_SQL = """
+SELECT id, item, attempts, created_at
+FROM ai_wire_outbox
+WHERE status = 'pending'
+ORDER BY created_at, id
+"""
+
+_OUTBOX_UPDATE_SQL = """
+UPDATE ai_wire_outbox
+SET status = %s, attempts = attempts + 1, last_error = %s, updated_at = NOW()
+WHERE id = ANY(%s)
+"""
 
 _HF_NON_MODEL = frozenset({
     "datasets", "spaces", "papers", "collections", "models", "docs",
@@ -522,58 +562,173 @@ def push_items(items) -> bool:
     retried. Logs ``ai_wire push ok n=`` or ``ai_wire push failed:``.
     """
     try:
-        return _push_items(items)
+        if not enabled():
+            return False
+        batch = [item for item in (items or []) if item][:BATCH_LIMIT]
+        if not batch:
+            return False
+        return _deliver(batch)[0] == "delivered"
     except Exception as exc:
         print(f"ai_wire push failed: {type(exc).__name__}", file=sys.stderr)
         return False
 
 
-def _push_items(items) -> bool:
-    if not enabled():
-        return False
-    batch = [item for item in (items or []) if item][:BATCH_LIMIT]
-    if not batch:
-        return False
+def _deliver(batch) -> Tuple[str, str]:
+    """POST ``batch``. ``(delivered|retryable|rejected, detail)``. Logs."""
     url = _endpoint()
     token = os.environ.get("AI_WIRE_INGEST_TOKEN", "").strip()
     data = json.dumps({"items": batch}).encode("utf-8")
     last = "error"
-    for attempt in range(MAX_ATTEMPTS):
+    for _attempt in range(MAX_ATTEMPTS):
         try:
             status, raw = _post(url, token, data)
         except urllib.error.HTTPError as exc:
-            if exc.code in (408, 429) or exc.code >= 500:
-                last = f"http {exc.code}"
-                if attempt == 0:
-                    continue
-            else:
-                print(f"ai_wire push failed: http {exc.code}", file=sys.stderr)
-                return False
-            print(f"ai_wire push failed: {last}", file=sys.stderr)
-            return False
+            status, raw = exc.code, b""
         except (TimeoutError, socket.timeout, urllib.error.URLError, OSError) as exc:
             last = type(exc).__name__
-            if attempt == 0:
-                continue
-            print(f"ai_wire push failed: {last}", file=sys.stderr)
-            return False
+            continue
         if 200 <= status < 300:
             print(f"ai_wire push ok n={_accepted(raw, len(batch))}", file=sys.stderr)
-            return True
+            return "delivered", ""
         last = f"http {status}"
-        if attempt == 0 and (status in (408, 429) or status >= 500):
+        if status in (408, 429) or status >= 500:
             continue
         print(f"ai_wire push failed: {last}", file=sys.stderr)
-        return False
+        if status in PERMANENT_STATUSES:
+            return "rejected", last
+        return "retryable", last
     print(f"ai_wire push failed: {last}", file=sys.stderr)
-    return False
+    return "retryable", last
+
+
+# ── outbox ────────────────────────────────────────────────────────────────
+
+
+def _with_outbox(fn):
+    """Run ``fn(cursor)`` in a committed transaction on the state DB."""
+    import monitor
+
+    conn = monitor._db_connect(connect_timeout=10)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(OUTBOX_DDL)
+            result = fn(cur)
+        conn.commit()
+        return result
+    finally:
+        conn.close()
+
+
+def _outbox_available() -> bool:
+    import monitor
+
+    return bool(getattr(monitor, "DATABASE_URL", ""))
+
+
+def _item_id(day: str, item: dict) -> str:
+    return f"{day or 'undated'}|{item['canonical_key']}"
+
+
+def enqueue_items(items, day: str) -> int:
+    """Queue items as ``pending``. A row already queued is left alone."""
+    rows = [(_item_id(day, item), json.dumps(item)) for item in items or [] if item]
+
+    def op(cur):
+        added = 0
+        for row in rows:
+            cur.execute(_OUTBOX_INSERT_SQL, row)
+            added += max(int(cur.rowcount or 0), 0)
+        return added
+
+    return _with_outbox(op) if rows else 0
+
+
+def _load_pending() -> list:
+    def op(cur):
+        cur.execute(_OUTBOX_PENDING_SQL)
+        return list(cur.fetchall())
+
+    return _with_outbox(op) or []
+
+
+def _mark(ids, status: str, error: str) -> None:
+    def op(cur):
+        cur.execute(_OUTBOX_UPDATE_SQL, (status, error or None, list(ids)))
+
+    _with_outbox(op)
+
+
+def _coerce_item(raw) -> dict:
+    if isinstance(raw, dict):
+        return raw
+    return json.loads(raw if isinstance(raw, str) else str(raw))
+
+
+def _as_utc(value):
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        return _as_utc(datetime.fromisoformat(str(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def outbox_health_line(rows, now=None) -> str:
+    """``ai_wire_outbox pending=N oldest=<ts> age_h=<h> key=<id>``."""
+    if not rows:
+        return "ai_wire_outbox pending=0"
+    oldest = rows[0]
+    created = _as_utc(oldest[3])
+    now = now or datetime.now(timezone.utc)
+    stamp = created.isoformat() if created else str(oldest[3])
+    age = f"{(now - created).total_seconds() / 3600:.1f}" if created else "?"
+    return (f"ai_wire_outbox pending={len(rows)} oldest={stamp} "
+            f"age_h={age} key={oldest[0]}")
+
+
+def deliver_pending() -> int:
+    """POST every pending outbox row. Returns how many were acked.
+
+    Never raises. Logs the oldest row still pending afterwards.
+    """
+    acked = 0
+    try:
+        rows = _load_pending()
+        for i in range(0, len(rows), BATCH_LIMIT):
+            chunk = rows[i:i + BATCH_LIMIT]
+            ids = [row[0] for row in chunk]
+            outcome, detail = _deliver([_coerce_item(row[1]) for row in chunk])
+            status = "pending" if outcome == "retryable" else outcome
+            _mark(ids, status, detail)
+            if outcome == "delivered":
+                acked += len(ids)
+        print(outbox_health_line(_load_pending()), file=sys.stderr)
+    except Exception as exc:
+        print(f"ai_wire outbox failed: {type(exc).__name__}", file=sys.stderr)
+    return acked
+
+
+def retry_pending() -> int:
+    """Retry queued deliveries on an ordinary run. No-op when off. Never raises.
+
+    Reads only ``ai_wire_outbox``: rows an earlier armed run queued.
+    """
+    try:
+        if not enabled() or not _outbox_available():
+            return 0
+        return deliver_pending()
+    except Exception as exc:
+        print(f"ai_wire outbox failed: {type(exc).__name__}", file=sys.stderr)
+        return 0
 
 
 def push_published_digest(models, message: str, *, message_id=None,
                           posted_at=None, today=None):
     """Push models included in a digest Telegram already accepted.
 
-    No-op when the flag is off. Never raises.
+    With a state DB the items are queued first, then every pending row is
+    delivered; a failure stays queued for the next run. Without one this is
+    a single best-effort push. No-op when the flag is off. Never raises.
     """
     try:
         if not enabled():
@@ -586,6 +741,15 @@ def push_published_digest(models, message: str, *, message_id=None,
             if (message or "").strip():
                 print("ai_wire push skipped: no items", file=sys.stderr)
             return None
+        if _outbox_available():
+            try:
+                enqueue_items(items, _context_day(message or "", today))
+            except Exception as exc:
+                print(f"ai_wire outbox failed: {type(exc).__name__}",
+                      file=sys.stderr)
+            else:
+                deliver_pending()
+                return None
         push_items(items)
     except Exception as exc:
         print(f"ai_wire push failed: {type(exc).__name__}", file=sys.stderr)

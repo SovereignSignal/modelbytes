@@ -109,7 +109,7 @@ a figure published in the last 14 days) and a deterministic dateline rewrite.
 - `monitor.py` — the publisher. Production `startCommand` is `python monitor.py` so `__main__` still runs `_handle_crash`.
 - `release_forwarding.py` — post-QA release-event qualification, identity, and the Postgres outbox. Inert unless `MODELBYTES_RELEASE_FORWARDING=1` and both `RELEASE_EVENTS_*` vars are set. Never runs in `--preview`.
 - `release_events.py` — Release Events v1 POST helper (`delivered` / `duplicate` / `retryable` / `rejected`).
-- `ai_wire.py` — AI Wire ingest. Inert unless `AI_WIRE_ENABLED=1` and both `AI_WIRE_URL` and `AI_WIRE_INGEST_TOKEN` are set. Runs only after a successful Telegram post. `--ai-wire-backfill` replays recent `posted_digests` and is dry-run unless `--apply`.
+- `ai_wire.py` — AI Wire ingest. Inert unless `AI_WIRE_ENABLED=1` and both `AI_WIRE_URL` and `AI_WIRE_INGEST_TOKEN` are set. Runs only after a successful Telegram post. Items are queued in the `ai_wire_outbox` table and pending rows are retried at the start of every run (never re-sends Telegram). `--ai-wire-backfill` replays recent `posted_digests` and is dry-run unless `--apply`.
 - `modelbytes_runner.py` — shim that runs monitor as `__main__`. It must not monkeypatch `summarize_models`.
 - `ss_publish/` — self-contained shared publish core (Telegram/Slack/ops), also
   vendored in clawbytes; mirror any cross-repo edits by hand.

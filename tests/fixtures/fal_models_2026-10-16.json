@@ -1,0 +1,546 @@
+[
+ {
+  "endpoint_id": "krea/v3/edit",
+  "metadata": {
+   "display_name": "Krea 3 Edit",
+   "category": "image-to-image",
+   "description": "Edits and combines reference images using text instructions, with optional prompt expansion, output-size controls, and reproducible generation through a seed.",
+   "status": "active",
+   "tags": [
+    "image editing",
+    "multi-reference",
+    "image-to-image",
+    "krea",
+    "krea-3"
+   ],
+   "updated_at": "2026-10-15T21:14:57.450Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-0.jpg",
+   "model_url": "https://fal.run/krea/v3/edit",
+   "license_type": "commercial",
+   "date": "2026-10-14T23:03:07.699Z",
+   "group": {
+    "key": "krea-v3",
+    "label": "Image Editing"
+   },
+   "highlighted": false,
+   "kind": "inference",
+   "pinned": false
+  }
+ },
+ {
+  "endpoint_id": "krea/v3/text-to-image",
+  "metadata": {
+   "display_name": "Krea 3 Text to Image",
+   "category": "text-to-image",
+   "description": "Generates images from text prompts with optional prompt expansion, configurable output dimensions, and seed control.",
+   "status": "active",
+   "tags": [
+    "text-to-image",
+    "image generation",
+    "prompt expansion",
+    "krea",
+    "krea-3"
+   ],
+   "updated_at": "2026-10-15T21:10:22.874Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-1.jpg",
+   "model_url": "https://fal.run/krea/v3/text-to-image",
+   "license_type": "commercial",
+   "date": "2026-10-14T22:59:52.695Z",
+   "group": {
+    "key": "krea-v3",
+    "label": "Text to Image"
+   },
+   "highlighted": false,
+   "kind": "inference",
+   "pinned": false
+  }
+ },
+ {
+  "endpoint_id": "krea/v3/realtime",
+  "metadata": {
+   "display_name": "Krea 3 Realtime",
+   "category": "image-to-image",
+   "description": "Edits an input image in a realtime session using text prompts, with seed control.",
+   "status": "active",
+   "tags": [
+    "image editing",
+    "realtime",
+    "image-to-image",
+    "krea",
+    "krea-3"
+   ],
+   "updated_at": "2026-10-15T15:51:36.152Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-2.jpg",
+   "model_url": "https://fal.run/krea/v3/realtime",
+   "license_type": "commercial",
+   "date": "2026-10-14T23:18:24.434Z",
+   "group": {
+    "key": "krea-v3",
+    "label": "Realtime"
+   },
+   "highlighted": false,
+   "kind": "inference",
+   "pinned": false
+  }
+ },
+ {
+  "endpoint_id": "nvidia/nemotron-3-5-super/text",
+  "metadata": {
+   "display_name": "NVIDIA Nemotron 3.5 Super Text",
+   "category": "llm",
+   "description": "Chat and reason with NVIDIA Nemotron 3.5 Super, a hybrid Mamba-Transformer mixture-of-experts model with optional step-by-step thinking.",
+   "status": "active",
+   "tags": [
+    "llm",
+    "reasoning",
+    "chat"
+   ],
+   "updated_at": "2026-10-15T15:28:34.849Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-3.jpg",
+   "model_url": "https://fal.run/nvidia/nemotron-3-5-super/text",
+   "license_type": "commercial",
+   "date": "2026-10-15T01:09:00.655Z",
+   "group": {
+    "key": "nvidia/nemotron-3-5-super",
+    "label": "Text"
+   },
+   "highlighted": false,
+   "kind": "inference",
+   "pinned": false
+  }
+ },
+ {
+  "endpoint_id": "nvidia/nemotron-3-5-super/vision",
+  "metadata": {
+   "display_name": "NVIDIA Nemotron 3.5 Super Vision",
+   "category": "image-to-text",
+   "description": "Ask NVIDIA Nemotron 3.5 Super questions about an image: describe scenes, read text and charts, and reason over what it sees.",
+   "status": "active",
+   "tags": [
+    "vision",
+    "multimodal",
+    "reasoning"
+   ],
+   "updated_at": "2026-10-15T15:28:54.240Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-4.jpg",
+   "model_url": "https://fal.run/nvidia/nemotron-3-5-super/vision",
+   "license_type": "commercial",
+   "date": "2026-10-15T01:10:24.662Z",
+   "group": {
+    "key": "nvidia/nemotron-3-5-super",
+    "label": "Vision"
+   },
+   "highlighted": false,
+   "kind": "inference",
+   "pinned": false
+  }
+ },
+ {
+  "endpoint_id": "nvidia/nemotron-3-5-super/video",
+  "metadata": {
+   "display_name": "NVIDIA Nemotron 3.5 Super Video",
+   "category": "video-to-text",
+   "description": "Ask NVIDIA Nemotron 3.5 Super about a video clip: summarize what happens, find moments and reason across frames.",
+   "status": "active",
+   "tags": [
+    "video-understanding",
+    "multimodal",
+    "reasoning"
+   ],
+   "updated_at": "2026-10-15T15:29:11.444Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-5.jpg",
+   "model_url": "https://fal.run/nvidia/nemotron-3-5-super/video",
+   "license_type": "commercial",
+   "date": "2026-10-15T01:11:43.143Z",
+   "group": {
+    "key": "nvidia/nemotron-3-5-super",
+    "label": "Video"
+   },
+   "highlighted": false,
+   "kind": "inference",
+   "pinned": false
+  }
+ },
+ {
+  "endpoint_id": "mirelo-ai/sfx2.0/video-to-audio",
+  "metadata": {
+   "display_name": "Mirelo SFX2.0",
+   "category": "video-to-audio",
+   "description": "Generates synchronized soundtracks from an input video and returns them as audio files. Supports text guidance, negative prompts, multiple samples, preservation of existing speech, and selectable audio formats.",
+   "status": "active",
+   "tags": [
+    "video-to-audio",
+    "sfx"
+   ],
+   "updated_at": "2026-10-14T13:00:30.159Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-6.jpg",
+   "model_url": "https://fal.run/mirelo-ai/sfx2.0/video-to-audio",
+   "license_type": "commercial",
+   "date": "2026-10-14T10:26:02.189Z",
+   "group": {
+    "key": "mirelo-sfx2.0",
+    "label": "Video To Audio"
+   },
+   "highlighted": false,
+   "kind": "inference",
+   "pinned": false
+  }
+ },
+ {
+  "endpoint_id": "mirelo-ai/sfx2.0/text-to-audio",
+  "metadata": {
+   "display_name": "Mirelo SFX2.0",
+   "category": "text-to-audio",
+   "description": "Generates sound effects from text prompts with control over duration, negative prompts, sample count, and output audio format.",
+   "status": "active",
+   "tags": [
+    "text-to-audio",
+    "sfx"
+   ],
+   "updated_at": "2026-10-14T13:00:23.645Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-7.jpg",
+   "model_url": "https://fal.run/mirelo-ai/sfx2.0/text-to-audio",
+   "license_type": "commercial",
+   "date": "2026-10-14T09:38:59.027Z",
+   "group": {
+    "key": "mirelo-sfx2.0",
+    "label": "Text To Audio"
+   },
+   "highlighted": false,
+   "kind": "inference",
+   "pinned": false
+  }
+ },
+ {
+  "endpoint_id": "blackforestlabs/flux-3/klein/text-to-image",
+  "metadata": {
+   "display_name": "FLUX.3 Klein",
+   "category": "text-to-image",
+   "description": "Generates images from text prompts with FLUX.3 Klein, with configurable image size, reproducible seeds, prompt expansion and optional bounding-box layout control.",
+   "status": "active",
+   "tags": [
+    "image generation",
+    "text to image",
+    "typography",
+    "graphic design",
+    "flux"
+   ],
+   "updated_at": "2026-10-15T15:33:48.770Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-8.jpg",
+   "model_url": "https://fal.run/blackforestlabs/flux-3/klein/text-to-image",
+   "license_type": "commercial",
+   "date": "2026-10-14T18:39:38.024Z",
+   "group": {
+    "key": "flux-3-klein",
+    "label": "Text to Image"
+   },
+   "highlighted": false,
+   "kind": "inference",
+   "pinned": false
+  }
+ },
+ {
+  "endpoint_id": "blackforestlabs/flux-3/klein/edit-image",
+  "metadata": {
+   "display_name": "FLUX.3 Klein Image Editing",
+   "category": "image-to-image",
+   "description": "Edits and composes images from text instructions and up to ten references with FLUX.3 Klein, with optional bounding-box controls for object placement and transformation.",
+   "status": "active",
+   "tags": [
+    "image editing",
+    "image to image",
+    "reference images",
+    "typography",
+    "graphic design",
+    "flux"
+   ],
+   "updated_at": "2026-10-15T15:33:58.369Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-9.jpg",
+   "model_url": "https://fal.run/blackforestlabs/flux-3/klein/edit-image",
+   "license_type": "commercial",
+   "date": "2026-10-14T18:40:57.255Z",
+   "group": {
+    "key": "flux-3-klein",
+    "label": "Image Editing"
+   },
+   "highlighted": false,
+   "kind": "inference",
+   "pinned": false
+  }
+ },
+ {
+  "endpoint_id": "blackforestlabs/flux-3/text-to-image",
+  "metadata": {
+   "display_name": "Flux 3 Image",
+   "category": "text-to-image",
+   "description": "FLUX 3 Image is Black Forest Labs' newest image model. Generate detailed, well-composed images in native 2K and 4K with precise layout control and improved text rendering.",
+   "status": "active",
+   "tags": [
+    "flux-3-image",
+    "black-forest-labs",
+    "typography",
+    "4k"
+   ],
+   "updated_at": "2026-10-15T20:54:41.625Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-10.jpg",
+   "model_url": "https://fal.run/blackforestlabs/flux-3/text-to-image",
+   "license_type": "commercial",
+   "date": "2026-10-01T09:42:01.969Z",
+   "group": {
+    "key": "flux-3-image",
+    "label": "Text to Image"
+   },
+   "highlighted": false,
+   "kind": "inference",
+   "pinned": false
+  }
+ },
+ {
+  "endpoint_id": "bytedance/omnihuman/v2",
+  "metadata": {
+   "display_name": "Bytedance Omnihuman V2",
+   "category": "image-to-video",
+   "description": "Omnihuman v2 generates video using an image of a human figure paired with an audio file. It produces vivid, high-quality videos where the character\u2019s emotions and movements maintain a strong correlation with the audio.",
+   "status": "active",
+   "tags": [
+    "image-to-video",
+    "lipsync"
+   ],
+   "updated_at": "2026-10-15T22:00:29.888Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-11.jpg",
+   "model_url": "https://fal.run/bytedance/omnihuman/v2",
+   "license_type": "commercial",
+   "date": "2026-10-15T14:59:20.829Z",
+   "highlighted": false,
+   "kind": "inference",
+   "pinned": false
+  }
+ },
+ {
+  "endpoint_id": "alibaba/abot-world-0",
+  "metadata": {
+   "display_name": "Abot World 0",
+   "category": "worlds",
+   "description": "Explore interactive worlds in real time with movement and camera controls.",
+   "status": "active",
+   "tags": [
+    "worlds",
+    "world-model",
+    "realtime",
+    "interactive",
+    "walkable",
+    "explorable",
+    "abot"
+   ],
+   "updated_at": "2026-10-15T22:31:09.998Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-12.jpg",
+   "model_url": "https://fal.run/alibaba/abot-world-0",
+   "license_type": "commercial",
+   "date": "2026-10-15T22:30:23.926Z",
+   "highlighted": false,
+   "kind": "inference",
+   "pinned": false
+  }
+ },
+ {
+  "endpoint_id": "minimax/h3-max/reference-director",
+  "metadata": {
+   "display_name": "H3 Max Reference Director",
+   "category": "worlds",
+   "description": "Direct a continuous world in real time with image references and text prompts.",
+   "status": "active",
+   "tags": [
+    "worlds",
+    "world-model",
+    "realtime",
+    "interactive",
+    "directable",
+    "reference-images",
+    "h3-max"
+   ],
+   "updated_at": "2026-10-15T22:24:47.193Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-13.jpg",
+   "model_url": "https://fal.run/minimax/h3-max/reference-director",
+   "license_type": "commercial",
+   "date": "2026-10-15T20:25:05.488Z",
+   "group": {
+    "key": "hailuo-03-new-turbo",
+    "label": "Reference Director"
+   },
+   "highlighted": false,
+   "kind": "inference",
+   "pinned": false
+  }
+ },
+ {
+  "endpoint_id": "minimax/h3-max/text-to-video",
+  "metadata": {
+   "display_name": "MiniMax H3 Max Text to Video",
+   "category": "text-to-video",
+   "description": "fal's H3 Max is a post-trained variant of MiniMax H3, tuned for stronger prompt adherence and better aesthetics while co-optimized with our custom inference stack for higher throughput with no compromises on output quality",
+   "status": "active",
+   "tags": [
+    "stylized",
+    "transform",
+    "lipsync"
+   ],
+   "updated_at": "2026-10-16T17:17:29.003Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-14.jpg",
+   "model_url": "https://fal.run/minimax/h3-max/text-to-video",
+   "license_type": "commercial",
+   "date": "2026-08-23T17:56:01.222Z",
+   "group": {
+    "key": "hailuo-03-new-turbo",
+    "label": "Text to Video Max"
+   },
+   "highlighted": false,
+   "kind": "inference",
+   "pinned": false
+  }
+ },
+ {
+  "endpoint_id": "meshy/v7/retexture",
+  "metadata": {
+   "display_name": "Meshy 7 Retexture",
+   "category": "3d-to-3d",
+   "description": "Meshy 7 retexture applies new textures to an existing 3D model from a text prompt or a reference image, with optional PBR maps.",
+   "status": "active",
+   "tags": [
+    "3d",
+    "3d-to-3d",
+    "textures",
+    "pbr"
+   ],
+   "updated_at": "2026-10-15T11:03:57.683Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-15.jpg",
+   "model_url": "https://fal.run/meshy/v7/retexture",
+   "license_type": "commercial",
+   "date": "2026-10-14T17:17:43.571Z",
+   "highlighted": false,
+   "kind": "inference",
+   "pinned": false
+  }
+ },
+ {
+  "endpoint_id": "meshy/v7/text-to-3d",
+  "metadata": {
+   "display_name": "V7 Text to 3D",
+   "category": "text-to-3d",
+   "description": "Turns text into a fully textured, PBR-ready 3D mesh with complete geometry, in game-ready Smart Topology at a target polygon count",
+   "status": "active",
+   "tags": [
+    "stylized",
+    "transform"
+   ],
+   "updated_at": "2026-10-02T19:11:45.618Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-16.jpg",
+   "model_url": "https://fal.run/meshy/v7/text-to-3d",
+   "license_type": "commercial",
+   "date": "2026-08-24T10:39:38.619Z",
+   "group": {
+    "key": "meshy-v7",
+    "label": "Text to 3D"
+   },
+   "highlighted": false,
+   "kind": "inference",
+   "pinned": false
+  }
+ },
+ {
+  "endpoint_id": "fal-ai/krea-2-trainer",
+  "metadata": {
+   "display_name": "Krea 2 Trainer",
+   "category": "training",
+   "description": "Train a custom LoRA on your own images to teach Krea 2 a new subject, character, or style. Provide a set of training images (and an optional trigger word), and the trainer outputs LoRA weights you can use for inference with the Krea 2 LoRA endpoint.",
+   "status": "active",
+   "tags": [
+    "lora",
+    "personalization"
+   ],
+   "updated_at": "2026-06-30T18:57:25.450Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-17.jpg",
+   "model_url": "https://fal.run/fal-ai/krea-2-trainer",
+   "license_type": "commercial",
+   "date": "2026-06-19T19:49:06.090Z",
+   "group": {
+    "key": "Krea2-open",
+    "label": "LoRA Trainer"
+   },
+   "highlighted": false,
+   "kind": "training",
+   "pinned": false,
+   "inference_endpoint_ids": [
+    "fal-ai/krea-2/turbo/lora"
+   ]
+  }
+ },
+ {
+  "endpoint_id": "fal-ai/nano-banana-pro/edit",
+  "metadata": {
+   "display_name": "Nano Banana Pro",
+   "category": "image-to-image",
+   "description": "Nano Banana Pro is Google's new state-of-the-art image generation and editing model",
+   "status": "active",
+   "tags": [
+    "realism",
+    "typography"
+   ],
+   "updated_at": "2026-06-18T17:13:56.639Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-18.jpg",
+   "model_url": "https://fal.run/fal-ai/nano-banana-pro/edit",
+   "license_type": "commercial",
+   "date": "2025-11-20T14:27:03.344Z",
+   "group": {
+    "key": "Nano-Banana-Pro",
+    "label": "Image Editing"
+   },
+   "highlighted": false,
+   "kind": "inference",
+   "pinned": false
+  }
+ },
+ {
+  "endpoint_id": "openrouter/router/decisions",
+  "metadata": {
+   "display_name": "Router",
+   "category": "text-to-text",
+   "description": "Run any decision model with fal, powered by OpenRouter.",
+   "status": "active",
+   "tags": [
+    ""
+   ],
+   "updated_at": "2026-09-30T01:19:34.727Z",
+   "is_favorited": null,
+   "thumbnail_url": "https://example.com/thumb-19.jpg",
+   "model_url": "https://fal.run/openrouter/router/decisions",
+   "license_type": "commercial",
+   "date": "2026-09-21T22:13:11.671Z",
+   "group": {
+    "key": "openrouter/router",
+    "label": "Any Decision LM"
+   },
+   "highlighted": false,
+   "kind": "inference",
+   "pinned": false
+  }
+ }
+]

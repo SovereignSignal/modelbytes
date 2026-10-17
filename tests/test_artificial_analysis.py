@@ -395,3 +395,52 @@ def test_main_logs_disabled_aa_without_an_alert(monkeypatch, capsys, tmp_path):
     )
     assert err.count("MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY") == 1
     assert alerts == []
+
+
+def test_aa_undated_debut_is_not_low_confidence_for_the_writer(monkeypatch):
+    """A media debut has no ship date by design. "missing release date"
+    used to make it low confidence, and the writer prompt skips low
+    confidence rows — so Kling-style video debuts never printed."""
+    _install_aa(monkeypatch)
+    models = monitor.fetch_artificial_analysis_models(
+        seen={"aa/old-llm"}, today=TODAY)
+    qwen = next(m for m in models if m.name == "Qwen-Image-2.1")
+    assert "aa-debut" in qwen.unique_traits
+    monitor.enrich_model_metadata(qwen)
+    assert qwen.confidence != "low"
+    # A dated row is not tagged; an undated row from elsewhere stays low.
+    mistral = next(m for m in models if m.name == "Mistral Large 4")
+    assert "aa-debut" not in mistral.unique_traits
+    other = monitor.ModelRelease(name="x/y", provider="x", source="huggingface",
+                                 url="https://huggingface.co/x/y", description="")
+    assert monitor.enrich_model_metadata(other).confidence == "low"
+
+
+def test_aa_undated_debut_retries_only_inside_the_digest_window(monkeypatch):
+    """An undated debut the digest never prints must not return forever."""
+    _install_aa(monkeypatch)
+    seen = {"aa/old-llm"}
+    monitor.fetch_artificial_analysis_models(seen=seen, today=TODAY)
+    assert "aa-debut/flux-3/2026-10-07" in monitor.LAST_AA_DEBUT_MARKS
+    monitor._note_aa_baseline(seen, preview=False)
+    assert "aa-debut/flux-3/2026-10-07" in seen
+    assert "aa/flux-3" not in seen  # still a candidate
+
+    # Inside the window: offered again, first-offered day kept.
+    models = monitor.fetch_artificial_analysis_models(seen=seen, today="2026-10-10")
+    assert "FLUX 3" in _names(models)
+    assert "aa-debut/flux-3/2026-10-07" in monitor.LAST_AA_DEBUT_MARKS
+
+    # Past the window: not offered, and the baseline records the id.
+    models = monitor.fetch_artificial_analysis_models(seen=seen, today="2026-10-11")
+    assert "FLUX 3" not in _names(models)
+    monitor._note_aa_baseline(seen, preview=False)
+    assert "aa/flux-3" in seen
+
+
+def test_aa_debut_marks_are_not_written_in_preview(monkeypatch):
+    _install_aa(monkeypatch)
+    monitor.fetch_artificial_analysis_models(seen={"aa/old-llm"}, today=TODAY)
+    seen = set()
+    monitor._note_aa_baseline(seen, preview=True)
+    assert seen == set()

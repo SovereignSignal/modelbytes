@@ -1118,7 +1118,11 @@ def enrich_model_metadata(model: ModelRelease) -> ModelRelease:
         notes.append("unknown active parameters")
     model.validation_notes = notes
 
-    if not (model.url or model.canonical_url) or not model.release_date:
+    # A board/catalog debut without a ship date is dated by the listing
+    # itself (AA media debut). "low" made the writer skip it (Kling 4.0).
+    undated_ok = "aa-debut" in (model.unique_traits or [])
+    if not (model.url or model.canonical_url) or (
+            not model.release_date and not undated_ok):
         model.confidence = "low"
     elif notes:
         model.confidence = "medium" if model.confidence != "high" else model.confidence
@@ -2161,7 +2165,7 @@ class PublicationManifest:
 
     models: the candidates present in the text Telegram received.
     seen_ids: ids to mark seen — those models, the variants behind a
-    published family entry, and their AA ids.
+    published family entry, and their AA and fal ids.
     """
     models: List["ModelRelease"]
     seen_ids: Set[str]
@@ -2188,6 +2192,7 @@ def build_publication_manifest(candidates, message: str) -> PublicationManifest:
         key = _aa_id_from_model(model)
         if key:
             ids.add(key)
+        ids.update(_fal_ids_from_model(model))
     return PublicationManifest(models=included, seen_ids=ids)
 
 
@@ -2213,8 +2218,11 @@ def is_significant_release(model_id: str, author: str, tags: list,
     # Lab-blog rows are first-party announcements. A title that does not match
     # a family token (Reflection Beam) must not lose the cap and then be
     # marked seen as noise overflow.
+    # fal launches are grouped and date-filtered at the fetcher. Hosted rows
+    # have no downloads, so without this they ranked below every HF repo.
     if ("aa-release" in tag_set or "tc-release" in tag_set
-            or "lab-release" in tag_set or "x-release" in tag_set):
+            or "lab-release" in tag_set or "x-release" in tag_set
+            or "fal-release" in tag_set):
         return True
     model_lower = model_id.lower()
 
@@ -3078,6 +3086,8 @@ def _availability_tag(m: ModelRelease) -> str:
         return "📦 Ollama pull-ready"
     if m.source == "discovery":
         return "🔗 Cited source"
+    if m.source == "fal":
+        return "⚡ API live · fal"
     # AA's host link already says "Artificial Analysis". A second tag repeats it.
     # TestingCatalog is labeled by the link host (HF, the lab, testingcatalog.com).
     if m.source in ("artificial-analysis", "testingcatalog", "x-artificial-analysis"):
@@ -3100,6 +3110,7 @@ _HOST_LINK_LABELS = (
     ("openrouter.ai", "OpenRouter"),
     ("ollama.com", "Ollama"),
     ("artificialanalysis.ai", "Artificial Analysis"),
+    ("fal.ai", "fal"),
 )
 # Sentence-initial and ordinary words. A capitalized token outside this set
 # must match a listed model, its provider, or its license — otherwise the
@@ -4055,7 +4066,15 @@ LAST_DISCOVERY_MODELS: List[ModelRelease] = []
 # not write them.
 LAST_AA_CATALOG_IDS: Set[str] = set()
 LAST_AA_EMITTED_IDS: Set[str] = set()
+# Undated media debuts handed out this run (`aa-debut/<slug>/<day>`). main()
+# persists them with the baseline so a debut the digest never prints stops
+# after the digest window instead of returning every day.
+LAST_AA_DEBUT_MARKS: Set[str] = set()
 _AA_SKIPPED = False
+# fal.ai launch keys (`fal/<key>`) observed this run, and the subset returned
+# as candidates. Same baseline contract as the AA ids above.
+LAST_FAL_CATALOG_IDS: Set[str] = set()
+LAST_FAL_EMITTED_IDS: Set[str] = set()
 _X_SKIPPED = False
 # Posts returned by the @ArtificialAnlys timeline page, before the ranking
 # filter. A quiet page is still a live source — same idea as LAST_TC_PARSED.
@@ -5091,6 +5110,8 @@ def summarize_models(models: List[ModelRelease], web_context: str = "",
             s += f" ({m.source})"
         if m.release_date:
             s += f"\nReleased: {m.release_date}"
+        elif "aa-debut" in (m.unique_traits or []):
+            s += "\nListed: new on the Artificial Analysis leaderboard (ship date not confirmed)"
         if m.description:
             s += f"\nDesc: {_smart_truncate(m.description, 200)}"
         if m.context_window:
@@ -5595,7 +5616,9 @@ def _record_no_publishable(today: str, mode: str, models_found: int,
 # the digest window and records every id. Later runs publish ids that were
 # not on that baseline. A media id that appears after that baseline is a
 # leaderboard debut even when its ship date is older than the window; the
-# stale date is not printed. Language rows keep the date window.
+# stale date is not printed. Language rows keep the date window. An undated
+# debut is offered for DIGEST_FRESHNESS_DAYS from the first day it was handed
+# out (`aa-debut/<slug>/<day>` in the seen set), then baselined.
 _AA_API = "https://artificialanalysis.ai"
 _AA_ENDPOINTS = (
     ("language", "text",
@@ -5688,10 +5711,24 @@ def _note_aa_baseline(seen: Set[str], *, preview: bool, seed: bool = False) -> N
     if not seed:
         catalog -= set(LAST_AA_EMITTED_IDS or ())
     seen.update(catalog)
+    seen.update(LAST_AA_DEBUT_MARKS or ())
 
 
 def _aa_baseline_established(seen: Set[str]) -> bool:
     return any(str(item).startswith("aa/") for item in (seen or ()))
+
+
+def _aa_debut_first_days(seen: Set[str]) -> dict:
+    """slug -> first day an undated AA debut was offered (`aa-debut/<slug>/<day>`)."""
+    out = {}
+    for item in seen or ():
+        text = str(item)
+        if not text.startswith("aa-debut/"):
+            continue
+        slug, _, day = text[len("aa-debut/"):].rpartition("/")
+        if slug and _day(day) and (slug not in out or day < out[slug]):
+            out[slug] = day
+    return out
 
 
 def _aa_param_label(value) -> Optional[str]:
@@ -5834,9 +5871,10 @@ def fetch_artificial_analysis_models(seen: Set[str] = None,
 
     Never raises. One failed lane does not drop the others.
     """
-    global LAST_AA_CATALOG_IDS, LAST_AA_EMITTED_IDS, _AA_SKIPPED
+    global LAST_AA_CATALOG_IDS, LAST_AA_EMITTED_IDS, LAST_AA_DEBUT_MARKS, _AA_SKIPPED
     LAST_AA_CATALOG_IDS = set()
     LAST_AA_EMITTED_IDS = set()
+    LAST_AA_DEBUT_MARKS = set()
     seen = seen or set()
     if not ARTIFICIAL_ANALYSIS_API_KEY:
         _AA_SKIPPED = True
@@ -5848,6 +5886,8 @@ def fetch_artificial_analysis_models(seen: Set[str] = None,
         return []
     _AA_SKIPPED = False
     baselined = _aa_baseline_established(seen)
+    debut_first = _aa_debut_first_days(seen)
+    run_day = today or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     emitted = []
     seen_slugs = set()
     for _lane, modality, url, cite in _AA_ENDPOINTS:
@@ -5888,6 +5928,14 @@ def fetch_artificial_analysis_models(seen: Set[str] = None,
                 continue
             if media_debut:
                 model.release_date = None
+            if not model.release_date:
+                # No date clock, so the first day it was offered is the
+                # clock. Past the digest window it is baselined, not retried.
+                first = debut_first.get(slug)
+                if first and digest_release_is_stale(first, today=today):
+                    continue
+                LAST_AA_DEBUT_MARKS.add(f"aa-debut/{slug}/{first or run_day}")
+                model.unique_traits.append("aa-debut")
             emitted.append(model)
             LAST_AA_EMITTED_IDS.add(key)
     return emitted
@@ -5956,7 +6004,318 @@ def absorb_extra_source(incoming: ModelRelease, existing: List[ModelRelease],
         return False
     if (incoming.source or "") == "artificial-analysis":
         _apply_aa_facts(match, incoming, today=today)
+    elif (incoming.source or "") == "fal":
+        _apply_fal_facts(match, incoming, today=today)
     return True
+
+
+# fal.ai public model catalog (no key). The list is not ordered by date, so
+# every page is read (16 pages / ~1500 endpoints on 2026-10-16). One launch is
+# several endpoints (krea/v3/edit, krea/v3/text-to-image, krea/v3/realtime);
+# they are grouped into one candidate. `metadata.date` is the fal launch date.
+#
+# Utility rule: skip training endpoints (kind or category "training"),
+# workflows, routers, and tool endpoints whose id or name is background
+# removal, upscaling / super-resolution, or a LoRA trainer. Those are tools,
+# not model launches.
+FAL_MODELS_URL = "https://api.fal.ai/v1/models"
+FAL_MODEL_PAGE = "https://fal.ai/models/{endpoint_id}"
+_FAL_PAGE_CAP = 25
+_FAL_UTILITY_RE = re.compile(
+    r"(?i)(remove[-_ ]?background|background[-_ ]?remov|upscal|"
+    r"super[-_ ]?resolution|\blora\b|trainer|training|workflow|\brouter\b)")
+# Trailing endpoint segments that name a task, not a model. A path key
+# strips them so krea/v3/edit and krea/v3/realtime are one launch, and a new
+# task on an old family (meshy/v7/retexture) lands on that family's key.
+_FAL_TASK_SEGMENTS = frozenset({
+    "edit", "edit-image", "image-editing", "realtime", "text", "vision",
+    "video", "audio", "image", "tts", "stt", "ws", "retexture", "relight",
+    "recast", "extend-video", "insert-video", "lip-sync", "director",
+    "reference-director", "layerize", "expand", "complete", "draft",
+})
+_FAL_TASK_SEGMENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*-to-[a-z0-9-]+$")
+# Display-name suffixes that name the endpoint's task. Single words
+# (Text / Vision / Video / Image) are stripped only when the launch has
+# several endpoints, where they name the variant.
+_FAL_NAME_TASK_RE = re.compile(
+    r"(?i)\s+(?:(?:multi[- ])?(?:text|image|video|audio|speech|reference|3d)"
+    r"[- ]to[- ](?:image|video|audio|speech|text|3d)|image editing|edit image|"
+    r"edit|editing|realtime|real-time)$")
+_FAL_NAME_VARIANT_RE = re.compile(r"(?i)\s+(?:text|vision|video|image)$")
+_FAL_VENDOR_NAMES = {
+    "blackforestlabs": "Black Forest Labs", "nvidia": "NVIDIA",
+    "bytedance": "ByteDance", "krea": "Krea", "mirelo-ai": "Mirelo",
+    "google": "Google", "openai": "OpenAI", "xai": "xAI",
+    "minimax": "MiniMax", "alibaba": "Alibaba", "elevenlabs": "ElevenLabs",
+}
+_FAL_MODALITY = {
+    "text-to-image": "text-to-image", "image-to-image": "image-editing",
+    "text-to-video": "text-to-video", "image-to-video": "image-to-video",
+    "video-to-video": "video-to-video", "audio-to-video": "audio-to-video",
+    "text-to-audio": "text-to-audio", "video-to-audio": "video-to-audio",
+    "audio-to-audio": "audio-to-audio", "text-to-speech": "text-to-speech",
+    "speech-to-text": "speech-to-text", "speech-to-speech": "speech-to-speech",
+    "image-to-3d": "3d", "text-to-3d": "3d", "3d-to-3d": "3d",
+    "llm": "text", "text-to-text": "text",
+    "vision": "multimodal", "image-to-text": "multimodal",
+    "video-to-text": "multimodal", "worlds": "world model",
+}
+
+
+def _fal_get(url: str, params: dict):
+    """One page of the fal catalog. Tests stub this (conftest)."""
+    return _http_get(url, "fal", timeout=30, params=params)
+
+
+def _fal_fetch_catalog() -> list:
+    """Every catalog row, paging on next_cursor. Raises on a failed page."""
+    rows, cursor = [], None
+    for _page in range(_FAL_PAGE_CAP):
+        params = {"limit": 100}
+        if cursor:
+            params["cursor"] = cursor
+        body = _fal_get(FAL_MODELS_URL, params).json()
+        if not isinstance(body, dict):
+            raise ValueError("fal catalog page is not an object")
+        batch = body.get("models")
+        if isinstance(batch, list):
+            rows.extend(r for r in batch if isinstance(r, dict))
+        cursor = body.get("next_cursor")
+        if not body.get("has_more") or not cursor:
+            return rows
+    print(f"fal: stopped at the {_FAL_PAGE_CAP}-page cap", file=sys.stderr)
+    return rows
+
+
+def _fal_is_launch_endpoint(row: dict) -> bool:
+    md = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    endpoint = str(row.get("endpoint_id") or "").strip()
+    if not endpoint or "/" not in endpoint:
+        return False
+    if (md.get("status") or "active") != "active":
+        return False
+    if md.get("kind") == "training":
+        return False
+    if str(md.get("category") or "").lower() in ("training", "workflow"):
+        return False
+    return not _FAL_UTILITY_RE.search(f"{endpoint} {md.get('display_name') or ''}")
+
+
+def _fal_path_key(endpoint_id: str) -> str:
+    parts = [p for p in str(endpoint_id or "").lower().split("/") if p]
+    # fal hosts some vendors under its own namespace (fal-ai/meshy/v6 and
+    # meshy/v6 are one family). Under fal-ai the next segment is the model.
+    keep = 2
+    if len(parts) > 1 and parts[0] == "fal-ai":
+        parts, keep = parts[1:], 1
+    while len(parts) > keep and (
+            parts[-1] in _FAL_TASK_SEGMENTS
+            or _FAL_TASK_SEGMENT_RE.match(parts[-1])):
+        parts.pop()
+    return "fal/" + "/".join(parts)
+
+
+def _fal_keys(row: dict) -> Set[str]:
+    md = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    keys = {_fal_path_key(row.get("endpoint_id"))}
+    group = md.get("group") if isinstance(md.get("group"), dict) else {}
+    gkey = str(group.get("key") or "").strip().lower()
+    if gkey:
+        keys.add("fal/" + gkey)
+    return keys
+
+
+def _fal_launches(rows: list) -> List[dict]:
+    """Group endpoints that share a group key or a path key (union-find)."""
+    parent = {}
+
+    def find(k):
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+
+    for row in rows:
+        keys = sorted(_fal_keys(row))
+        for k in keys:
+            parent.setdefault(k, k)
+        for k in keys[1:]:
+            parent[find(k)] = find(keys[0])
+    launches = {}
+    for row in rows:
+        root = find(sorted(_fal_keys(row))[0])
+        launch = launches.setdefault(root, {"keys": set(), "rows": []})
+        launch["keys"].update(_fal_keys(row))
+        launch["rows"].append(row)
+    return list(launches.values())
+
+
+def _fal_vendor(endpoint_id: str) -> str:
+    parts = [p for p in str(endpoint_id or "").split("/") if p]
+    ns = parts[0].lower() if parts else ""
+    if ns == "fal-ai" and len(parts) > 1:
+        ns = parts[1].lower()
+    if ns in _FAL_VENDOR_NAMES:
+        return _FAL_VENDOR_NAMES[ns]
+    if ns in PROVIDER_NAMES:
+        return PROVIDER_NAMES[ns]
+    return " ".join(w[:1].upper() + w[1:] for w in re.split(r"[-_]+", ns) if w)
+
+
+def _fal_clean_name(name: str, variants: bool) -> str:
+    text = re.sub(r"\s+", " ", str(name or "")).strip()
+    while True:
+        cut = _FAL_NAME_TASK_RE.sub("", text)
+        if variants:
+            cut = _FAL_NAME_VARIANT_RE.sub("", cut)
+        cut = cut.strip()
+        # "Kotoba Text-to-Speech" keeps its suffix: a bare vendor is no name.
+        if not cut or cut == text or len(cut.split()) < 2:
+            return text
+        text = cut
+
+
+def _fal_launch_to_model(launch: dict) -> Optional[ModelRelease]:
+    rows = launch["rows"]
+    variants = len(rows) > 1
+    named = []
+    for row in rows:
+        md = row.get("metadata") or {}
+        name = _fal_clean_name(md.get("display_name") or "", variants)
+        if name:
+            named.append((len(name), name, row))
+    if not named:
+        return None
+    # Shortest name; on a tie the base task (text-to-*, llm) is the page.
+    named.sort(key=lambda item: (
+        item[0],
+        0 if str((item[2].get("metadata") or {}).get("category") or "").lower()
+        .startswith(("text-to", "llm")) else 1,
+        item[2].get("endpoint_id") or ""))
+    _, name, rep = named[0]
+    md = rep.get("metadata") or {}
+    dates = sorted(d for d in (_day((r.get("metadata") or {}).get("date"))
+                               for r in rows) if d)
+    mods = {_FAL_MODALITY.get(str((r.get("metadata") or {}).get("category") or "").lower())
+            for r in rows} - {None}
+    if len(mods) > 1 and mods & {"text", "multimodal"}:
+        modality = "multimodal"
+    else:
+        modality = (_FAL_MODALITY.get(str(md.get("category") or "").lower())
+                    or (sorted(mods)[0] if mods else None))
+    vendor = _fal_vendor(rep.get("endpoint_id"))
+    page = FAL_MODEL_PAGE.format(endpoint_id=rep.get("endpoint_id"))
+    return ModelRelease(
+        name=name,
+        provider=vendor or "unknown",
+        source="fal",
+        url=page,
+        description=_smart_truncate(str(md.get("description") or ""), 200),
+        release_date=dates[-1] if dates else None,
+        # license_type is fal's commercial-use flag, not the weights license.
+        is_open_source=None,
+        creator=vendor or None,
+        modality=modality,
+        credit_url=page,
+        unique_traits=["fal-release"] + [f"fal-id:{k}" for k in sorted(launch["keys"])],
+    )
+
+
+def _fal_ids_from_model(model) -> Set[str]:
+    out = set()
+    for trait in getattr(model, "unique_traits", None) or []:
+        text = str(trait)
+        if text.startswith("fal-id:"):
+            out.add(text.split(":", 1)[1])
+    return out
+
+
+def _safe_recent_digest_names(today: str = None) -> List[str]:
+    """_recent_digest_names for a fetcher: a history read error is not a
+    source failure, so it degrades to no names."""
+    try:
+        return _recent_digest_names(today)
+    except Exception as exc:
+        print(f"recent digest names unavailable: {type(exc).__name__}",
+              file=sys.stderr)
+        return []
+
+
+def _note_fal_baseline(seen: Set[str], *, preview: bool, seed: bool = False) -> None:
+    """Same contract as _note_aa_baseline, for fal launch keys."""
+    if preview or seen is None:
+        return
+    catalog = set(LAST_FAL_CATALOG_IDS or ())
+    if not seed:
+        catalog -= set(LAST_FAL_EMITTED_IDS or ())
+    seen.update(catalog)
+
+
+def _note_catalog_baselines(seen: Set[str], *, preview: bool, seed: bool = False) -> None:
+    _note_aa_baseline(seen, preview=preview, seed=seed)
+    _note_fal_baseline(seen, preview=preview, seed=seed)
+
+
+def fetch_fal_models(seen: Set[str] = None, today: str = None,
+                     recent_names: List[str] = None) -> List[ModelRelease]:
+    """New fal.ai launches since the last fal-key baseline. Never raises.
+
+    A launch is a candidate when its newest endpoint is inside the digest
+    window and its oldest is inside the 14-day catalog clock (an old family
+    that gained an endpoint is not a launch). Every other key is recorded
+    by the baseline, so the first run (no fal key seen yet) posts only
+    launches inside the window, never the back-catalog. Names already in a
+    recent digest are skipped.
+    """
+    global LAST_FAL_CATALOG_IDS, LAST_FAL_EMITTED_IDS
+    LAST_FAL_CATALOG_IDS = set()
+    LAST_FAL_EMITTED_IDS = set()
+    seen = seen or set()
+    try:
+        rows = _fal_fetch_catalog()
+    except Exception as exc:
+        _remember_source_error("fal", exc)
+        print(f"fal catalog failed: {_short_source_error(exc)}", file=sys.stderr)
+        return []
+    launches = _fal_launches([r for r in rows if _fal_is_launch_endpoint(r)])
+    out = []
+    for launch in launches:
+        keys = launch["keys"]
+        LAST_FAL_CATALOG_IDS.update(keys)
+        if keys & seen:
+            continue
+        dates = sorted(d for d in (_day((r.get("metadata") or {}).get("date"))
+                                   for r in launch["rows"]) if d)
+        if not dates or digest_release_is_stale(dates[-1], today=today):
+            continue
+        if is_stale_release(dates[0], today=today):
+            continue
+        model = _fal_launch_to_model(launch)
+        if model is None or model.name in seen:
+            continue
+        if _discovery_already_covered(model, recent_names or []):
+            continue
+        out.append(model)
+        LAST_FAL_EMITTED_IDS.update(keys)
+    return out
+
+
+def _apply_fal_facts(dest: ModelRelease, src: ModelRelease, today: str = None) -> None:
+    """Fill gaps on a primary row from a fal launch. Never replaces its URL."""
+    if (not dest.release_date and src.release_date
+            and not digest_release_is_stale(src.release_date, today=today)):
+        dest.release_date = src.release_date
+    if not getattr(dest, "creator", None) and src.creator:
+        dest.creator = src.creator
+    if not getattr(dest, "modality", None) and src.modality:
+        dest.modality = src.modality
+    if not dest.description and src.description:
+        dest.description = src.description
+    if not getattr(dest, "credit_url", None) and src.credit_url:
+        dest.credit_url = src.credit_url
+    for trait in src.unique_traits or []:
+        if str(trait).startswith("fal-id:") and trait not in (dest.unique_traits or []):
+            dest.unique_traits.append(trait)
 
 
 def _testingcatalog_get(url: str):
@@ -6605,9 +6964,13 @@ def _run_digest(today: str, preview_mode: bool) -> int:
     _DISCOVERY_DISABLED = False
     _SOURCE_ERRORS.clear()
     global LAST_AA_CATALOG_IDS, LAST_AA_EMITTED_IDS, _AA_SKIPPED, LAST_TC_PARSED
-    global _X_SKIPPED, LAST_X_POSTS
+    global _X_SKIPPED, LAST_X_POSTS, LAST_AA_DEBUT_MARKS
+    global LAST_FAL_CATALOG_IDS, LAST_FAL_EMITTED_IDS
     LAST_AA_CATALOG_IDS = set()
     LAST_AA_EMITTED_IDS = set()
+    LAST_AA_DEBUT_MARKS = set()
+    LAST_FAL_CATALOG_IDS = set()
+    LAST_FAL_EMITTED_IDS = set()
     _AA_SKIPPED = False
     _X_SKIPPED = False
     LAST_X_POSTS = 0
@@ -6672,6 +7035,9 @@ def _run_digest(today: str, preview_mode: bool) -> int:
         ("HuggingFace-Top-TextGen", fetch_hf_text_generation),
         ("ArtificialAnalysis",
          lambda: fetch_artificial_analysis_models(seen_models, today=today)),
+        ("fal",
+         lambda: fetch_fal_models(seen_models, today=today,
+                                  recent_names=_safe_recent_digest_names(today))),
         ("TestingCatalog",
          lambda: fetch_testingcatalog_models(existing=all_new, today=today)),
         ("X-ArtificialAnalysis",
@@ -6697,8 +7063,8 @@ def _run_digest(today: str, preview_mode: bool) -> int:
         for model in batch:
             if model.name in seen_models or model.name in queued_names:
                 continue
-            if model.source in (
-                    "artificial-analysis", "testingcatalog", "x-artificial-analysis"):
+            if model.source in ("artificial-analysis", "fal",
+                                "testingcatalog", "x-artificial-analysis"):
                 if absorb_extra_source(model, all_new, today=today):
                     continue
             all_new.append(model)
@@ -6753,7 +7119,7 @@ def _run_digest(today: str, preview_mode: bool) -> int:
         # Seed all current models so they won't be reported as "new" next time
         for m in all_new:
             seen_models.add(m.name)
-        _note_aa_baseline(seen_models, preview=False, seed=True)
+        _note_catalog_baselines(seen_models, preview=False, seed=True)
         save_seen_models(seen_models)
         record_publish_run(today, "fallback", "seeded", models_found=len(all_new))
         ping_heartbeat(True, "seeded")
@@ -6876,7 +7242,7 @@ def _run_digest(today: str, preview_mode: bool) -> int:
                 print("Preview mode — not sending (no publishable entries)")
                 return 0
             _record_no_publishable(today, fallback_mode, len(all_new), message)
-            _note_aa_baseline(seen_models, preview=False, seed=False)
+            _note_catalog_baselines(seen_models, preview=False, seed=False)
             save_seen_models(seen_models)
             return 0
 
@@ -6994,7 +7360,7 @@ def _run_digest(today: str, preview_mode: bool) -> int:
         if not preview_mode:
             _record_no_publishable(today, "fallback", 0)
 
-    _note_aa_baseline(seen_models, preview=preview_mode, seed=False)
+    _note_catalog_baselines(seen_models, preview=preview_mode, seed=False)
     save_seen_models(seen_models)
     return 0
 

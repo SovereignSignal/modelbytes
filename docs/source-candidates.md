@@ -99,6 +99,17 @@ Fix list/filter leaks (HF org casing, `sig_org_map`, digest-body persistence) be
 - Noise: only the first model name in a post that reads as a ranking or a launch. Retweets are dropped. Replies stay, because the ranking is often a thread reply.
 - Recommendation: implemented, off until the token is set.
 
+### fal.ai model catalog
+
+- Type: hosted model catalog (launch signal for closed and hosted models)
+- Candidate URL: `GET https://api.fal.ai/v1/models?limit=100[&cursor=<next_cursor>]`
+- Why it matters: closed and hosted launches (Krea 3, FLUX.3 Klein, OmniHuman V2, Mirelo SFX2.0, NVIDIA Nemotron 3.5 Super) land on fal the day they ship and never reach Hugging Face or the OpenRouter text list.
+- Probe 2026-10-16: public, no key. About 1,500 endpoints over 16 pages (~8s). The default order is not by date, so the fetcher reads every page (cap 25) until `has_more` is false. `metadata.date` is the fal launch date; `license_type` is fal's commercial-use flag, not a weights license, so rows are not marked open or closed.
+- Grouping: one candidate per launch. Endpoints join when they share `metadata.group.key` or a path key (endpoint id with trailing task segments such as `edit`, `realtime`, `text-to-image`, `*-to-*` stripped; `fal-ai/<vendor>/...` is the same family as `<vendor>/...`). Name is the shortest display name with task suffixes removed.
+- Noise rule: skip `kind=training`, category `training`/`workflow`, non-active status, and ids or names that are background removal, upscaling / super-resolution, LoRA trainers, workflows, or routers. A launch posts only when its newest endpoint is inside the digest window (`DIGEST_FRESHNESS_DAYS`) and its oldest endpoint is inside the 14-day catalog clock, so a new endpoint on an old family (H3 Max, Meshy 6 retexture) is not a launch.
+- Seen ids: `fal/<key>` rows in the existing `models` table, recorded like the Artificial Analysis baseline (catalog minus today's candidates; preview never writes). A candidate is marked seen only when the published digest includes it. A launch that matches a row from OpenRouter, Hugging Face, or Artificial Analysis fills that row's gaps and does not replace its URL.
+- Recommendation: implemented. No new secret and no new flag.
+
 ### AlphaSignal public RSS
 
 - Type: coverage cross-check, not a publisher

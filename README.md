@@ -110,6 +110,7 @@ These power the **inline writer**, which is the everyday digest path (the retire
 - **Ollama** — Local LLM models
 - **Hugging Face** — Open weights and research models
 - **Artificial Analysis** — optional free API (language plus image, video, and speech). Turns on by itself once `MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY` is set.
+- **fal.ai** — public model catalog at `https://api.fal.ai/v1/models` (no key, no extra cost, always on). Hosted launches on fal (image, video, audio, 3D, and hosted LLMs) become digest candidates. Endpoints of one launch are grouped into one entry; training, workflow, router, background-removal, upscaling, and LoRA-trainer endpoints are skipped. Only launches whose fal date is inside the digest window are posted; the rest of the catalog is recorded as `fal/<key>` seen ids so the back-catalog never posts.
 - **@ArtificialAnlys on X** — optional. Rankings and launches from that account become digest candidates when `MODELBYTES_X_BEARER_TOKEN` is set. See the env table for the per-post cost.
 - **AlphaSignal** — public RSS at `https://alphasignal.ai/feed.xml` (no key, no extra cost). After the publish step, each run flags model names in the titles of items from the digest day and the previous UTC day that are missing from every posted digest, including the one just sent. Benchmark and comparison headlines are skipped unless the item signals a release. It does not publish those names.
 - **TestingCatalog** — RSS early signal for model releases (leaks are not posted as released)

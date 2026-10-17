@@ -3637,6 +3637,63 @@ def _match_model(name: str, models: List[ModelRelease]):
                 if score > best_score:
                     best = model
                     best_score = score
+    return best or _match_model_by_tokens(name, models)
+
+
+_MATCH_FILLER_TOKENS = {"the", "a", "an", "by", "from", "model", "new", "ai",
+                        "fal", "hf"}
+
+
+def _name_tokens(text: str) -> Set[str]:
+    """Word tokens for name matching: FLUX.3 / flux-3 / flux3 / "FLUX 3"
+    all give {"flux", "3"}; "1.0" stays one version token, equal to "1"."""
+    tokens = set()
+    text = re.sub(r"(?<!\d)\.|\.(?!\d)", " ", (text or "").lower())
+    for word in re.split(r"[^a-z0-9.]+", text):
+        for part in re.findall(r"[a-z]+|[0-9][a-z0-9.]*", word):
+            part = re.sub(r"(\d)(?:\.0)+$", r"\1", part)
+            if part:
+                tokens.add(part)
+    return tokens
+
+
+def _model_match_tokens(model: ModelRelease) -> Tuple[Set[str], Set[str]]:
+    """(name tokens, vendor tokens) for one candidate."""
+    full = model.name or ""
+    names = [full.split("/")[-1], clean_display_name(full)]
+    names += [str(v).split("/")[-1] for v in (getattr(model, "variants", None) or [])]
+    for fal_id in _fal_ids_from_model(model):
+        names.append(re.sub(r"^(?:fal-ai|fal)/", "", fal_id).replace("/", " "))
+    name_tokens = set().union(*(_name_tokens(n) for n in names))
+    vendors = full.split("/")[:-1] + [getattr(model, "provider", None) or "",
+                                      getattr(model, "creator", None) or ""]
+    vendor_tokens = set().union(*(_name_tokens(v) for v in vendors))
+    return name_tokens, vendor_tokens
+
+
+def _match_model_by_tokens(name: str, models: List[ModelRelease]):
+    """Fallback when the writer's name skips a word ("FLUX 3 Klein" for
+    flux-3-image-klein) or adds the vendor ("Reflection Beam" for Beam 1.0).
+
+    Every significant writer token must be in the candidate's name or vendor
+    tokens, and at least one non-numeric token must come from the name, so a
+    vendor alone never carries a match. The candidate with the fewest extra
+    name tokens wins; ties keep the earlier model.
+    """
+    wanted = _name_tokens(name) - _MATCH_FILLER_TOKENS
+    if len(wanted) < 2:
+        return None
+    best = None
+    best_extra = None
+    for model in models or []:
+        name_tokens, vendor_tokens = _model_match_tokens(model)
+        if not wanted <= (name_tokens | vendor_tokens):
+            continue
+        if not any(not t[0].isdigit() for t in wanted & name_tokens):
+            continue
+        extra = len(name_tokens - wanted)
+        if best_extra is None or extra < best_extra:
+            best, best_extra = model, extra
     return best
 
 

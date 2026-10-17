@@ -197,6 +197,42 @@ def test_benchmark_titles_and_excerpt_names_do_not_false_alarm(monkeypatch):
     assert windows == [None]
 
 
+DERIVATIVE_FEED = (
+    '<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel>'
+    + _item("Unsloth&apos;s Llama 3.2 Mirror Hits 800K Downloads by "
+            "Removing Meta&apos;s Login Wall",
+            "A re-upload of Meta's 2024 model without the license gate.")
+    + _item("Unsloth Releases Qwen 4 GGUF Quants for Laptops",
+            "Quantized builds of Alibaba's model.")
+    + _item("Community Fork of DeepSeek-R1 Ported to Apple Silicon",
+            "A fine-tuned port.")
+    + _item("Meta Releases Llama 5", "Meta's new open-weight model.")
+    + _item("Google Launches Gemini 5 Pro", "A new flagship model.")
+    + _item("Anthropic&apos;s Claude Sonnet 6 Cuts Quantum Circuit Gates by 17x",
+            "No release word, but about the model itself.")
+    + "</channel></rss>"
+)
+
+
+def test_mirror_and_derivative_titles_do_not_false_alarm():
+    flagged = monitor.alphasignal_unposted_models(
+        DERIVATIVE_FEED, "", today=TODAY)
+    assert flagged == ["Llama 5", "Gemini 5 Pro", "Claude Sonnet 6"]
+
+
+def test_llama_3_2_mirror_title_from_2026_10_17_is_not_a_gap():
+    feed = (
+        '<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel>'
+        + _item("Unsloth&apos;s Llama 3.2 Mirror Hits 800K Downloads by "
+                "Removing Meta&apos;s Login Wall",
+                "Unsloth's copy of Llama 3.2.",
+                day="Sat, 17 Oct 2026 09:00:00 GMT")
+        + "</channel></rss>"
+    )
+    assert monitor.alphasignal_unposted_models(
+        feed, "", today="2026-10-17") == []
+
+
 def test_crosscheck_counts_the_digest_delivered_this_run(monkeypatch):
     monkeypatch.setattr(
         monitor, "_alphasignal_feed_get", lambda url: _Feed(BENCH_FEED))

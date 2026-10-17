@@ -6581,6 +6581,13 @@ _ALPHASIGNAL_RELEASE_RE = re.compile(
     r"(?i)\b(?:launch(?:es)?|releases?|debuts?|introduces|open-sources"
     r"|unveils|ships)\b"
 )
+# Third-party copies of someone else's model are not releases (Unsloth's
+# Llama 3.2 Mirror Hits 800K Downloads ...). Such a title never counts, even
+# with a release word (Unsloth Releases Qwen 4 GGUF Quants).
+_ALPHASIGNAL_DERIVATIVE_RE = re.compile(
+    r"(?i)\b(?:mirrors?|re-?uploads?|re-?uploaded|quantiz\w*|quants?|gguf"
+    r"|ports?|ported|forks?|forked|downloads|fine-?tun\w*)\b"
+)
 _X_PAGE_SIZE = 10
 
 
@@ -6688,6 +6695,8 @@ def _alphasignal_candidates(items: list, today: str = None) -> List[str]:
     names, seen = [], set()
     for item in alphasignal_latest_items(items, today=today):
         title = item.get("title") or ""
+        if _ALPHASIGNAL_DERIVATIVE_RE.search(title):
+            continue
         if _ALPHASIGNAL_BENCH_RE.search(title):
             blob = " ".join([title] + list(item.get("excerpts") or []))
             if not _ALPHASIGNAL_RELEASE_RE.search(blob):

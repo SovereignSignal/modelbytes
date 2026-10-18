@@ -214,7 +214,7 @@ Optional / tuning:
 | Env var | Default | Purpose |
 |---|---|---|
 | `MODELBYTES_LLM_KEY` / `MODELBYTES_LLM_MODEL` / `MODELBYTES_LLM_URL` | see "The LLM fallback chain" | Fallback summarizer (prod = GLM via Tenspire). |
-| `SLACK_BOT_TOKEN` + `MODELBYTES_SLACK_CHANNEL_ID` | (none) | Slack mirror of the daily post. |
+| `SLACK_BOT_TOKEN` + `MODELBYTES_SLACK_CHANNEL_ID` | (none) | Slack mirror of the daily post; also requires `MODELBYTES_SLACK_MIRROR=1` (off by default). |
 | `MODELBYTES_ADMIN_CHAT_ID` | (none) | Telegram DM target for ops alerts (primary). **Live since 2026-06-12.** |
 | `MODELBYTES_OPS_SLACK_CHANNEL_ID` | (none) | Slack channel for ops alerts (fallback when the Telegram DM fails). |
 | `MODELBYTES_HEARTBEAT_URL` | (none) | Dead-man's-switch ping target (e.g. healthchecks.io). Currently UNSET. |

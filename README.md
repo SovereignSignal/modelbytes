@@ -88,6 +88,7 @@ venv/bin/python -m pytest tests/ -v
 | `MODELBYTES_HTTP_BACKOFF_SECONDS` | Base retry delay for source fetches. Default: `1.0`. | ❌ |
 | `MODELBYTES_USER_AGENT` | User-Agent sent to model source APIs. Default identifies ModelBytes. | ❌ |
 | `MODELBYTES_ADMIN_CHAT_ID` | Telegram chat to DM on publish failures or degradation (operator alerts). | ❌ |
+| `MODELBYTES_SLACK_MIRROR` | Set to `1`/`true`/`yes` to mirror the daily digest to Slack (also needs `SLACK_BOT_TOKEN` + `MODELBYTES_SLACK_CHANNEL_ID`). Default: off. | ❌ |
 | `MODELBYTES_OPS_SLACK_CHANNEL_ID` | Slack channel used as a fallback for operator alerts when the Telegram DM can't be reached. | ❌ |
 | `MODELBYTES_HEARTBEAT_URL` | Dead-man's-switch ping URL (e.g. healthchecks.io) — the only signal that catches "the cron never fired". | ❌ |
 | `MODELBYTES_INLINE_PRIMARY` | Treat the inline writer as the everyday digest (no "curator absent" alert). Default: `1`. Set `0` only if a pre-written `pending/<date>.txt` is still the intended author. | ❌ |

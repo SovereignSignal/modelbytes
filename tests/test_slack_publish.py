@@ -39,7 +39,8 @@ def test_slack_post_dormant_without_config(monkeypatch):
 
 
 def test_slack_post_sends_converted_text_to_channel(monkeypatch):
-    monkeypatch.setattr(monitor, "SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setattr(monitor, "SLACK_MIRROR_ENABLED", True)
+    monkeypatch.setattr(monitor, "SLACK_BOT_TOKEN", "placeholder")
     monkeypatch.setattr(monitor, "MODELBYTES_SLACK_CHANNEL_ID", "C0XXXXXXXXX")
     resp = MagicMock()
     resp.json.return_value = {"ok": True}
@@ -51,8 +52,18 @@ def test_slack_post_sends_converted_text_to_channel(monkeypatch):
         assert "*ModelBytes*" in kwargs["json"]["text"]
 
 
+def test_slack_post_off_by_default_even_when_configured(monkeypatch):
+    monkeypatch.setattr(monitor, "SLACK_MIRROR_ENABLED", False)
+    monkeypatch.setattr(monitor, "SLACK_BOT_TOKEN", "placeholder")
+    monkeypatch.setattr(monitor, "MODELBYTES_SLACK_CHANNEL_ID", "C0XXXXXXXXX")
+    with patch.object(monitor.requests, "post") as post:
+        assert monitor.send_slack_post("<b>hi</b>") is False
+        post.assert_not_called()
+
+
 def test_slack_post_returns_false_on_api_error(monkeypatch):
-    monkeypatch.setattr(monitor, "SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setattr(monitor, "SLACK_MIRROR_ENABLED", True)
+    monkeypatch.setattr(monitor, "SLACK_BOT_TOKEN", "placeholder")
     monkeypatch.setattr(monitor, "MODELBYTES_SLACK_CHANNEL_ID", "C0XXXXXXXXX")
     resp = MagicMock()
     resp.json.return_value = {"ok": False, "error": "channel_not_found"}
@@ -72,8 +83,31 @@ def test_curated_path_mirrors_to_slack(tmp_path, monkeypatch):
     monkeypatch.setattr(monitor, "has_posted_digest", lambda d: False)
     monkeypatch.setattr(monitor, "mark_posted_digest", lambda *a: True)
     monkeypatch.setattr(monitor, "send_telegram_post", lambda m: True)
+    monkeypatch.setattr(monitor, "SLACK_MIRROR_ENABLED", True)
     slack_calls = []
     monkeypatch.setattr(monitor, "send_slack_post", lambda m: slack_calls.append(m) or True)
 
     assert monitor.try_post_pending_curated() is True
     assert slack_calls == [body]
+
+
+def test_curated_path_no_mirror_alert_when_flag_off(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pending").mkdir()
+    today = monitor.datetime.now(monitor.timezone.utc).strftime("%Y-%m-%d")
+    body = "🤖 ModelBytes Digest\n\nTotal: 3 models tracked today"
+    (tmp_path / "pending" / f"{today}.txt").write_text(body)
+
+    monkeypatch.setattr(monitor, "SLACK_MIRROR_ENABLED", False)
+    monkeypatch.setattr(monitor, "SLACK_BOT_TOKEN", "placeholder")
+    monkeypatch.setattr(monitor, "MODELBYTES_SLACK_CHANNEL_ID", "C0XXXXXXXXX")
+    monkeypatch.setattr(monitor, "has_posted_digest", lambda d: False)
+    monkeypatch.setattr(monitor, "mark_posted_digest", lambda *a: True)
+    monkeypatch.setattr(monitor, "send_telegram_post", lambda m: True)
+    alerts = []
+    monkeypatch.setattr(monitor, "send_ops_alert", lambda m, *a, **k: alerts.append(m))
+
+    with patch.object(monitor.requests, "post") as post:
+        assert monitor.try_post_pending_curated() is True
+        post.assert_not_called()
+    assert not any("Slack mirror failed" in a for a in alerts)

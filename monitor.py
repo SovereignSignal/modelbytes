@@ -62,6 +62,10 @@ TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID", "")
 # to ship dormant and activate later by adding the env vars.
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 MODELBYTES_SLACK_CHANNEL_ID = os.environ.get("MODELBYTES_SLACK_CHANNEL_ID", "")
+# The digest mirror is OFF by default per bot spec (no Slack mirroring); it
+# needs this explicit opt-in on top of the token + channel. Ops-alert Slack
+# routing is separate and unaffected.
+SLACK_MIRROR_ENABLED = os.environ.get("MODELBYTES_SLACK_MIRROR", "").strip().lower() in ("1", "true", "yes")
 
 # LLM Summarization
 LLM_API_KEY = os.environ.get("MODELBYTES_LLM_KEY",
@@ -5319,6 +5323,42 @@ TELEGRAM_MAX_CHARS = 4096
 # summarize_models() renders this many — one cap, so a selected model is never
 # silently cut by the renderer.
 DIGEST_LIMIT = 12
+# Hosted launches (fal / Artificial Analysis) have no downloads/likes, so they
+# always rank below Hugging Face open weights; reserve this many top-slice slots.
+HOSTED_RESERVE = 2
+_HOSTED_SOURCES = ("fal", "artificial-analysis", "x-artificial-analysis")
+
+
+def _select_digest_candidates(ranked, limit=DIGEST_LIMIT, hosted_reserve=HOSTED_RESERVE):
+    """Split ranked models into (digest_models, held), reserving hosted slots.
+
+    If fewer than min(hosted_reserve, hosted available) hosted items are in
+    ranked[:limit], the best-ranked hosted items beyond the cutoff displace the
+    lowest-ranked non-hosted items in the top slice. Output keeps rank order,
+    never exceeds limit, and only contains items from ranked.
+    """
+    ranked = list(ranked)
+    if len(ranked) <= limit:
+        return ranked, []
+    hosted = [i for i, m in enumerate(ranked) if m.source in _HOSTED_SOURCES]
+    chosen = list(range(limit))
+    in_top = [i for i in hosted if i < limit]
+    beyond = [i for i in hosted if i >= limit]
+    need = min(hosted_reserve, len(hosted)) - len(in_top)
+    if need > 0:
+        add = beyond[:need]
+        droppable = [i for i in reversed(chosen) if ranked[i].source not in _HOSTED_SOURCES]
+        drop = set(droppable[:len(add)])
+        add = add[:len(drop)]
+        chosen = sorted((set(chosen) - drop) | set(add))
+    seen, picked = set(), []
+    for i in chosen:
+        if ranked[i].name not in seen:
+            seen.add(ranked[i].name)
+            picked.append(i)
+    picked_set = set(picked)
+    return ([ranked[i] for i in picked],
+            [m for i, m in enumerate(ranked) if i not in picked_set])
 # Entry-count gate for a whole body. The writer may add entries from web
 # research on top of DIGEST_LIMIT candidates, so this sits above it.
 DIGEST_FLOOD_LIMIT = 15
@@ -5376,11 +5416,15 @@ def _telegram_html_to_slack_mrkdwn(value: str) -> str:
 def send_slack_post(message: str) -> bool:
     """Mirror a published digest to Slack via chat.postMessage.
 
-    No-op (returns False) unless both SLACK_BOT_TOKEN and
-    MODELBYTES_SLACK_CHANNEL_ID are configured, so Telegram-only deploys are
-    unaffected. Failures are logged but never abort the publish (Telegram is
+    No-op (returns False) unless SLACK_MIRROR_ENABLED is set and both
+    SLACK_BOT_TOKEN and MODELBYTES_SLACK_CHANNEL_ID are configured, so
+    Telegram-only deploys are unaffected. Failures are logged but never abort the publish (Telegram is
     the primary channel).
     """
+    if not SLACK_MIRROR_ENABLED:
+        print("Slack mirror disabled (MODELBYTES_SLACK_MIRROR not set) — skipping",
+              file=sys.stderr)
+        return False
     if not SLACK_BOT_TOKEN or not MODELBYTES_SLACK_CHANNEL_ID:
         print("Slack not configured — skipping Slack mirror", file=sys.stderr)
         return False
@@ -5624,7 +5668,8 @@ def try_post_pending_curated() -> bool:
         print(f"Could not record published digest to {pending_path}: {exc}",
               file=sys.stderr)
     slack_ok = send_slack_post(body)  # mirror to Slack (no-op unless configured)
-    if not slack_ok and SLACK_BOT_TOKEN and MODELBYTES_SLACK_CHANNEL_ID:
+    if (not slack_ok and SLACK_MIRROR_ENABLED
+            and SLACK_BOT_TOKEN and MODELBYTES_SLACK_CHANNEL_ID):
         send_ops_alert(f"Slack mirror failed for {today} (Telegram posted fine).")
     record_publish_run(today, "curated", "posted", message_chars=len(body),
                        telegram_message_id=LAST_TELEGRAM_MESSAGE_ID,
@@ -7264,8 +7309,7 @@ def _run_digest(today: str, preview_mode: bool) -> int:
             reverse=True,
         )
         ranked = _models_in_digest_window(ranked, today=today)
-        digest_models = ranked[:DIGEST_LIMIT]
-        held = ranked[DIGEST_LIMIT:]
+        digest_models, held = _select_digest_candidates(ranked)
         # Collapse (inline path only, 2026-06-22 spec): group same-(org, base,
         # size) variants and collapse N≥3 into one family entry so one org's
         # batch doesn't burn the daily cap or spam the channel. Sits after

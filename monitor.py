@@ -2520,6 +2520,28 @@ if X_BEARER_TOKEN and X_BEARER_TOKEN not in _publisher.secret_values:
 DISCOVERY_ENABLED = os.environ.get(
     "MODELBYTES_DISCOVERY", "1" if PARALLEL_API_KEY else "0") == "1"
 PARALLEL_SEARCH_URL = "https://api.parallel.ai/v1/search"
+# Exa discovery trial (2-week, LOG ONLY): results are logged and compared with
+# the candidate list, never fed to the writer or the digest. Off unless both
+# the flag and the key are set.
+EXA_API_KEY = os.environ.get("MODELBYTES_EXA_API_KEY", "")
+EXA_DISCOVERY_ENABLED = os.environ.get("MODELBYTES_EXA_DISCOVERY", "0") == "1"
+EXA_SEARCH_URL = "https://api.exa.ai/search"
+EXA_BETA_HEADER = "dynamic-highlights-2026-08-28"
+EXA_LOOKBACK_DAYS = 3
+EXA_NUM_RESULTS = 6
+EXA_QUERIES = [
+    ("newly released frontier AI model announcement",
+     ["openai.com", "anthropic.com", "deepmind.google", "blog.google",
+      "x.ai", "ai.meta.com", "mistral.ai"]),
+    ("new proprietary LLM launch API availability pricing",
+     ["openai.com", "anthropic.com", "blog.google", "x.ai", "mistral.ai"]),
+    ("new model benchmark results intelligence index",
+     ["artificialanalysis.ai", "lmarena.ai"]),
+    ("new model leaderboard debut arena ranking",
+     ["lmarena.ai", "artificialanalysis.ai", "huggingface.co"]),
+]
+if EXA_API_KEY and EXA_API_KEY not in _publisher.secret_values:
+    _publisher.secret_values = _publisher.secret_values + (EXA_API_KEY,)
 # When the claude.ai curator is retired, the inline (deepseek/Ollama) path IS
 # the everyday digest, not a degraded fallback — so don't alert "published via
 # fallback / curator absent" every day. Real failures (QA block, send fail,
@@ -4755,6 +4777,62 @@ def discover_recent_releases(today: str = None, max_age_days: int = 14,
     print(f"Discovery: {len(kept)} recent source(s)"
           f" ({len(models)} candidate model(s)).", file=sys.stderr)
     return "\n".join(kept)
+
+
+def _exa_url_key(url: str) -> str:
+    u = (url or "").strip().lower().split("#")[0].split("?")[0]
+    u = re.sub(r"^https?://(www\.)?", "", u)
+    return u.rstrip("/")
+
+
+def exa_discovery_trial(candidates, timeout: int = 30) -> List[dict]:
+    """LOG-ONLY Exa trial: log hits and flag those missing from candidates.
+
+    Silent no-op unless MODELBYTES_EXA_DISCOVERY=1 and the key is set. Never
+    mutates candidates, never alerts, never raises; errors log a warning.
+    """
+    if not (EXA_DISCOVERY_ENABLED and EXA_API_KEY):
+        return []
+    found = []
+    try:
+        known_urls = {_exa_url_key(c.url) for c in candidates or []}
+        known_urls |= {_exa_url_key(c.canonical_url) for c in candidates or []}
+        known_urls.discard("")
+        known_names = [(c.name or "").split("/")[-1].lower()
+                       for c in candidates or []]
+        known_names = [n for n in known_names if n]
+        start = (datetime.now(timezone.utc)
+                 - timedelta(days=EXA_LOOKBACK_DAYS)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    except Exception as e:
+        print(f"Exa discovery skipped: {type(e).__name__}", file=sys.stderr)
+        return []
+    for query, domains in EXA_QUERIES:
+        try:
+            body = {
+                "query": query, "type": "auto", "numResults": EXA_NUM_RESULTS,
+                "startPublishedDate": start, "includeDomains": domains,
+                "contents": {"highlights": {"dynamic": True, "verbosity": "low"}},
+            }
+            resp = requests.post(EXA_SEARCH_URL, json=body,
+                                 headers={"x-api-key": EXA_API_KEY,
+                                          "Content-Type": "application/json",
+                                          "Exa-Beta": EXA_BETA_HEADER},
+                                 timeout=timeout)
+            resp.raise_for_status()
+            for r in resp.json().get("results", []) or []:
+                url = (r.get("url") or "").strip()
+                title = (r.get("title") or "").strip()
+                hl = (r.get("highlights") or [""])[0] or ""
+                tl = title.lower()
+                known = (_exa_url_key(url) in known_urls
+                         or any(n in tl for n in known_names))
+                found.append({"title": title, "url": url, "known": known})
+                print(f"Exa trial [{'known' if known else 'NEW'}]: {title} — "
+                      f"{url} — {_smart_truncate(hl, 200)}", file=sys.stderr)
+        except Exception as e:
+            print(f"Exa discovery query failed ({query[:30]}): "
+                  f"{type(e).__name__}: {e}", file=sys.stderr)
+    return found
 
 
 def _collect_provided_urls(models, web_context: str) -> set:
@@ -7291,6 +7369,10 @@ def _run_digest(today: str, preview_mode: bool) -> int:
     if n_disc:
         print(f"Added {n_disc} web-discovery candidate(s); "
               f"{len(all_new)} new model(s) total")
+    try:
+        exa_discovery_trial(list(all_new))
+    except Exception as e:  # trial is log-only; never break the run
+        print(f"Exa discovery trial failed: {e}", file=sys.stderr)
 
     if all_new or web_context:
         def _author(m):

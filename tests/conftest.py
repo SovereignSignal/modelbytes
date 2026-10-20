@@ -56,6 +56,10 @@ def _no_network_no_sleep(monkeypatch, tmp_path):
             return {"models": [], "next_cursor": None, "has_more": False}
 
     monkeypatch.setattr(monitor, "_fal_get", lambda url, params: _EmptyFalPage())
+    # One fal fetch per run is cached in-process; never leak it across tests.
+    monkeypatch.setattr(monitor, "_FAL_RUN_CACHE", None)
+    monkeypatch.setattr(monitor, "LAST_FAL_DEGRADED", False)
+    monkeypatch.setattr(monitor, "_fal_sleep", lambda seconds: None)
     for name in ("LAST_AA_DEBUT_MARKS", "LAST_FAL_CATALOG_IDS", "LAST_FAL_EMITTED_IDS"):
         monkeypatch.setattr(monitor, name, set())
     # Source-health state must not leak across tests or into the repo tree.

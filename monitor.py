@@ -877,7 +877,7 @@ def flush_source_health(rows, *, preview: bool = False, now: datetime = None,
             print(line, file=sys.stderr)
             lines.append(line)
             continue
-        status = classify_source_health(items, error)
+        status = row.get("status") or classify_source_health(items, error)
         line = format_source_health_line(source, status, items, error)
         print(line, file=sys.stderr)
         lines.append(line)
@@ -1008,7 +1008,8 @@ def load_seen_models() -> Set[str]:
     conn = _db_connect()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT model_id FROM models")
+            cur.execute("SELECT model_id FROM models WHERE model_id NOT LIKE %s",
+                        (r"\_\_state:%",))
             return {row[0] for row in cur.fetchall()}
     finally:
         conn.close()
@@ -6242,9 +6243,166 @@ _FAL_MODALITY = {
 }
 
 
+_FAL_ATTEMPTS = 3
+_FAL_RETRY_CAP = 60.0
+_FAL_STATE_KEY = "__state:fal_last_good"
+_fal_sleep = time.sleep
+# One catalog fetch per run: (rows, degraded_error). None until fetched.
+_FAL_RUN_CACHE = None
+LAST_FAL_DEGRADED = False
+
+
+def reset_fal_run_cache() -> None:
+    global _FAL_RUN_CACHE, LAST_FAL_DEGRADED
+    _FAL_RUN_CACHE = None
+    LAST_FAL_DEGRADED = False
+
+
+def _fal_retry_after(value, attempt: int) -> float:
+    """Retry-After as seconds or HTTP-date, capped; backoff when absent/bad."""
+    text = str(value or "").strip()
+    delay = None
+    if text:
+        try:
+            delay = float(text)
+        except ValueError:
+            try:
+                when = parsedate_to_datetime(text)
+                if when.tzinfo is None:
+                    when = when.replace(tzinfo=timezone.utc)
+                delay = (when - datetime.now(timezone.utc)).total_seconds()
+            except (TypeError, ValueError):
+                delay = None
+    if delay is None:
+        delay = HTTP_BACKOFF_SECONDS * attempt
+    return max(0.0, min(delay, _FAL_RETRY_CAP))
+
+
+def _fal_request(url: str, params: dict):
+    return requests.get(url, params=params, timeout=30, headers={
+        "User-Agent": HTTP_USER_AGENT, "Accept": "application/json"})
+
+
+def _fal_get_with_retry(url: str, params: dict):
+    """One catalog page; up to _FAL_ATTEMPTS tries, honouring Retry-After."""
+    for attempt in range(1, _FAL_ATTEMPTS + 1):
+        try:
+            resp = _fal_request(url, params)
+            status = getattr(resp, "status_code", None)
+            if status in RETRYABLE_STATUS_CODES and attempt < _FAL_ATTEMPTS:
+                delay = _fal_retry_after(resp.headers.get("Retry-After"), attempt)
+                print(f"fal HTTP {status}; retrying {attempt + 1}/{_FAL_ATTEMPTS} "
+                      f"in {delay:.1f}s.", file=sys.stderr)
+                _fal_sleep(delay)
+                continue
+            resp.raise_for_status()
+            return resp
+        except requests.RequestException as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if (status is not None and status not in RETRYABLE_STATUS_CODES) \
+                    or attempt >= _FAL_ATTEMPTS:
+                raise
+            resp = getattr(exc, "response", None)
+            delay = _fal_retry_after(
+                resp.headers.get("Retry-After") if resp is not None else None,
+                attempt)
+            _fal_sleep(delay)
+
+
 def _fal_get(url: str, params: dict):
     """One page of the fal catalog. Tests stub this (conftest)."""
-    return _http_get(url, "fal", timeout=30, params=params)
+    return _fal_get_with_retry(url, params)
+
+
+def _fal_load_last_good() -> Optional[dict]:
+    """Last good fal fetch ({"count", "rows"}) from the models table. None on miss."""
+    if not DATABASE_URL:
+        return None
+    try:
+        conn = _db_connect(connect_timeout=10)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT description FROM models WHERE model_id = %s",
+                            (_FAL_STATE_KEY,))
+                row = cur.fetchone()
+        finally:
+            conn.close()
+        data = json.loads(row[0]) if row and row[0] else None
+    except Exception as exc:
+        print(f"fal last-good load failed: {_short_source_error(exc)}", file=sys.stderr)
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("rows"), list):
+        return None
+    return data
+
+
+def _fal_save_last_good(count: int, rows: list) -> None:
+    """Persist the fal fetch as the new last good (state row in models). Best-effort."""
+    if not DATABASE_URL:
+        return
+    payload = json.dumps({"count": int(count), "rows": rows})
+    try:
+        conn = _db_connect(connect_timeout=10)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO models (model_id, name, source, description) "
+                    "VALUES (%s, %s, 'state', %s) ON CONFLICT (model_id) DO UPDATE "
+                    "SET description = EXCLUDED.description, last_updated = NOW()",
+                    (_FAL_STATE_KEY, "fal last good", payload))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        print(f"fal last-good save failed: {_short_source_error(exc)}", file=sys.stderr)
+
+
+def _fal_count_is_low(count: int, previous: int) -> bool:
+    if previous <= 0:
+        return False
+    return count < 0.25 * previous or (previous >= 20 and count < 5)
+
+
+def _fal_catalog_for_run() -> list:
+    """Catalog rows for this run, fetched at most once.
+
+    On exhausted retries or a count far below the last good run the source is
+    degraded: rows come from the persisted last good list (if any) and
+    LAST_FAL_DEGRADED / the source error record why. Raises only when the
+    fetch failed and there is no fallback.
+    """
+    global _FAL_RUN_CACHE, LAST_FAL_DEGRADED
+    if _FAL_RUN_CACHE is not None:
+        rows, err = _FAL_RUN_CACHE
+        if err is not None and not rows:
+            raise err
+        return rows
+    fetch_error = None
+    rows = []
+    try:
+        rows = _fal_fetch_catalog()
+    except Exception as exc:
+        fetch_error = exc
+    previous = _fal_load_last_good()
+    prev_count = int((previous or {}).get("count") or 0)
+    if fetch_error is None and _fal_count_is_low(len(rows), prev_count):
+        fetch_error = ValueError(
+            f"fal catalog returned {len(rows)} rows (last good {prev_count})")
+    if fetch_error is None:
+        _fal_save_last_good(
+            len(rows), [r for r in rows if _fal_is_launch_endpoint(r)])
+        _FAL_RUN_CACHE = (rows, None)
+        return rows
+    _remember_source_error("fal", fetch_error)
+    print(f"fal catalog degraded: {_short_source_error(fetch_error)}", file=sys.stderr)
+    fallback = (previous or {}).get("rows") or []
+    fallback = [r for r in fallback if isinstance(r, dict)]
+    if fallback:
+        LAST_FAL_DEGRADED = True
+    _FAL_RUN_CACHE = (fallback, fetch_error)
+    if not fallback:
+        raise fetch_error
+    return fallback
 
 
 def _fal_fetch_catalog() -> list:
@@ -6452,9 +6610,8 @@ def fetch_fal_models(seen: Set[str] = None, today: str = None,
     LAST_FAL_EMITTED_IDS = set()
     seen = seen or set()
     try:
-        rows = _fal_fetch_catalog()
+        rows = _fal_catalog_for_run()
     except Exception as exc:
-        _remember_source_error("fal", exc)
         print(f"fal catalog failed: {_short_source_error(exc)}", file=sys.stderr)
         return []
     launches = _fal_launches([r for r in rows if _fal_is_launch_endpoint(r)])
@@ -7160,6 +7317,7 @@ def _run_digest(today: str, preview_mode: bool) -> int:
     LAST_AA_DEBUT_MARKS = set()
     LAST_FAL_CATALOG_IDS = set()
     LAST_FAL_EMITTED_IDS = set()
+    reset_fal_run_cache()
     _AA_SKIPPED = False
     _X_SKIPPED = False
     LAST_X_POSTS = 0
@@ -7247,8 +7405,10 @@ def _run_digest(today: str, preview_mode: bool) -> int:
             items = max(items, LAST_X_POSTS)
         if source_name == "TestingCatalog" and not err:
             items = max(items, LAST_TC_PARSED)
-        fetched_sources.append(
-            {"source": source_name, "items": items, "error": err, "track": track})
+        row = {"source": source_name, "items": items, "error": err, "track": track}
+        if source_name == "fal" and LAST_FAL_DEGRADED:
+            row["status"] = "degraded"
+        fetched_sources.append(row)
         for model in batch:
             if model.name in seen_models or model.name in queued_names:
                 continue

@@ -91,6 +91,7 @@ venv/bin/python -m pytest tests/ -v
 | `MODELBYTES_SLACK_MIRROR` | Set to `1`/`true`/`yes` to mirror the daily digest to Slack (also needs `SLACK_BOT_TOKEN` + `MODELBYTES_SLACK_CHANNEL_ID`). Default: off. | ❌ |
 | `MODELBYTES_OPS_SLACK_CHANNEL_ID` | Slack channel used as a fallback for operator alerts when the Telegram DM can't be reached. | ❌ |
 | `MODELBYTES_HEARTBEAT_URL` | Dead-man's-switch ping URL (e.g. healthchecks.io) — the only signal that catches "the cron never fired". | ❌ |
+| `MODELBYTES_EXA_DISCOVERY` / `MODELBYTES_EXA_API_KEY` | 2-week **log-only** Exa discovery trial. Runs only when `MODELBYTES_EXA_DISCOVERY=1` (default off) and the key is set; logs hits and flags ones not in the day's candidates. Never feeds the writer or digest, never alerts. | ❌ |
 | `MODELBYTES_INLINE_PRIMARY` | Treat the inline writer as the everyday digest (no "curator absent" alert). Default: `1`. Set `0` only if a pre-written `pending/<date>.txt` is still the intended author. | ❌ |
 | `MODELBYTES_PENDING_GRACE_SECONDS` | How long to poll GitHub for a late hand-written `pending/<date>.txt` before the inline path. Default: `0` (no wait). Ignored when `MODELBYTES_INLINE_PRIMARY=1`. | ❌ |
 | `MODELBYTES_ALLOW_SEED` | Set to `1` to let the fallback path seed an empty `models` table (otherwise it refuses, to guard wiped/migrated state). | ❌ |

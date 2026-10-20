@@ -218,6 +218,7 @@ Optional / tuning:
 | `MODELBYTES_ADMIN_CHAT_ID` | (none) | Telegram DM target for ops alerts (primary). **Live since 2026-06-12.** |
 | `MODELBYTES_OPS_SLACK_CHANNEL_ID` | (none) | Slack channel for ops alerts (fallback when the Telegram DM fails). |
 | `MODELBYTES_HEARTBEAT_URL` | (none) | Dead-man's-switch ping target (e.g. healthchecks.io). Currently UNSET. |
+| `MODELBYTES_EXA_DISCOVERY` / `MODELBYTES_EXA_API_KEY` | `0` / (none) | 2-week **log-only** Exa discovery trial (`exa_discovery_trial`). Needs flag `=1` and the key; logs found titles/urls and flags those not in the candidate list. Does not touch the digest; errors only log a warning, no alerts. |
 | `MODELBYTES_INLINE_PRIMARY` | `1` | Inline writer is the everyday path; suppresses the "curator absent" alert. Default `1` in code. |
 | `MODELBYTES_PENDING_GRACE_SECONDS` | `0` | How long `_wait_for_pending` polls GitHub raw for a late hand-written pending file. Default `0`. Skipped entirely when `INLINE_PRIMARY` is on. |
 | `MODELBYTES_PENDING_POLL_SECONDS` | `120` | Poll interval inside the grace window. |

@@ -111,6 +111,7 @@ a figure published in the last 14 days) and a deterministic dateline rewrite.
 - `release_events.py` — Release Events v1 POST helper (`delivered` / `duplicate` / `retryable` / `rejected`).
 - `ai_wire.py` — AI Wire ingest. Inert unless `AI_WIRE_ENABLED=1` and both `AI_WIRE_URL` and `AI_WIRE_INGEST_TOKEN` are set. Runs only after a successful Telegram post. Items are queued in the `ai_wire_outbox` table and pending rows are retried at the start of every run (never re-sends Telegram). `--ai-wire-backfill` replays recent `posted_digests` and is dry-run unless `--apply`.
 - `modelbytes_runner.py` — shim that runs monitor as `__main__`. It must not monkeypatch `summarize_models`.
+- `startup_alert.py` — `sys.excepthook` installed at the top of `monitor.py` so a crash before `main()` (import or module-level env parsing) still reaches the admin DM / Slack ops / heartbeat `/fail`. Standard library only, because the failing import may be `requests` or `ss_publish`.
 - `ss_publish/` — self-contained shared publish core (Telegram/Slack/ops), also
   vendored in clawbytes; mirror any cross-repo edits by hand.
 - `docs/architecture.md` — full design (read the "How we got here" note on the

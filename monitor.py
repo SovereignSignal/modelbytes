@@ -6662,6 +6662,41 @@ def _note_catalog_baselines(seen: Set[str], *, preview: bool, seed: bool = False
     _note_fal_baseline(seen, preview=preview, seed=seed)
 
 
+_VARIANT_TOKENS = frozenset({
+    "turbo", "max", "pro", "mini", "flash", "lite", "ultra", "plus", "nano",
+    "fast", "hd",
+})
+
+
+def _is_new_variant_name(name: str, recent_names: List[str]) -> bool:
+    """True when `name` is a recent digest name plus a variant or version
+    word (HeyGen Voice Turbo after HeyGen Voice). An exact repeat, a vendor
+    prefix (NVIDIA ...) or a task word (... Reframe) is not a new model."""
+    tokens = _name_tokens(name) - _MATCH_FILLER_TOKENS
+    based = False
+    for recent in recent_names or []:
+        base = _name_tokens(recent) - _MATCH_FILLER_TOKENS
+        if not base or not base <= tokens:
+            continue
+        extra = tokens - base
+        if not any(t in _VARIANT_TOKENS or t[:1].isdigit() for t in extra):
+            return False
+        based = True
+    return based
+
+
+def _fal_new_variant_model(launch: dict, recent_names: List[str]) -> Optional[ModelRelease]:
+    """The endpoints of an already-covered launch that name a new variant,
+    as one candidate. None when every endpoint repeats a recent name."""
+    rows = [r for r in launch["rows"]
+            if _is_new_variant_name(
+                _fal_clean_name((r.get("metadata") or {}).get("display_name") or "", True),
+                recent_names)]
+    if not rows:
+        return None
+    return _fal_launch_to_model({"keys": launch["keys"], "rows": rows})
+
+
 def fetch_fal_models(seen: Set[str] = None, today: str = None,
                      recent_names: List[str] = None) -> List[ModelRelease]:
     """New fal.ai launches since the last fal-key baseline. Never raises.
@@ -6671,7 +6706,8 @@ def fetch_fal_models(seen: Set[str] = None, today: str = None,
     that gained an endpoint is not a launch). Every other key is recorded
     by the baseline, so the first run (no fal key seen yet) posts only
     launches inside the window, never the back-catalog. Names already in a
-    recent digest are skipped.
+    recent digest are skipped, except endpoints that add a variant to that
+    name (the launch then posts as the variant).
     """
     global LAST_FAL_CATALOG_IDS, LAST_FAL_EMITTED_IDS
     LAST_FAL_CATALOG_IDS = set()
@@ -6697,9 +6733,9 @@ def fetch_fal_models(seen: Set[str] = None, today: str = None,
         if is_stale_release(dates[0], today=today):
             continue
         model = _fal_launch_to_model(launch)
+        if model is not None and _discovery_already_covered(model, recent_names or []):
+            model = _fal_new_variant_model(launch, recent_names)
         if model is None or model.name in seen:
-            continue
-        if _discovery_already_covered(model, recent_names or []):
             continue
         out.append(model)
         LAST_FAL_EMITTED_IDS.update(keys)

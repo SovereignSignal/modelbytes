@@ -77,9 +77,10 @@ def test_baselined_run_reads_one_recent_page(monkeypatch, store):
 
 @pytest.mark.parametrize("today,cutoff,expected", [
     ("2026-10-20", "2026-10-20T16:00", ["Fibo 2.0"]),
-    ("2026-10-21", "2026-10-21T16:00", ["Fibo 2.0", "HeyGen Video"]),
+    ("2026-10-21", "2026-10-21T16:00",
+     ["Fibo 2.0", "HeyGen Video", "HeyGen Voice Turbo"]),
     ("2026-10-22", "2026-10-22T16:00",
-     ["Fibo 2.0", "HeyGen Video", "Ideogram Vector"]),
+     ["Fibo 2.0", "HeyGen Video", "HeyGen Voice Turbo", "Ideogram Vector"]),
 ])
 def test_recent_page_catches_the_oct_20_to_22_launches(
         monkeypatch, store, today, cutoff, expected):
@@ -102,6 +103,13 @@ def test_recent_launch_rows_render_as_hosted_fal_entries(monkeypatch, store):
     assert video.provider == "HeyGen"
     assert video.modality == "text-to-video"
     assert video.url == "https://fal.ai/models/heygen/heygen-video/text-to-video"
+    turbo = by["HeyGen Voice Turbo"]
+    assert turbo.url == "https://fal.ai/models/heygen/heygen-voice/turbo"
+    assert turbo.modality == "text-to-speech"
+    # Publishing the variant records the whole launch, so the covered base
+    # endpoint cannot come back as a candidate on the next run.
+    assert "fal-id:fal/heygen-voice" in turbo.unique_traits
+    assert "fal-id:fal/heygen/heygen-voice" in turbo.unique_traits
 
 
 def test_stale_launches_on_the_recent_page_are_skipped(monkeypatch, store):
@@ -186,3 +194,26 @@ def test_recent_rows_feed_the_baseline_and_leave_last_good_alone(monkeypatch, st
         assert not (monitor._fal_ids_from_model(model) & seen)
     assert json.dumps(store["v"], sort_keys=True) == before
 
+
+
+def test_new_variant_of_a_recent_name():
+    f = monitor._is_new_variant_name
+    assert f("HeyGen Voice Turbo", ["HeyGen Voice"])
+    assert f("HeyGen Voice 2", ["HeyGen Voice"])
+    assert f("FLUX 3 Max", ["FLUX.3"])
+    # Repeats, vendor prefixes and task endpoints are not new models.
+    assert not f("HeyGen Voice", ["HeyGen Voice"])
+    assert not f("NVIDIA Nemotron 3.5 Super", ["Nemotron 3.5 Super"])
+    assert not f("H3 Max Reframe", ["H3 Max"])
+    # A variant that was itself printed is covered.
+    assert not f("HeyGen Voice Turbo", ["HeyGen Voice", "HeyGen Voice Turbo"])
+    # Unrelated names say nothing.
+    assert not f("Ideogram Vector", ["HeyGen Voice"])
+
+
+def test_covered_launch_without_a_new_variant_stays_skipped(monkeypatch, store):
+    _install(monkeypatch)
+    names = _names(monitor.fetch_fal_models(
+        set(BASELINED), today="2026-10-22",
+        recent_names=RECENT_NAMES + ["HeyGen Voice Turbo", "HeyGen Video"]))
+    assert names == ["Fibo 2.0", "Ideogram Vector"]

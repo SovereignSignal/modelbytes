@@ -23,6 +23,12 @@ from pathlib import Path
 from typing import List, Optional, Set, Tuple
 from urllib.parse import unquote, urlparse
 
+import startup_alert
+
+# Before any third-party import or env parsing: a failure from here until
+# main() is past the reach of _handle_crash and must still page.
+startup_alert.install_for(__name__, sys.argv)
+
 from ss_publish import (
     Publisher,
     TelegramResult,
@@ -7924,6 +7930,7 @@ def _handle_crash(exc: BaseException, preview: bool, argv=None) -> None:
     alert. Capture `--preview` *before* main() strips it from argv.
     """
     body = _format_crash_alert(exc, argv=argv)
+    startup_alert.mark_handled()
     if preview:
         print(f"Preview crashed:\n{body}", file=sys.stderr)
         return

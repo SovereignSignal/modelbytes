@@ -6205,8 +6205,8 @@ def absorb_extra_source(incoming: ModelRelease, existing: List[ModelRelease],
 
 # fal.ai public model catalog (no key). The default order is not by date, so
 # the first run reads every page (16 pages / ~1500 endpoints on 2026-10-16)
-# to baseline the back-catalog. After that, sort=recent (newest first, one
-# page on most days) is enough. One launch is
+# to baseline the back-catalog. After that, sort=recent (newest first, two
+# pages on most days) is enough. One launch is
 # several endpoints (krea/v3/edit, krea/v3/text-to-image, krea/v3/realtime);
 # they are grouped into one candidate. `metadata.date` is the fal launch date.
 #
@@ -6460,9 +6460,14 @@ def _fal_fetch_catalog() -> list:
 
 
 def _fal_fetch_recent(today: str = None) -> list:
-    """Newest catalog rows (sort=recent) until a page reaches past the 14-day
-    catalog clock. Raises when fal does not acknowledge the sort, so an
-    unsorted first page is never mistaken for "nothing new"."""
+    """Newest catalog rows (sort=recent) until a whole page is past the
+    14-day catalog clock. Raises when fal does not acknowledge the sort, so
+    an unsorted first page is never mistaken for "nothing new".
+
+    fal sorts by publication date, which the response does not carry;
+    `metadata.date` is the creation date. One old row published late says
+    nothing about the rows after it, so only an all-stale page ends the read.
+    """
     rows, cursor = [], None
     for _page in range(_FAL_RECENT_PAGE_CAP):
         params = {"limit": 100, "sort": "recent"}
@@ -6482,7 +6487,7 @@ def _fal_fetch_recent(today: str = None) -> list:
             break
         dates = [d for d in (_day((r.get("metadata") or {}).get("date"))
                              for r in batch) if d]
-        if dates and is_stale_release(min(dates), today=today):
+        if dates and is_stale_release(max(dates), today=today):
             break
     else:
         print(f"fal: recent list stopped at the {_FAL_RECENT_PAGE_CAP}-page cap",

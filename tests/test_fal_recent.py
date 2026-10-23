@@ -32,6 +32,15 @@ def _recent_body(cutoff=None):
     return body
 
 
+def _stale_page():
+    """A next page whose rows are all past the 14-day clock on 2026-10-22."""
+    body = _recent_body()
+    body["models"] = [r for r in body["models"]
+                      if r["metadata"]["date"] < "2026-10-08"]
+    body["next_cursor"] = "placeholder-2"
+    return body
+
+
 @pytest.fixture
 def store(monkeypatch):
     """Last good full crawl: the 2026-10-16 catalog fixture."""
@@ -47,7 +56,7 @@ def store(monkeypatch):
 
 def _install(monkeypatch, recent=None, full_rows=None, recent_error=None):
     """recent: list of page bodies for sort=recent. Full crawl: one page."""
-    pages = recent if recent is not None else [_recent_body()]
+    pages = recent if recent is not None else [_recent_body(), _stale_page()]
     calls = []
 
     def fake_get(url, params):
@@ -69,10 +78,11 @@ def _names(models):
     return sorted(m.name for m in models)
 
 
-def test_baselined_run_reads_one_recent_page(monkeypatch, store):
+def test_baselined_run_reads_recent_pages_until_one_is_all_stale(monkeypatch, store):
     calls = _install(monkeypatch)
     monitor.fetch_fal_models(set(BASELINED), today="2026-10-22")
-    assert calls == [{"limit": 100, "sort": "recent"}]
+    assert calls == [{"limit": 100, "sort": "recent"},
+                     {"limit": 100, "sort": "recent", "cursor": "placeholder"}]
 
 
 @pytest.mark.parametrize("today,cutoff,expected", [
@@ -84,7 +94,7 @@ def test_baselined_run_reads_one_recent_page(monkeypatch, store):
 ])
 def test_recent_page_catches_the_oct_20_to_22_launches(
         monkeypatch, store, today, cutoff, expected):
-    _install(monkeypatch, recent=[_recent_body(cutoff)])
+    _install(monkeypatch, recent=[_recent_body(cutoff), _stale_page()])
     models = monitor.fetch_fal_models(
         set(BASELINED), today=today, recent_names=RECENT_NAMES)
     assert _names(models) == expected
@@ -162,15 +172,21 @@ def test_rate_limited_recent_page_uses_last_good_without_a_full_crawl(
     assert "HTTPError" in monitor._consume_source_error("fal")
 
 
-def test_recent_pages_until_the_page_reaches_past_the_catalog_clock(monkeypatch, store):
-    fresh = _recent_body()
-    fresh["models"] = [r for r in fresh["models"]
-                       if r["metadata"]["date"] >= "2026-10-14"]
-    tail = _recent_body()
-    calls = _install(monkeypatch, recent=[fresh, tail])
-    monitor.fetch_fal_models(set(BASELINED), today="2026-10-22")
-    assert calls == [{"limit": 100, "sort": "recent"},
-                     {"limit": 100, "sort": "recent", "cursor": "placeholder"}]
+def test_an_old_row_on_a_page_does_not_end_the_read(monkeypatch, store):
+    # fal sorts by publication date, but metadata.date is the creation date:
+    # the recorded page has kotoba-stt (2026-10-09) and vidu q4 (2026-10-05)
+    # among newer rows. A launch on the next page must still be read.
+    first = _recent_body()
+    first["models"] = [r for r in first["models"]
+                       if not r["endpoint_id"].startswith("ideogram/")]
+    second = _stale_page()
+    second["models"] = [r for r in _recent_body()["models"]
+                        if r["endpoint_id"].startswith("ideogram/")] + second["models"]
+    calls = _install(monkeypatch, recent=[first, second, _stale_page()])
+    models = monitor.fetch_fal_models(set(BASELINED), today="2026-10-22",
+                                      recent_names=RECENT_NAMES)
+    assert "Ideogram Vector" in _names(models)
+    assert len(calls) == 3
 
 
 def test_recent_page_cap_stops_a_runaway_cursor(monkeypatch, store):

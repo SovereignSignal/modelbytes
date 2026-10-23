@@ -160,6 +160,7 @@ PROVIDER_NAMES = {
     "jetbrains": "JetBrains",
     "reflectionai": "Reflection",
     "reflection-ai": "Reflection",
+    "inception": "Inception",
 }
 
 # Known significant orgs — never noise-filter these
@@ -183,6 +184,8 @@ KNOWN_ORGS = {
     "thinkingmachines", "black-forest-labs",
     "skt", "wan-ai", "sarvamai", "meta-models", "jetbrains",
     "reflectionai", "reflection-ai",
+    # OpenRouter slug (inception/mercury-3). No Hub org as of 2026-10-23.
+    "inception",
 }
 
 
@@ -6151,8 +6154,12 @@ def _apply_aa_facts(dest: ModelRelease, src: ModelRelease, today: str = None) ->
     # Keep the stable AA id on the primary row so a successful post records
     # it. If this row is not posted, the id stays unpersisted and the merge
     # runs again next time instead of publishing a second AA entry.
+    # aa-release keeps the merged row significant: an unlisted org's
+    # OpenRouter row (Mercury 3) otherwise ranks as noise overflow.
     for trait in src.unique_traits or []:
-        if str(trait).startswith("aa-id:") and trait not in (dest.unique_traits or []):
+        text = str(trait)
+        if ((text.startswith("aa-id:") or text == "aa-release")
+                and trait not in (dest.unique_traits or [])):
             dest.unique_traits.append(trait)
 
 
@@ -6651,7 +6658,9 @@ def _apply_fal_facts(dest: ModelRelease, src: ModelRelease, today: str = None) -
     if not getattr(dest, "credit_url", None) and src.credit_url:
         dest.credit_url = src.credit_url
     for trait in src.unique_traits or []:
-        if str(trait).startswith("fal-id:") and trait not in (dest.unique_traits or []):
+        text = str(trait)
+        if ((text.startswith("fal-id:") or text == "fal-release")
+                and trait not in (dest.unique_traits or [])):
             dest.unique_traits.append(trait)
 
 

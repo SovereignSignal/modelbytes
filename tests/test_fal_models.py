@@ -220,6 +220,20 @@ def test_fal_row_absorbs_into_a_primary_row_without_replacing_its_url():
     assert "fal/nvidia/nemotron-3-5-super" in manifest.seen_ids
 
 
+def test_fal_merge_keeps_the_row_significant():
+    existing = monitor.ModelRelease(
+        name="newlab/vector-model-1", provider="newlab", source="openrouter",
+        url="https://openrouter.ai/models/newlab/vector-model-1", description="")
+    fal = monitor.ModelRelease(
+        name="Vector Model 1", provider="Newlab", source="fal",
+        url="https://fal.ai/models/newlab/vector-model-1", description="",
+        release_date=TODAY,
+        unique_traits=["fal-release", "fal-id:fal/newlab/vector-model-1"])
+    assert monitor.absorb_extra_source(fal, [existing], today=TODAY)
+    assert monitor.is_significant_release(
+        existing.name, "newlab", existing.unique_traits, 0)
+
+
 def test_fal_entry_renders_as_hosted_not_open_weights():
     model = monitor.ModelRelease(
         name="Krea 3", provider="Krea", source="fal",

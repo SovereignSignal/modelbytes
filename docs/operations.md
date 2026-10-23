@@ -51,7 +51,7 @@ When adding a model that the curator may mention repeatedly, add a `ModelFact` e
 
 The two are in isolated `try` blocks, so a Telegram outage still reaches Slack (and vice versa). `send_ops_alert()` never raises — a broken alert path cannot take down a publish run. All alert text (and every log line) passes through `_redact_secrets()`, which scrubs the bot token and the `DATABASE_URL` before anything is sent or logged.
 
-Alerts fire on: fallback days (the curator missed), blocked/failed publishes, late curator (grace window expired), a lost `DATABASE_URL`, content-damage QA warnings (fact drift, floods), writer entries that verification stripped to nothing, and an uncaught crash (the `__main__` crash handler alerts + heartbeats, then re-raises). Crash DMs include where the process ran, the `monitor.py` frame, a known-class hint, and whether today's digest already shipped — so an off-network `railway run` DNS failure is not mistaken for the cron. Cosmetic format-drift warnings do **not** alert (anti-noise). A catalog-quiet / writer-0 day records `no-models` but does **not** page — that 🚨 trained the operator to ignore the channel (2026-08-24). Escalating fallback alerts are driven by `fallback_streak()` reading consecutive fallback rows out of `publish_runs`. Preview-mode crashes never alert.
+Alerts fire on: fallback days (the curator missed), blocked/failed publishes, late curator (grace window expired), a lost `DATABASE_URL`, content-damage QA warnings (fact drift, floods), writer entries that verification stripped to nothing, and an uncaught crash (the `__main__` crash handler alerts + heartbeats, then re-raises). A crash before `main()` runs (a broken dependency at import, a bad `MODELBYTES_*` number parsed at module level) is outside that handler. `startup_alert.py` installs a `sys.excepthook` before any third-party import and sends a "CRASHED at startup" alert to the same places (admin DM, then the Slack ops channel, then heartbeat `/fail`) using only the standard library. It is quiet in preview, on Ctrl-C, and for crashes `_handle_crash` already reported. Nothing in-process catches a SIGKILL/OOM, a SIGTERM, a platform failure, or a syntax error in `monitor.py` itself; only the heartbeat does. Crash DMs include where the process ran, the `monitor.py` frame, a known-class hint, and whether today's digest already shipped — so an off-network `railway run` DNS failure is not mistaken for the cron. Cosmetic format-drift warnings do **not** alert (anti-noise). A catalog-quiet / writer-0 day records `no-models` but does **not** page — that 🚨 trained the operator to ignore the channel (2026-08-24). Escalating fallback alerts are driven by `fallback_streak()` reading consecutive fallback rows out of `publish_runs`. Preview-mode crashes never alert.
 
 ### Setting up the admin chat
 
@@ -101,7 +101,7 @@ LIMIT 20;
 | `send-failed` | Validation passed but the Telegram send failed (e.g. dead token, 4xx/5xx) — check `error`, then the token-rotation runbook. |
 | `no-models` | Fallback path ran but found nothing publishable after filtering/dedup (quiet day, or the writer emitted entries that verification stripped). Quiet days are recorded here and do not ops-alert; a verification-stripped day still pages. |
 | `seeded` | An empty `models` table was seeded (only happens with `MODELBYTES_ALLOW_SEED=1`); no digest posted that run. |
-| `crashed` | Uncaught exception in a live run. The ops DM includes crash site, host/Railway context, a known-class hint (e.g. off-network `railway.internal` DNS), and whether `posted_digests` already has today. Preview crashes do **not** alert or write this row. |
+| `crashed` | Uncaught exception in a live run. The ops DM includes crash site, host/Railway context, a known-class hint (e.g. off-network `railway.internal` DNS), and whether `posted_digests` already has today. Preview crashes do **not** alert or write this row. A crash before `main()` (the "CRASHED at startup" alert) writes no row at all. |
 
 To see the recent fallback streak that drives escalating alerts:
 
@@ -313,7 +313,7 @@ Until it returns, health signal comes from two in-process sources instead of the
 1. **Ops alerts** (Telegram DM → Slack fallback) fire in-process on fallback days, blocked/failed publishes, a late curator, a lost `DATABASE_URL`, content-damage warnings, and crashes. See "Ops alerts" above.
 2. **The `publish_runs` audit** — query for a missing or non-`posted` row for today's UTC date. See "Reading the publish_runs audit" above.
 
-The one gap neither covers is "the cron never fired at all" — only the optional `MODELBYTES_HEARTBEAT_URL` dead-man's switch catches that.
+The one gap neither covers is "the cron never fired at all" — only the optional `MODELBYTES_HEARTBEAT_URL` dead-man's switch catches that. The same goes for a run the platform killed or never finished (OOM, SIGKILL, a Railway outage): there is no exception, so there is no DM and no `publish_runs` row. The 2026-10-21 digest was most likely skipped this way: the run fell inside a Railway incident, and no alert fired. Setting the heartbeat is the fix for this class.
 
 If a `health-incident` GitHub issue from a past run is still open, close it once confirmed stale:
 

@@ -1,0 +1,645 @@
+{
+ "models": [
+  {
+   "endpoint_id": "ideogram/vector/image-to-vector",
+   "metadata": {
+    "display_name": "Ideogram Vector",
+    "category": "image-to-image",
+    "description": "Converts images into editable SVG vector graphics, with a default mode for finer details and a simple mode for fewer shapes.",
+    "status": "active",
+    "date": "2026-10-22T14:43:17.779Z",
+    "group": {
+     "key": "ideogram-vector",
+     "label": "Image to Vector"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "ideogram/vector/text-to-vector",
+   "metadata": {
+    "display_name": "Ideogram Vector",
+    "category": "text-to-image",
+    "description": "Generates editable SVG vector graphics from text prompts, with optional reference images, three quality levels, and aspect ratio controls.",
+    "status": "active",
+    "date": "2026-10-22T14:42:14.404Z",
+    "group": {
+     "key": "ideogram-vector",
+     "label": "Text to Vector"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "heygen/heygen-video/text-to-video",
+   "metadata": {
+    "display_name": "HeyGen Video Text to Video",
+    "category": "text-to-video",
+    "description": "HeyGen Video, built on MiniMax H3 and post-trained by HeyGen, turns a prompt into a 5 to 15 second clip with its own sound.",
+    "status": "active",
+    "date": "2026-10-20T22:42:24.099Z",
+    "group": {
+     "key": "heygen-video",
+     "label": "Text to Video"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "heygen/heygen-video/image-to-video",
+   "metadata": {
+    "display_name": "HeyGen Video Image to Video",
+    "category": "image-to-video",
+    "description": "HeyGen Video animates your image as the first frame of a 5 to 15 second clip, with generated sound, built on MiniMax H3 and post-trained by HeyGen.",
+    "status": "active",
+    "date": "2026-10-20T22:36:17.886Z",
+    "group": {
+     "key": "heygen-video",
+     "label": "Image to Video"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "heygen/heygen-video/reference-to-video",
+   "metadata": {
+    "display_name": "HeyGen Video Reference to Video",
+    "category": "image-to-video",
+    "description": "HeyGen Video builds a new 5 to 15 second scene with sound that keeps the products, people or places from your reference images, videos or audio.",
+    "status": "active",
+    "date": "2026-10-20T22:33:27.250Z",
+    "group": {
+     "key": "heygen-video",
+     "label": "Reference to Video"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "heygen/heygen-voice",
+   "metadata": {
+    "display_name": "HeyGen Voice",
+    "category": "text-to-speech",
+    "description": "HeyGen Voice turns text into natural speech with a library voice or an instant clone from a reference clip.",
+    "status": "active",
+    "date": "2026-10-20T22:33:02.360Z",
+    "group": {
+     "key": "heygen-voice",
+     "label": "Standard"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "heygen/heygen-voice/turbo",
+   "metadata": {
+    "display_name": "HeyGen Voice Turbo",
+    "category": "text-to-speech",
+    "description": "HeyGen Voice Turbo is the fast, low-cost tier of HeyGen Voice, with library voices and instant cloning from a reference clip.",
+    "status": "active",
+    "date": "2026-10-20T22:32:38.032Z",
+    "group": {
+     "key": "heygen-voice",
+     "label": "Turbo"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "kling/v4/video-to-video/edit",
+   "metadata": {
+    "display_name": "Kling 4.0 Video Editing",
+    "category": "video-to-video",
+    "description": "Kling 4.0 edits an input video using text instructions and optional image references, producing 3 to 30-second videos at 720p or 1080p. Kling 4.0 is available in the playground and fal Agent. API access is coming soon.",
+    "status": "active",
+    "date": "2026-10-16T15:21:55.287Z",
+    "group": {
+     "key": "kling-v4",
+     "label": "Video Editing"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "kling/v4/text-to-video",
+   "metadata": {
+    "display_name": "Kling 4.0 Text to Video",
+    "category": "text-to-video",
+    "description": "Kling 4.0 generates videos from text prompts at 720p or 1080p, with durations from 3 to 30 seconds and support for per-shot prompts. Kling 4.0 is available in the playground and fal Agent. API access is coming soon.",
+    "status": "active",
+    "date": "2026-10-16T15:18:34.007Z",
+    "group": {
+     "key": "kling-v4",
+     "label": "Text to Video"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "kling/v4/image-to-video",
+   "metadata": {
+    "display_name": "Kling 4.0 Image to Video",
+    "category": "image-to-video",
+    "description": "Kling 4.0 animates a starting image into a 3 to 30-second video at 720p or 1080p, with optional ending frames and per-shot prompts. Kling 4.0 is available in the playground and fal Agent. API access is coming soon.",
+    "status": "active",
+    "date": "2026-10-16T15:20:11.407Z",
+    "group": {
+     "key": "kling-v4",
+     "label": "Image to Video"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "kling/v4/reference-to-video",
+   "metadata": {
+    "display_name": "Kling 4.0 Reference to Video",
+    "category": "video-to-video",
+    "description": "Kling 4.0 generates videos from text prompts and image or video references at 720p or 1080p, with durations from 3 to 30 seconds and per-shot prompts. Kling 4.0 is available in the playground and fal Agent. API access is coming soon.",
+    "status": "active",
+    "date": "2026-10-16T15:21:08.011Z",
+    "group": {
+     "key": "kling-v4",
+     "label": "Reference to Video"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "minimax/h3-max/reframe-video",
+   "metadata": {
+    "display_name": "H3 Max Reframe",
+    "category": "video-to-video",
+    "description": "Expands existing videos to a selected aspect ratio with generative outpainting, preserving source audio and timing. Supports optional text guidance and 480p or 768p output.",
+    "status": "active",
+    "date": "2026-10-12T16:48:40.520Z",
+    "group": {
+     "key": "hailuo-03-new-turbo",
+     "label": "Reframe Video"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "bria/fibo-2/generate",
+   "metadata": {
+    "display_name": "Fibo 2.0 Generate",
+    "category": "text-to-image",
+    "description": "Fibo 2.0 Generate is Bria's text-to-image model, strongest on reasoning and knowledge-heavy prompts the ones that need real understanding, not just a style match. Trained only on licensed data, with clear commercial rights.",
+    "status": "active",
+    "date": "2026-10-19T12:39:45.491Z",
+    "group": {
+     "key": "bria-fibo-2",
+     "label": "Generate"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "bria/fibo-2/edit",
+   "metadata": {
+    "display_name": "Fibo 2.0 Edit",
+    "category": "image-to-image",
+    "description": "Fibo 2.0 Edit makes targeted, instruction-based edits from up to four images. Background swaps, product restaging, keeping the product true to the original. Trained only on licensed data, with clear commercial rights.",
+    "status": "active",
+    "date": "2026-10-19T12:40:40.081Z",
+    "group": {
+     "key": "bria-fibo-2",
+     "label": "Edit"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "blackforestlabs/flux-3-max/text-to-video",
+   "metadata": {
+    "display_name": "FLUX 3 Max Text to Video",
+    "category": "text-to-video",
+    "description": "fal’s FLUX 3 Max is a post-trained variant of FLUX 3 Video, tuned for stronger prompt adherence and better visual quality while optimized for lower latency.",
+    "status": "active",
+    "date": "2026-10-16T01:38:32.705Z",
+    "group": {
+     "key": "flux-3-max",
+     "label": "Text to Video"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "blackforestlabs/flux-3-max/keyframes-to-video",
+   "metadata": {
+    "display_name": "FLUX 3 Max Keyframes to Video",
+    "category": "image-to-video",
+    "description": "fal’s FLUX 3 Max is a post-trained variant of FLUX 3 Video, tuned for stronger prompt adherence and better visual quality while optimized for lower latency.",
+    "status": "active",
+    "date": "2026-10-16T01:46:08.782Z",
+    "group": {
+     "key": "flux-3-max",
+     "label": "Keyframes to Video"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "blackforestlabs/flux-3-max/image-to-video",
+   "metadata": {
+    "display_name": "FLUX 3 Max Image to Video",
+    "category": "image-to-video",
+    "description": "fal’s FLUX 3 Max is a post-trained variant of FLUX 3 Video, tuned for stronger prompt adherence and better visual quality while optimized for lower latency.",
+    "status": "active",
+    "date": "2026-10-16T01:41:04.623Z",
+    "group": {
+     "key": "flux-3-max",
+     "label": "Image to Video"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "fal-ai/moss-image",
+   "metadata": {
+    "display_name": "MOSS Image",
+    "category": "text-to-image",
+    "description": "MOSS-Image-SFT is a text-to-image model specializing in Chinese and English text rendering and structured layout control for precise text placement and object arrangement.",
+    "status": "active",
+    "date": "2026-10-18T17:19:49.593Z",
+    "group": {
+     "key": "moss-image",
+     "label": "Text to Image"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "robbyant/lingbot-world-2",
+   "metadata": {
+    "display_name": "Lingbot World 2",
+    "category": "worlds",
+    "description": "Explore interactive worlds in real time with movement and camera controls.",
+    "status": "active",
+    "date": "2026-10-16T00:48:00.782Z",
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "alibaba/abot-world-0",
+   "metadata": {
+    "display_name": "Abot World 0",
+    "category": "worlds",
+    "description": "Explore interactive worlds in real time with movement and camera controls.",
+    "status": "active",
+    "date": "2026-10-15T22:30:23.926Z",
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "bytedance/omnihuman/v2",
+   "metadata": {
+    "display_name": "Bytedance Omnihuman V2",
+    "category": "image-to-video",
+    "description": "Omnihuman v2 generates video using an image of a human figure paired with an audio file. It produces vivid, high-quality videos where the character’s emotions and movements maintain a strong correlation with the audio.",
+    "status": "active",
+    "date": "2026-10-15T14:59:20.829Z",
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "minimax/h3-max/reference-director",
+   "metadata": {
+    "display_name": "H3 Max Reference Director",
+    "category": "worlds",
+    "description": "Direct a continuous world in real time with image references and text prompts.",
+    "status": "active",
+    "date": "2026-10-15T20:25:05.488Z",
+    "group": {
+     "key": "hailuo-03-new-turbo",
+     "label": "Reference Director"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "krea/v3/realtime",
+   "metadata": {
+    "display_name": "Krea 3 Realtime",
+    "category": "image-to-image",
+    "description": "Edits an input image in a realtime session using text prompts, with seed control.",
+    "status": "active",
+    "date": "2026-10-14T23:18:24.434Z",
+    "group": {
+     "key": "krea-v3",
+     "label": "Realtime"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "krea/v3/edit",
+   "metadata": {
+    "display_name": "Krea 3 Edit",
+    "category": "image-to-image",
+    "description": "Edits and combines reference images using text instructions, with optional prompt expansion, output-size controls, and reproducible generation through a seed.",
+    "status": "active",
+    "date": "2026-10-14T23:03:07.699Z",
+    "group": {
+     "key": "krea-v3",
+     "label": "Image Editing"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "krea/v3/text-to-image",
+   "metadata": {
+    "display_name": "Krea 3 Text to Image",
+    "category": "text-to-image",
+    "description": "Generates images from text prompts with optional prompt expansion, configurable output dimensions, and seed control.",
+    "status": "active",
+    "date": "2026-10-14T22:59:52.695Z",
+    "group": {
+     "key": "krea-v3",
+     "label": "Text to Image"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "blackforestlabs/flux-3/klein/edit-image",
+   "metadata": {
+    "display_name": "FLUX.3 Klein Image Editing",
+    "category": "image-to-image",
+    "description": "Edits and composes images from text instructions and up to ten references with FLUX.3 Klein, with optional bounding-box controls for object placement and transformation.",
+    "status": "active",
+    "date": "2026-10-14T18:40:57.255Z",
+    "group": {
+     "key": "flux-3-klein",
+     "label": "Image Editing"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "blackforestlabs/flux-3/klein/text-to-image",
+   "metadata": {
+    "display_name": "FLUX.3 Klein",
+    "category": "text-to-image",
+    "description": "Generates images from text prompts with FLUX.3 Klein, with configurable image size, reproducible seeds, prompt expansion and optional bounding-box layout control.",
+    "status": "active",
+    "date": "2026-10-14T18:39:38.024Z",
+    "group": {
+     "key": "flux-3-klein",
+     "label": "Text to Image"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "nvidia/nemotron-3-5-super/video",
+   "metadata": {
+    "display_name": "NVIDIA Nemotron 3.5 Super Video",
+    "category": "video-to-text",
+    "description": "Ask NVIDIA Nemotron 3.5 Super about a video clip: summarize what happens, find moments and reason across frames.",
+    "status": "active",
+    "date": "2026-10-15T01:11:43.143Z",
+    "group": {
+     "key": "nvidia/nemotron-3-5-super",
+     "label": "Video"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "nvidia/nemotron-3-5-super/vision",
+   "metadata": {
+    "display_name": "NVIDIA Nemotron 3.5 Super Vision",
+    "category": "image-to-text",
+    "description": "Ask NVIDIA Nemotron 3.5 Super questions about an image: describe scenes, read text and charts, and reason over what it sees.",
+    "status": "active",
+    "date": "2026-10-15T01:10:24.662Z",
+    "group": {
+     "key": "nvidia/nemotron-3-5-super",
+     "label": "Vision"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "nvidia/nemotron-3-5-super/text",
+   "metadata": {
+    "display_name": "NVIDIA Nemotron 3.5 Super Text",
+    "category": "llm",
+    "description": "Chat and reason with NVIDIA Nemotron 3.5 Super, a hybrid Mamba-Transformer mixture-of-experts model with optional step-by-step thinking.",
+    "status": "active",
+    "date": "2026-10-15T01:09:00.655Z",
+    "group": {
+     "key": "nvidia/nemotron-3-5-super",
+     "label": "Text"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "meshy/v7/retexture",
+   "metadata": {
+    "display_name": "Meshy 7 Retexture",
+    "category": "3d-to-3d",
+    "description": "Meshy 7 retexture applies new textures to an existing 3D model from a text prompt or a reference image, with optional PBR maps.",
+    "status": "active",
+    "date": "2026-10-14T17:17:43.571Z",
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "meshy/v6/retexture",
+   "metadata": {
+    "display_name": "Meshy 6 Retexture",
+    "category": "3d-to-3d",
+    "description": "Meshy 6 retexture applies new textures to an existing 3D model from a text prompt or a reference image, with optional PBR maps.",
+    "status": "active",
+    "date": "2026-10-14T17:17:24.119Z",
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "kotoba-technologies/kotoba-stt/v1/speech-to-text",
+   "metadata": {
+    "display_name": "Kotoba Speech-to-Text",
+    "category": "speech-to-text",
+    "description": "Accurate transcription of an audio clip in one request, with word timestamps, tuned for Japanese and East Asian languages.",
+    "status": "active",
+    "date": "2026-10-09T14:16:48.421Z",
+    "group": {
+     "key": "kotoba-stt",
+     "label": "Kotoba STT"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "kotoba-technologies/kotoba-tts/v2/tts/ws",
+   "metadata": {
+    "display_name": "Kotoba Text-to-Speech",
+    "category": "text-to-speech",
+    "description": "Natural Japanese speech, streamed back as it is generated so playback starts almost immediately.",
+    "status": "active",
+    "date": "2026-10-14T02:48:14.494Z",
+    "group": {
+     "key": "kotoba-tts",
+     "label": "Kotoba TTS"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "kotoba-technologies/kotoba-sts/v1/realtime_voice",
+   "metadata": {
+    "display_name": "Kotoba Realtime Speech Translation",
+    "category": "speech-to-speech",
+    "description": "Speak in one language, hear it in another. Streaming speech-to-speech translation with the translated text alongside the audio.",
+    "status": "active",
+    "date": "2026-10-14T02:44:18.898Z",
+    "group": {
+     "key": "kotoba-sts",
+     "label": "Kotoba STS"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "kotoba-technologies/kotoba-streaming-stt/v1/realtime",
+   "metadata": {
+    "display_name": "Kotoba Realtime Speech-to-Text",
+    "category": "speech-to-text",
+    "description": "Live transcription over WebSocket, with partial results as the speaker talks.",
+    "status": "active",
+    "date": "2026-10-14T02:46:28.827Z",
+    "group": {
+     "key": "kotoba-streaming-stt",
+     "label": "Kotoba Streaming STT"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "bria/fibo-edit-1.5/expand",
+   "metadata": {
+    "display_name": "Bria Expand (FIBO-Edit-1.5)",
+    "category": "image-to-image",
+    "description": "Bria Expand extends an image beyond its borders to any of 9 aspect ratios or a custom canvas up to 25 megapixels. Built on FIBO-Edit-1.5, with optional prompt guidance for the new area and the original pixels kept at full resolution.",
+    "status": "active",
+    "date": "2026-10-10T03:36:03.330Z",
+    "group": {
+     "key": "bria-fibo-edit-1.5",
+     "label": "Expand"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "mirelo-ai/sfx2.0/video-to-audio",
+   "metadata": {
+    "display_name": "Mirelo SFX2.0",
+    "category": "video-to-audio",
+    "description": "Generates synchronized soundtracks for a video as audio files, with speech preserved or separated. Add a prompt for off-screen sounds and ambience.",
+    "status": "active",
+    "date": "2026-10-14T10:26:02.189Z",
+    "group": {
+     "key": "mirelo-sfx2.0",
+     "label": "Video To Audio"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "mirelo-ai/sfx2.0/text-to-audio",
+   "metadata": {
+    "display_name": "Mirelo SFX2.0",
+    "category": "text-to-audio",
+    "description": "Generates sound effects and ambience from a text description, up to 600 seconds long, with up to 4 variations per request.",
+    "status": "active",
+    "date": "2026-10-14T09:38:59.027Z",
+    "group": {
+     "key": "mirelo-sfx2.0",
+     "label": "Text To Audio"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "mirelo-ai/sfx2.0/video-to-video",
+   "metadata": {
+    "display_name": "Mirelo SFX2.0",
+    "category": "video-to-video",
+    "description": "Adds a synchronized soundtrack to your video and returns the video with the sound mixed in. Speech is preserved by default; add a prompt for off-screen sounds and ambience.",
+    "status": "active",
+    "date": "2026-10-14T09:43:12.563Z",
+    "group": {
+     "key": "mirelo-sfx2.0",
+     "label": "Video To Video"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "bria/guided-remove-background",
+   "metadata": {
+    "display_name": "Bria Guided Remove Background",
+    "category": "image-to-image",
+    "description": "Background removal you steer with a prompt. Starts from the same clean cut as Bria RMBG, then adds, drops or isolates objects from plain words like \"the person with the mat and the plant\" or \"only the chair\". Original pixels, real alpha, no",
+    "status": "active",
+    "date": "2026-10-10T03:28:04.113Z",
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "bytedance/seedance-2.5/us/text-to-video",
+   "metadata": {
+    "display_name": "Seedance 2.5 US Text to Video",
+    "category": "text-to-video",
+    "description": "US-hosted ByteDance Seedance 2.5 generates cinematic video from text with synchronized audio, up to 30-second duration, and 480p, 720p or 1080p output.",
+    "status": "active",
+    "date": "2026-09-19T01:16:28.104Z",
+    "group": {
+     "key": "seedance-2.5-us",
+     "label": "Text to Video"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "minimax/h3-max/lip-sync/image-to-video",
+   "metadata": {
+    "display_name": "H3 Max Lip Sync Image to Video",
+    "category": "image-to-video",
+    "description": "H3 Max Lip Sync generates a video from an image and supplied audio, synchronizing mouth movements to the soundtrack. It supports optional transcription guidance and output resolutions from 480p to 2K.",
+    "status": "active",
+    "date": "2026-09-17T08:31:16.184Z",
+    "group": {
+     "key": "hailuo-03-new-turbo",
+     "label": "Lip Sync"
+    },
+    "kind": "inference"
+   }
+  },
+  {
+   "endpoint_id": "bria/fibo-edit-1.5/virtual-try-on",
+   "metadata": {
+    "display_name": "Bria Virtual Try-On (FIBO-Edit-1.5)",
+    "category": "image-to-image",
+    "description": "Bria Virtual Try-On edits a person photo to show the subject wearing garments or accessories from one to three reference images, guided by optional text instructions. Built on FIBO-Edit-1.5, it supports multi-garment changes and preserves t",
+    "status": "active",
+    "date": "2026-09-17T15:59:36.855Z",
+    "group": {
+     "key": "bria-fibo-edit-1.5",
+     "label": "Virtual Try-On"
+    },
+    "kind": "inference"
+   }
+  }
+ ],
+ "next_cursor": "placeholder",
+ "has_more": true,
+ "ordering": {
+  "sort": "recent"
+ }
+}

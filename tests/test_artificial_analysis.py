@@ -311,6 +311,25 @@ def test_aa_merge_fills_hf_model_and_keeps_the_hf_link():
     assert rendered.index("→ HF</a>") < rendered.index("→ Artificial Analysis</a>")
 
 
+def test_aa_merge_keeps_the_row_significant():
+    # 2026-10-16: Mercury 3 reached the run as an OpenRouter row from an
+    # unlisted org. The AA row merged into it and its aa-release mark was
+    # dropped, so it ranked as noise, lost the cap, and was marked seen.
+    existing = monitor.ModelRelease(
+        name="newlab/mystery-3", provider="newlab", source="openrouter",
+        url="https://openrouter.ai/models/newlab/mystery-3", description="")
+    assert not monitor.is_significant_release(existing.name, "newlab", [], 0)
+    incoming = monitor.ModelRelease(
+        name="Mystery 3", provider="NewLab", source="artificial-analysis",
+        url="https://artificialanalysis.ai/models/mystery-3", description="",
+        release_date="2026-10-16",
+        unique_traits=["aa-release", "aa-id:mystery-3"])
+    assert monitor.absorb_extra_source(incoming, [existing], today="2026-10-16")
+    assert monitor.is_significant_release(
+        existing.name, "newlab", existing.unique_traits, 0)
+    assert existing.unique_traits.count("aa-release") == 1
+
+
 def test_aa_baseline_records_unemitted_ids_and_skips_preview():
     monitor.LAST_AA_CATALOG_IDS = {"aa/old-llm", "aa/flux-3"}
     monitor.LAST_AA_EMITTED_IDS = {"aa/flux-3"}

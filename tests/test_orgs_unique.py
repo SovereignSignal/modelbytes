@@ -50,6 +50,13 @@ def test_known_org_is_significant_without_downloads():
         "sapientinc/brand-new-flagship", "sapientinc", [], downloads=0) is True
 
 
+def test_inception_is_a_known_org():
+    # Mercury 3 (inception/mercury-3, OpenRouter 2026-10-16) ranked as noise.
+    assert monitor.is_significant_release(
+        "inception/mercury-3", "inception", [], downloads=0) is True
+    assert monitor._resolve_provider("", "inception/mercury-3") == "Inception"
+
+
 def test_unknown_org_is_not_significant_without_signal():
     assert monitor.is_significant_release(
         "randomorg/mystery-9b", "randomorg", [], downloads=0) is False

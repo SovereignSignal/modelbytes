@@ -102,12 +102,14 @@ Fix list/filter leaks (HF org casing, `sig_org_map`, digest-body persistence) be
 ### fal.ai model catalog
 
 - Type: hosted model catalog (launch signal for closed and hosted models)
-- Candidate URL: `GET https://api.fal.ai/v1/models?limit=100[&cursor=<next_cursor>]`
+- Candidate URL: `GET https://api.fal.ai/v1/models?limit=100[&cursor=<next_cursor>]`, and `&sort=recent` once the baseline exists
 - Why it matters: closed and hosted launches (Krea 3, FLUX.3 Klein, OmniHuman V2, Mirelo SFX2.0, NVIDIA Nemotron 3.5 Super) land on fal the day they ship and never reach Hugging Face or the OpenRouter text list.
-- Probe 2026-10-16: public, no key. About 1,500 endpoints over 16 pages (~8s). The default order is not by date, so the fetcher reads every page (cap 25) until `has_more` is false. `metadata.date` is the fal launch date; `license_type` is fal's commercial-use flag, not a weights license, so rows are not marked open or closed.
+- Probe 2026-10-16: public, no key. About 1,500 endpoints over 16 pages (~8s). The default order is not by date, so the first run reads every page (cap 25) until `has_more` is false. `metadata.date` is the fal launch date; `license_type` is fal's commercial-use flag, not a weights license, so rows are not marked open or closed.
+- Probe 2026-10-23: `sort=recent` orders by publication date (creation date when unpublished), before pagination, and echoes `ordering.sort == "recent"`. Cursors keep the sort. The response does not carry the publication date, and `metadata.date` is the creation date, so the order is only roughly by date: page 1 ran 2026-10-22 back to 2026-09-15 with rows created on 2026-09-15 and 2026-10-05 among the newest. Page 2 topped out at 2026-09-17. Once a `fal/` key is in the `models` table and a last good full catalog is stored, the fetcher reads this list until every row on a page is past the 14-day clock (cap 3 pages, 2 requests on most days). If fal does not echo the sort or returns nothing, it reads the full catalog. An HTTP failure goes straight to the last good fallback and skips the 16-request crawl to the same host. The recent list never replaces last good.
 - Grouping: one candidate per launch. Endpoints join when they share `metadata.group.key` or a path key (endpoint id with trailing task segments such as `edit`, `realtime`, `text-to-image`, `*-to-*` stripped; `fal-ai/<vendor>/...` is the same family as `<vendor>/...`). Name is the shortest display name with task suffixes removed.
 - Noise rule: skip `kind=training`, category `training`/`workflow`, non-active status, and ids or names that are background removal, upscaling / super-resolution, LoRA trainers, workflows, or routers. A launch posts only when its newest endpoint is inside the digest window (`DIGEST_FRESHNESS_DAYS`) and its oldest endpoint is inside the 14-day catalog clock, so a new endpoint on an old family (H3 Max, Meshy 6 retexture) is not a launch.
-- Seen ids: `fal/<key>` rows in the existing `models` table, recorded like the Artificial Analysis baseline (catalog minus today's candidates; preview never writes). A candidate is marked seen only when the published digest includes it. A launch that matches a row from OpenRouter, Hugging Face, or Artificial Analysis fills that row's gaps and does not replace its URL.
+- Seen ids: `fal/<key>` rows in the existing `models` table, recorded like the Artificial Analysis baseline (catalog minus today's candidates; preview never writes). A candidate is marked seen only when the published digest includes it. A launch that matches a row from OpenRouter, Hugging Face, or Artificial Analysis fills that row's gaps, keeps its `fal-release` trait, and does not replace its URL.
+- Recent names: a launch whose name is already in a recent digest is skipped, unless some of its endpoints name that model plus a variant or version word (`turbo`, `max`, `pro`, `mini`, `flash`, `lite`, `ultra`, `plus`, `nano`, `fast`, `hd`, or a token that starts with a digit). Those endpoints post as the variant. HeyGen Voice Turbo (2026-10-21) shares the `heygen-voice` key with HeyGen Voice (printed 2026-10-15) and was dropped before this rule.
 - Recommendation: implemented. No new secret and no new flag.
 
 ### AlphaSignal public RSS
@@ -172,6 +174,26 @@ The 2026-08-20 "reject, HTML-only" note is obsolete. The free Data API
 lanes) is wired as an optional source. Legacy `/api/v2/data/*` retires
 2026-11-04. The key is `MODELBYTES_ARTIFICIAL_ANALYSIS_API_KEY`; unset skips
 the source. Seen ids are `aa/<slug>` rows in the existing `models` table.
+A row the AA source merges into keeps its `aa-release` trait, so an
+unknown-org row stays significant (Inception Mercury 3, 2026-10-16).
+
+A board debut of a model that is old elsewhere (inclusionAI Ming-3.0-tts:
+Hub repo created 2026-09-22, top 3 on the AA TTS board 2026-10-22) is
+visible only through this key. There is no keyless AA source; see
+Rejected → Artificial Analysis public pages.
+
+### Artificial Analysis public pages, sitemap, and leaderboard HTML
+
+- Type: keyless leaderboard scrape (text, image, video, TTS, STT boards)
+- Why it matters: would catch board debuts without the Data API key.
+- Access/auth: public HTML, but the Website Terms of Use (v1.0, revised 2024-04-28, checked 2026-10-23) forbid it. §3.3(b) bars "software or automated agents or scripts ... to generate automated searches, requests, or queries to (or to strip, scrape, or mine data from) the Site", with an exception only for public search-engine spiders. §2.1 limits the license to personal, noncommercial use. No RSS or changelog feed exists.
+- Recommendation: reject. The free Data API with a key is the permitted route.
+
+### fal blog RSS and fal sitemap
+
+- Type: launch announcements / page index
+- Probe 2026-10-23: the blog feed has 15 items, months apart (newest 2026-10-20 "EAGLE-4 Technical Deepdive", next 2026-09-17). None of the 2026-10-16 to 10-22 launches (FLUX 3 Max, Kling 4.0, Fibo 2.0, HeyGen Video, HeyGen Voice Turbo, Ideogram Vector) has a post. The sitemap lists 1,729 URLs with no `lastmod`, so it cannot date a launch.
+- Recommendation: reject. The catalog API with `sort=recent` dates every endpoint.
 
 ### `ollama.com/api/tags` as a library catalog
 

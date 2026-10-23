@@ -328,3 +328,7 @@ def test_fal_name_cleanup_keeps_more_than_the_vendor():
     assert monitor._fal_clean_name("Kotoba Text-to-Speech", False) == "Kotoba Text-to-Speech"
     # A single-endpoint launch keeps a trailing variant word.
     assert monitor._fal_clean_name("Flux 3 Image", False) == "Flux 3 Image"
+    # The task strip stands even when the variant strip would leave a bare
+    # vendor (fal heygen/heygen-video, 2026-10-20).
+    assert monitor._fal_clean_name("HeyGen Video Text to Video", True) == "HeyGen Video"
+    assert monitor._fal_clean_name("Kling 4.0 Video Editing", True) == "Kling 4.0"

@@ -6197,8 +6197,10 @@ def absorb_extra_source(incoming: ModelRelease, existing: List[ModelRelease],
     return True
 
 
-# fal.ai public model catalog (no key). The list is not ordered by date, so
-# every page is read (16 pages / ~1500 endpoints on 2026-10-16). One launch is
+# fal.ai public model catalog (no key). The default order is not by date, so
+# the first run reads every page (16 pages / ~1500 endpoints on 2026-10-16)
+# to baseline the back-catalog. After that, sort=recent (newest first, one
+# page on most days) is enough. One launch is
 # several endpoints (krea/v3/edit, krea/v3/text-to-image, krea/v3/realtime);
 # they are grouped into one candidate. `metadata.date` is the fal launch date.
 #
@@ -6209,6 +6211,7 @@ def absorb_extra_source(incoming: ModelRelease, existing: List[ModelRelease],
 FAL_MODELS_URL = "https://api.fal.ai/v1/models"
 FAL_MODEL_PAGE = "https://fal.ai/models/{endpoint_id}"
 _FAL_PAGE_CAP = 25
+_FAL_RECENT_PAGE_CAP = 3
 _FAL_UTILITY_RE = re.compile(
     r"(?i)(remove[-_ ]?background|background[-_ ]?remov|upscal|"
     r"super[-_ ]?resolution|\blora\b|trainer|training|workflow|\brouter\b)")
@@ -6235,6 +6238,7 @@ _FAL_VENDOR_NAMES = {
     "bytedance": "ByteDance", "krea": "Krea", "mirelo-ai": "Mirelo",
     "google": "Google", "openai": "OpenAI", "xai": "xAI",
     "minimax": "MiniMax", "alibaba": "Alibaba", "elevenlabs": "ElevenLabs",
+    "heygen": "HeyGen",
 }
 _FAL_MODALITY = {
     "text-to-image": "text-to-image", "image-to-image": "image-editing",
@@ -6370,8 +6374,14 @@ def _fal_count_is_low(count: int, previous: int) -> bool:
     return count < 0.25 * previous or (previous >= 20 and count < 5)
 
 
-def _fal_catalog_for_run() -> list:
+def _fal_catalog_for_run(prefer_recent: bool = False, today: str = None) -> list:
     """Catalog rows for this run, fetched at most once.
+
+    `prefer_recent` (the fal baseline exists) reads the newest-first list
+    when a last good full catalog is also stored. That list leaves last good
+    alone. If fal ignores the sort or returns nothing, the full catalog is
+    read instead. An HTTP failure goes straight to the fallback below,
+    because the full catalog is 16+ requests to the same host.
 
     On exhausted retries or a count far below the last good run the source is
     degraded: rows come from the persisted last good list (if any) and
@@ -6386,11 +6396,22 @@ def _fal_catalog_for_run() -> list:
         return rows
     fetch_error = None
     rows = []
-    try:
-        rows = _fal_fetch_catalog()
-    except Exception as exc:
-        fetch_error = exc
     previous = _fal_load_last_good()
+    if prefer_recent and previous:
+        try:
+            rows = _fal_fetch_recent(today)
+            _FAL_RUN_CACHE = (rows, None)
+            return rows
+        except requests.RequestException as exc:
+            fetch_error = exc
+        except Exception as exc:
+            print(f"fal recent list unusable ({_short_source_error(exc)}); "
+                  "reading the full catalog", file=sys.stderr)
+    if fetch_error is None:
+        try:
+            rows = _fal_fetch_catalog()
+        except Exception as exc:
+            fetch_error = exc
     prev_count = int((previous or {}).get("count") or 0)
     if fetch_error is None and _fal_count_is_low(len(rows), prev_count):
         fetch_error = ValueError(
@@ -6429,6 +6450,39 @@ def _fal_fetch_catalog() -> list:
         if not body.get("has_more") or not cursor:
             return rows
     print(f"fal: stopped at the {_FAL_PAGE_CAP}-page cap", file=sys.stderr)
+    return rows
+
+
+def _fal_fetch_recent(today: str = None) -> list:
+    """Newest catalog rows (sort=recent) until a page reaches past the 14-day
+    catalog clock. Raises when fal does not acknowledge the sort, so an
+    unsorted first page is never mistaken for "nothing new"."""
+    rows, cursor = [], None
+    for _page in range(_FAL_RECENT_PAGE_CAP):
+        params = {"limit": 100, "sort": "recent"}
+        if cursor:
+            params["cursor"] = cursor
+        body = _fal_get(FAL_MODELS_URL, params).json()
+        if not isinstance(body, dict):
+            raise ValueError("fal recent page is not an object")
+        ordering = body.get("ordering") if isinstance(body.get("ordering"), dict) else {}
+        if ordering.get("sort") != "recent":
+            raise ValueError("fal did not apply sort=recent")
+        batch = body.get("models") if isinstance(body.get("models"), list) else []
+        batch = [r for r in batch if isinstance(r, dict)]
+        rows.extend(batch)
+        cursor = body.get("next_cursor")
+        if not body.get("has_more") or not cursor:
+            break
+        dates = [d for d in (_day((r.get("metadata") or {}).get("date"))
+                             for r in batch) if d]
+        if dates and is_stale_release(min(dates), today=today):
+            break
+    else:
+        print(f"fal: recent list stopped at the {_FAL_RECENT_PAGE_CAP}-page cap",
+              file=sys.stderr)
+    if not rows:
+        raise ValueError("fal recent list is empty")
     return rows
 
 
@@ -6509,15 +6563,18 @@ def _fal_vendor(endpoint_id: str) -> str:
 
 def _fal_clean_name(name: str, variants: bool) -> str:
     text = re.sub(r"\s+", " ", str(name or "")).strip()
-    while True:
-        cut = _FAL_NAME_TASK_RE.sub("", text)
-        if variants:
-            cut = _FAL_NAME_VARIANT_RE.sub("", cut)
-        cut = cut.strip()
-        # "Kotoba Text-to-Speech" keeps its suffix: a bare vendor is no name.
-        if not cut or cut == text or len(cut.split()) < 2:
-            return text
-        text = cut
+    patterns = [_FAL_NAME_TASK_RE] + ([_FAL_NAME_VARIANT_RE] if variants else [])
+    changed = True
+    while changed:
+        changed = False
+        for pattern in patterns:
+            cut = pattern.sub("", text).strip()
+            # "Kotoba Text-to-Speech" keeps its suffix: a bare vendor is no
+            # name. Each strip is checked alone, so "HeyGen Video Text to
+            # Video" stops at "HeyGen Video" instead of keeping it all.
+            if cut and cut != text and len(cut.split()) >= 2:
+                text, changed = cut, True
+    return text
 
 
 def _fal_launch_to_model(launch: dict) -> Optional[ModelRelease]:
@@ -6596,6 +6653,10 @@ def _note_fal_baseline(seen: Set[str], *, preview: bool, seed: bool = False) -> 
     seen.update(catalog)
 
 
+def _fal_baseline_established(seen: Set[str]) -> bool:
+    return any(str(item).startswith("fal/") for item in (seen or ()))
+
+
 def _note_catalog_baselines(seen: Set[str], *, preview: bool, seed: bool = False) -> None:
     _note_aa_baseline(seen, preview=preview, seed=seed)
     _note_fal_baseline(seen, preview=preview, seed=seed)
@@ -6617,7 +6678,8 @@ def fetch_fal_models(seen: Set[str] = None, today: str = None,
     LAST_FAL_EMITTED_IDS = set()
     seen = seen or set()
     try:
-        rows = _fal_catalog_for_run()
+        rows = _fal_catalog_for_run(
+            prefer_recent=_fal_baseline_established(seen), today=today)
     except Exception as exc:
         print(f"fal catalog failed: {_short_source_error(exc)}", file=sys.stderr)
         return []
